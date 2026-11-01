@@ -1,0 +1,86 @@
+# Builds release binaries when a `v*` tag is pushed and publishes one GitHub Release with:
+# a macOS universal binary (arm64 and x86_64 in one file, via lipo), a static Linux x86_64
+# binary (musl), a SHA-256 file for each archive, and the installer script, which is then
+# at `.../releases/latest/download/install.sh`. Each archive holds both commands,
+# `drmanhattan` and the alias `manhattan`.
+#
+# The build jobs only upload artifacts; a single publish job creates the release, so two
+# jobs never race to create it.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - run: cargo test --locked
+      - name: Build both architectures
+        run: |
+          cargo build --release --locked --target aarch64-apple-darwin
+          cargo build --release --locked --target x86_64-apple-darwin
+      - name: Make universal binaries, check them, archive them
+        run: |
+          mkdir -p dist/drmanhattan
+          for bin in drmanhattan manhattan; do
+            lipo -create -output "dist/drmanhattan/$bin" \
+              "target/aarch64-apple-darwin/release/$bin" "target/x86_64-apple-darwin/release/$bin"
+            lipo "dist/drmanhattan/$bin" -verify_arch arm64 x86_64
+          done
+          dist/drmanhattan/drmanhattan --version | grep -qx "drmanhattan ${GITHUB_REF_NAME#v}"
+          arch -x86_64 dist/drmanhattan/manhattan --version
+          cp README.md LICENSE dist/drmanhattan/
+          name="drmanhattan-${GITHUB_REF_NAME}-macos-universal.tar.gz"
+          tar -C dist -czf "$name" drmanhattan
+          shasum -a 256 "$name" > "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: drmanhattan-*-macos-universal.tar.gz*
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - run: sudo apt-get install -y musl-tools
+      - run: cargo test --locked
+      - run: cargo build --release --locked --target x86_64-unknown-linux-musl
+      - name: Check and archive
+        run: |
+          out=target/x86_64-unknown-linux-musl/release
+          "$out/drmanhattan" --version | grep -qx "drmanhattan ${GITHUB_REF_NAME#v}"
+          mkdir -p dist/drmanhattan
+          cp "$out/drmanhattan" "$out/manhattan" README.md LICENSE dist/drmanhattan/
+          name="drmanhattan-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
+          tar -C dist -czf "$name" drmanhattan
+          sha256sum "$name" > "$name.sha256"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: drmanhattan-*-linux-x86_64.tar.gz*
+  publish:
+    needs: [macos, linux]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*
+            packaging/install.sh

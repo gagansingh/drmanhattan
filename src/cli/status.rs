@@ -1,0 +1,212 @@
+//! `drmanhattan status`: the slots in use and the waiters in admission order.
+//!
+//! Read from the state directory, so it works whether or not the daemon is running, and
+//! ranked with the daemon's own rules, so the order shown is the order runs will start.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use crate::cli::args::{self, Spec};
+use crate::daemon;
+use crate::error::Result;
+use crate::job::{Record, RunId, State};
+use crate::paths::Paths;
+use crate::queue::{rank, read_records};
+use crate::settings::{effective_capacity, read_manual_order, read_override, Override};
+use crate::time::{format_elapsed, Timestamp};
+
+const STATUS: Spec = Spec {
+    usage: "\
+usage: drmanhattan status [--json]
+
+Shows the queue: whether the daemon is running, the slots in use, and the waiting jobs in
+the order they will start. Text output is one `key=value` line per item (values with
+spaces are quoted); --json prints the same as one JSON document.
+",
+    values: &[],
+    switches: &["json"],
+    positional: 0,
+};
+
+#[derive(Serialize)]
+struct StatusDoc<'a> {
+    /// `stopped`, `idle` (nothing running), `available` (a slot is free) or `busy`.
+    state: &'static str,
+    daemon: Option<DaemonDoc>,
+    active: usize,
+    capacity: u32,
+    #[serde(rename = "override")]
+    capacity_override: Option<Override>,
+    running: Vec<RunningDoc<'a>>,
+    waiters: Vec<WaiterDoc<'a>>,
+}
+
+#[derive(Serialize)]
+struct DaemonDoc {
+    pid: u32,
+    url: Option<String>,
+}
+
+#[derive(Serialize)]
+struct RunningDoc<'a> {
+    slot: Option<u32>,
+    run_id: &'a RunId,
+    label: &'a str,
+    category: &'a str,
+    cwd: &'a PathBuf,
+    started_at: Option<Timestamp>,
+    elapsed_seconds: Option<u64>,
+    expected_seconds: Option<u64>,
+    log: &'a PathBuf,
+    job_file: &'a PathBuf,
+}
+
+#[derive(Serialize)]
+struct WaiterDoc<'a> {
+    position: usize,
+    run_id: &'a RunId,
+    label: &'a str,
+    category: &'a str,
+    waited_seconds: u64,
+    expected_seconds: Option<u64>,
+    skip_after_seconds: u64,
+    priority: bool,
+    overdue: bool,
+    manual: bool,
+    job_file: &'a PathBuf,
+}
+
+pub(super) fn status(rest: &[String]) -> Result<i32> {
+    let Some(a) = args::parse(&STATUS, rest)? else { return Ok(0) };
+    let paths = Paths::from_env();
+    let records = read_records(&paths);
+    let doc = build(&paths, &records)?;
+    if a.has("json") {
+        println!("{}", serde_json::to_string_pretty(&doc).map_err(|e| crate::error::Error::Invalid(e.to_string()))?);
+    } else {
+        print_text(&doc);
+    }
+    Ok(0)
+}
+
+fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
+    let now = Timestamp::now();
+    let daemon = daemon::running(paths);
+    let capacity = effective_capacity(paths, daemon::slots_env(daemon.as_ref()).as_deref())?;
+    let mut running: Vec<&Record> = records.iter().filter(|r| r.state == State::Running).collect();
+    running.sort_by_key(|r| r.slot.unwrap_or(0));
+    let by_id: HashMap<&RunId, &Record> = records.iter().map(|r| (&r.run_id, r)).collect();
+    let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
+    let state = match &daemon {
+        None => "stopped",
+        Some(_) if running.is_empty() => "idle",
+        Some(_) if running.len() < capacity as usize => "available",
+        Some(_) => "busy",
+    };
+    let waiters = ranked
+        .iter()
+        .filter_map(|w| by_id.get(&w.run_id).map(|r| (*r, w)))
+        .enumerate()
+        .map(|(i, (r, w))| WaiterDoc {
+            position: i + 1,
+            run_id: &r.run_id,
+            label: &r.job.label,
+            category: &r.job.category,
+            waited_seconds: r.queued_at.until(now).as_secs(),
+            expected_seconds: r.expected_seconds,
+            skip_after_seconds: r.skip_after_seconds,
+            priority: r.job.priority,
+            overdue: w.overdue,
+            manual: w.manual,
+            job_file: &r.job.job_file,
+        })
+        .collect();
+    Ok(StatusDoc {
+        state,
+        daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
+        active: running.len(),
+        capacity,
+        capacity_override: read_override(paths),
+        running: running
+            .into_iter()
+            .map(|r| RunningDoc {
+                slot: r.slot,
+                run_id: &r.run_id,
+                label: &r.job.label,
+                category: &r.job.category,
+                cwd: &r.job.cwd,
+                started_at: r.started_at,
+                elapsed_seconds: r.started_at.map(|s| s.until(now).as_secs()),
+                expected_seconds: r.expected_seconds,
+                log: &r.job.log,
+                job_file: &r.job.job_file,
+            })
+            .collect(),
+        waiters,
+    })
+}
+
+/// `key=value`, quoting a value a shell or a `cut`-style reader would split.
+fn kv(key: &str, value: impl std::fmt::Display) -> String {
+    let value = value.to_string();
+    if value.is_empty() || value.contains(|c: char| c.is_whitespace() || c == '\'' || c == '"') {
+        format!("{key}={}", crate::naming::shell_words(std::slice::from_ref(&value)))
+    } else {
+        format!("{key}={value}")
+    }
+}
+
+fn print_text(doc: &StatusDoc) {
+    let mut head = vec![kv("state", doc.state), kv("active", doc.active), kv("capacity", doc.capacity)];
+    if let Some(o) = &doc.capacity_override {
+        head.extend([kv("override", o.slots), kv("override_until", o.until)]);
+    }
+    if let Some(d) = &doc.daemon {
+        head.push(kv("daemon_pid", d.pid));
+        head.extend(d.url.as_ref().map(|u| kv("dashboard", u)));
+    }
+    println!("{}", head.join(" "));
+    for r in &doc.running {
+        let mut line = vec![
+            kv("slot", r.slot.unwrap_or(0)),
+            kv("run_id", r.run_id),
+            kv("label", r.label),
+            kv("category", r.category),
+        ];
+        line.extend(r.elapsed_seconds.map(|s| kv("elapsed", format_elapsed(std::time::Duration::from_secs(s)))));
+        line.extend(r.expected_seconds.map(|e| kv("expected", format!("{e}s"))));
+        line.push(kv("cwd", r.cwd.display()));
+        println!("{}", line.join(" "));
+    }
+    println!("policy='priority first, then manual order, then overdue by arrival, then shortest expected first'");
+    let yes = |b: bool| if b { "yes" } else { "no" };
+    for w in &doc.waiters {
+        let line = [
+            "waiter".to_string(),
+            kv("position", w.position),
+            kv("run_id", w.run_id),
+            kv("label", w.label),
+            kv("category", w.category),
+            kv("waited", format!("{}s", w.waited_seconds)),
+            kv("expected", w.expected_seconds.map_or_else(|| "unknown".into(), |e| format!("{e}s"))),
+            kv("priority", yes(w.priority)),
+            kv("overdue", yes(w.overdue)),
+            kv("manual", yes(w.manual)),
+        ];
+        println!("{}", line.join(" "));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_with_spaces_are_quoted() {
+        assert_eq!(kv("label", "build"), "label=build");
+        assert_eq!(kv("label", "cargo test"), "label='cargo test'");
+        assert_eq!(kv("label", ""), "label=''");
+    }
+}

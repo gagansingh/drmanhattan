@@ -1,0 +1,27 @@
+# Runs drmanhattan as a systemd user service on Linux:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp packaging/systemd/drmanhattan.service ~/.config/systemd/user/
+#   systemctl --user enable --now drmanhattan
+#
+# Run `drmanhattan` once in a terminal first to answer its one-time question (a service has
+# no terminal to ask in). Logs: journalctl --user -u drmanhattan, or drmanhattan.log in the
+# data directory, which it rotates itself. It is restarted if it
+# crashes, not after `drmanhattan stop`. Jobs inherit the PATH below: add the directories
+# your builds need.
+[Unit]
+Description=drmanhattan local job queue
+Documentation=https://github.com/gagansingh/drmanhattan
+
+[Service]
+ExecStart=%h/.local/bin/drmanhattan
+Environment=PATH=%h/.local/bin:%h/.cargo/bin:/usr/local/bin:/usr/bin:/bin
+Restart=on-failure
+# Stop signals only the daemon, which gives running jobs their grace period; whatever is
+# left when it exits, or at TimeoutStopSec, is then killed.
+KillMode=mixed
+# A graceful stop waits up to 30 s for running jobs, then cancels them.
+TimeoutStopSec=60
+
+[Install]
+WantedBy=default.target

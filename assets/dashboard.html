@@ -1,0 +1,1370 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>drmanhattan</title>
+<link rel="icon" id="favicon" href="data:,">
+<style>
+/* ---------------------------------------------------------------- tokens
+   Spacing is on a 4 px grid. Text comes in three sizes: 13 px for what a row is about,
+   12 px for what qualifies it, 11 px for section labels. Lines are 20 px and 16 px tall,
+   so the first lines of the cells in a row share a baseline. Colour marks state and
+   warnings only; everything else is greys. Every text colour reads at 4.5:1 or better on
+   the card, on a hovered row and on the selected row, in both themes. */
+:root {
+  color-scheme: dark;
+  --bg: #0d1117; --card: #151b23; --raised: #1b222c; --hover: #19202a; --code: #0a0d12;
+  --line: #262d37; --line-strong: #353d48;
+  --fg: #e6edf3; --dim: #a8b1bb; --faint: #8b949e;
+  --green: #3fb950; --red: #ff6a63; --amber: #d29922; --blue: #58a6ff; --purple: #bc8cff; --cyan: #39c5cf;
+  --track: #252d38; --selected: color-mix(in srgb, var(--blue) 6%, var(--card));
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, monospace;
+  --header-height: 48px;
+  --pane-height: min(60vh, 640px);
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #f6f8fa; --card: #ffffff; --raised: #f3f5f7; --hover: #f6f8fa; --code: #fbfcfd;
+    --line: #e3e7ec; --line-strong: #d0d7de;
+    --fg: #1f2328; --dim: #4c5561; --faint: #5f6873;
+    --green: #1a7f37; --red: #c4212c; --amber: #845b00; --blue: #0969da; --purple: #7741d6; --cyan: #1b7c83;
+    --track: #e4e8ed;
+  }
+}
+
+/* ---------------------------------------------------------------- base */
+* { box-sizing: border-box; }
+html { scroll-padding-top: calc(var(--header-height) + 8px); }
+/* With the log open, focus never moves behind it. */
+html.log-open { scroll-padding-bottom: calc(var(--pane-height) + 16px); }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 13px/20px var(--sans); -webkit-font-smoothing: antialiased;
+}
+html.log-open body { padding-bottom: calc(var(--pane-height) + 16px); }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+code { font-family: var(--mono); font-size: 12px; }
+.faint { color: var(--faint); }
+.num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.warn { color: var(--amber); }
+:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; border-radius: 2px; }
+/* Read by screen readers, not shown. */
+.sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+
+/* ---------------------------------------------------------------- header: the machine */
+header {
+  position: sticky; top: 0; z-index: 5;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+.bar { max-width: 1200px; min-height: var(--header-height); margin: 0 auto; padding: 0 24px; display: flex; align-items: center; gap: 24px; }
+.bar h1 { margin: 0; flex: none; font-size: 13px; font-weight: 650; }
+#machine { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
+.figure {
+  display: inline-flex; align-items: center; gap: 4px; padding: 0 12px;
+  border: 0; border-left: 1px solid var(--line); background: none; color: var(--dim);
+  font-size: 12px; line-height: 16px; white-space: nowrap;
+}
+.figure:first-child { padding-left: 0; border-left: 0; }
+.figure b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.figure.warm b { color: var(--amber); }
+.figure.hot b { color: var(--red); }
+.figure svg { display: block; margin-left: 4px; }
+button.figure { cursor: pointer; }
+#status { margin-left: auto; flex: none; display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+#status i { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+#status.offline { color: var(--red); font-weight: 600; }
+#status.offline i { background: var(--red); }
+
+/* ---------------------------------------------------------------- sections */
+main { max-width: 1200px; margin: 0 auto; padding: 0 24px 32px; }
+section { margin-top: 32px; }
+section:first-of-type { margin-top: 24px; }
+.head { display: flex; align-items: center; gap: 8px; min-height: 24px; margin-bottom: 8px; }
+h2 {
+  margin: 0; color: var(--dim); font-size: 11px; line-height: 16px; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.06em;
+}
+h2 .count { margin-left: 8px; color: var(--faint); font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+h2:focus { outline: none; }
+.spring { flex: 1; }
+/* Controls and notes beside a section's name read as text, not as more labels. */
+.aside { display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-size: 12px; line-height: 16px; }
+.aside b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.aside .error { color: var(--red); }
+.link { padding: 0; border: 0; background: none; color: var(--blue); font-size: 12px; cursor: pointer; }
+.link:hover { text-decoration: underline; }
+.step {
+  width: 20px; height: 20px; padding: 0; border: 1px solid var(--line-strong); border-radius: 4px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: none; color: var(--dim); font-size: 13px; line-height: 1; cursor: pointer;
+}
+.step:hover:not(:disabled) { border-color: var(--dim); color: var(--fg); }
+.step:disabled { opacity: 0.4; cursor: default; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+
+/* ---------------------------------------------------------------- run tables
+   Running, waiting and finished runs share one set of columns: state, run, how long,
+   when, and who sent it. */
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+td { padding: 8px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+td:first-child { padding-left: 16px; }
+td:last-child { padding-right: 16px; }
+tr:last-child td { border-bottom: 0; }
+/* Column headers are for screen readers: every cell already says what it is. The header
+   row takes no room, but its cells set the column widths. */
+thead th { height: 0; padding: 0; border: 0; }
+.state { width: 128px; }
+.time { width: 136px; text-align: right; }
+.when { width: 128px; text-align: right; }
+.source { width: 152px; }
+tr.run { cursor: pointer; }
+tr.run:hover td { background: var(--hover); }
+tr.selected td { background: var(--selected); }
+td.none { padding: 12px 16px; color: var(--faint); font-size: 12px; line-height: 16px; }
+
+.label { display: flex; align-items: baseline; min-width: 0; white-space: nowrap; }
+/* The run's name opens its log: a real button, so the keyboard and screen readers reach it. */
+.open {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 0; border: 0; background: none;
+  font: 550 13px/20px var(--mono); text-align: left; cursor: pointer;
+}
+.under {
+  display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--faint); font-size: 12px; line-height: 16px; font-variant-numeric: tabular-nums;
+}
+.where { font-family: var(--mono); color: var(--dim); }
+.where .sep { color: var(--faint); padding: 0 4px; }
+.note { margin-left: 8px; color: var(--dim); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.note.priority { color: var(--purple); font-weight: 600; }
+
+/* A run's state: one mark whose shape and colour both say it, then the word. Lines under
+   it start where the word does. */
+.state-mark { display: inline-flex; align-items: baseline; gap: 4px; white-space: nowrap; }
+.state-mark i { width: 12px; font-style: normal; font-weight: 700; font-size: 12px; text-align: center; }
+.state-mark + .under { padding-left: 16px; }
+.s-running i { color: var(--blue); }
+.s-queued i { color: var(--amber); }
+.s-succeeded i { color: var(--green); }
+.s-failed i, .s-timed_out i, .s-abandoned i, .s-rejected i { color: var(--red); }
+.s-cancelled { color: var(--dim); }
+.s-cancelled i { color: var(--faint); }
+
+/* The first error line of a failed run reads as the log output it is. */
+.error-line { margin-top: 4px; color: var(--red); font-family: var(--mono); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+
+/* Progress against the usual duration: a hairline under the elapsed time. */
+.progress { height: 2px; margin-top: 4px; border-radius: 1px; background: var(--track); overflow: hidden; }
+.progress i { display: block; height: 100%; background: var(--blue); transition: width 1s linear; }
+.progress i.over { background: var(--amber); }
+
+/* What a running job says it is doing. */
+.doing { margin-top: 4px; font-size: 12px; line-height: 16px; }
+.doing > div { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.doing .now { color: var(--fg); }
+.doing .cmd, .doing .last { color: var(--dim); font-family: var(--mono); }
+.doing .cmd .num { font-family: var(--sans); color: var(--faint); }
+.doing .cmd.over .num { color: var(--amber); }
+
+.who { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.who a, .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.who span { color: var(--dim); }
+.who .ended { flex: none; width: 8px; height: 8px; border: 1px solid var(--faint); border-radius: 50%; }
+
+/* ---------------------------------------------------------------- reordering the queue */
+.position { display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.position .n { min-width: 16px; }
+.grip, .move {
+  height: 20px; padding: 0 4px; border: 0; border-radius: 4px; background: none;
+  color: var(--faint); font-size: 13px; line-height: 20px; cursor: pointer;
+}
+.grip { margin-left: -4px; cursor: grab; touch-action: none; }
+.grip:hover, .move:hover { background: var(--raised); color: var(--fg); }
+.grip.fixed { visibility: hidden; }
+/* Moving without dragging: ↑ and ↓ appear on the row being pointed at or focused, and
+   always on touch screens. They stay in the tab order while hidden. */
+.move { opacity: 0; }
+tr.run:hover .move, tr.run:focus-within .move { opacity: 1; }
+@media (hover: none) { .move { opacity: 1; } }
+tr.dragging td { background: var(--raised) !important; box-shadow: inset 0 1px 0 var(--blue), inset 0 -1px 0 var(--blue); }
+html.dragging, html.dragging * { cursor: grabbing !important; user-select: none; }
+
+/* ---------------------------------------------------------------- finished runs */
+#filters { display: flex; gap: 16px; }
+#filters button {
+  padding: 0; border: 0; border-bottom: 1px solid transparent; background: none;
+  color: var(--dim); font-size: 12px; line-height: 16px; cursor: pointer;
+}
+#filters button:hover { color: var(--fg); }
+#filters button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--fg); }
+#filters button span { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* The last day in one sentence, above the runs it describes. */
+#summary { margin: 0 0 8px; color: var(--dim); font-size: 12px; line-height: 16px; }
+#summary:empty { display: none; }
+#summary b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+#summary b.bad { color: var(--red); }
+
+/* ---------------------------------------------------------------- first visit */
+.welcome { margin-top: 24px; padding: 16px; }
+.welcome h3 { margin: 0 0 4px; font-size: 13px; }
+.welcome p { margin: 4px 0; color: var(--dim); font-size: 12px; line-height: 16px; }
+.welcome pre {
+  margin: 8px 0 12px; padding: 8px 12px; overflow-x: auto;
+  background: var(--code); border: 1px solid var(--line); border-radius: 4px;
+  font: 12px/20px var(--mono); white-space: pre;
+}
+
+footer { max-width: 1200px; margin: 0 auto; padding: 0 24px 24px; color: var(--faint); font-size: 12px; line-height: 16px; }
+footer details { display: inline; }
+footer summary { display: inline; color: var(--dim); cursor: pointer; text-decoration: underline dotted; }
+footer details pre { margin: 8px 0 0; font: 12px/16px var(--mono); white-space: pre-wrap; color: var(--dim); }
+
+/* ---------------------------------------------------------------- the log pane */
+#log {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: var(--pane-height);
+  display: none; flex-direction: column;
+  background: var(--card); border-top: 1px solid var(--line-strong); box-shadow: 0 -12px 32px rgba(0, 0, 0, 0.35);
+}
+html.log-open #log { display: flex; }
+/* The handle that resizes the pane: drag it, or focus it and use ↑ and ↓. */
+#log-grip { position: absolute; top: -4px; left: 0; right: 0; z-index: 2; height: 8px; cursor: ns-resize; }
+#log-grip::after { content: ""; position: absolute; top: 4px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: var(--line-strong); }
+#log-grip:focus-visible::after { background: var(--blue); }
+#log-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+#log-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-family: var(--mono); font-weight: 600; }
+#log-meta { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
+#log-head button, #log-head a {
+  padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: none;
+  color: var(--fg); font-size: 12px; line-height: 16px; text-decoration: none; white-space: nowrap; cursor: pointer;
+}
+#log-head button:hover, #log-head a:hover { border-color: var(--dim); }
+#log-head button[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+#log-errors { display: none; color: var(--red) !important; }
+#log-body { position: relative; flex: 1; min-height: 0; }
+#log-text {
+  position: absolute; inset: 0; margin: 0; padding: 8px 16px 24px; overflow: auto; overscroll-behavior: contain;
+  background: var(--code); font: 12px/20px var(--mono); white-space: pre; tab-size: 4; counter-reset: line;
+}
+#log-text.wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+#log-text .ln { display: block; padding-left: 4.6em; text-indent: -4.6em; border-radius: 4px; }
+#log-text .ln::before {
+  counter-increment: line; content: counter(line); display: inline-block; width: 3.6em; margin-right: 1em;
+  color: var(--faint); text-align: right; text-indent: 0; user-select: none;
+}
+#log-text .ln:hover { background: var(--hover); }
+#log-text .err { color: var(--red); background: color-mix(in srgb, var(--red) 7%, transparent); }
+#log-text .warn { color: var(--amber); }
+#log-text .ok { color: var(--green); }
+#log-text .head { color: var(--fg); font-weight: 600; }
+/* drmanhattan's own lines (how the run ended, a timeout, a cut): not the command's output,
+   so not a numbered line in its font, but a labelled strip in the page's. */
+#log-text .note {
+  display: flex; gap: 8px; align-items: baseline; margin: 4px 0; padding: 2px 8px;
+  border-left: 2px solid var(--line-strong); border-radius: 0 4px 4px 0; background: var(--raised);
+  color: var(--dim); font: 12px/20px var(--sans); white-space: normal;
+}
+#log-text .note-tag { color: var(--faint); font-size: 11px; font-weight: 600; letter-spacing: 0.02em; user-select: none; }
+#log-text .note.ok { border-left-color: var(--green); }
+#log-text .note.err { border-left-color: var(--red); }
+#log-text .note.warn { border-left-color: var(--amber); }
+/* A ::step marker: where the job's output turns to its next step. */
+#log-text .step-mark {
+  display: flex; align-items: center; gap: 8px; margin: 8px 0 4px; color: var(--dim);
+  font: 600 12px/20px var(--sans); white-space: normal;
+}
+#log-text .step-mark::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+#log-start {
+  padding: 4px 16px; border-bottom: 1px solid var(--line); background: var(--raised); color: var(--dim);
+  font-size: 12px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+#log-start:empty { display: none; }
+#log-start code { color: var(--fg); }
+#log-text .hit { outline: 1px solid var(--red); background: color-mix(in srgb, var(--red) 16%, transparent); }
+#log-new {
+  position: absolute; right: 24px; bottom: 16px; display: none; padding: 4px 12px;
+  border: 0; border-radius: 4px; background: var(--blue); color: var(--bg); font-size: 12px; line-height: 16px; cursor: pointer;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+}
+
+/* ---------------------------------------------------------------- narrow screens */
+@media (max-width: 820px) {
+  .source { display: none; }
+}
+@media (max-width: 600px) {
+  .bar, main, footer { padding-left: 12px; padding-right: 12px; }
+  .bar { padding-top: 12px; padding-bottom: 12px; flex-wrap: wrap; row-gap: 8px; }
+  #machine { order: 3; flex-basis: 100%; column-gap: 16px; }
+  /* Wrapped figures are set apart by space: a separator would start the second line. */
+  .figure { padding: 0; border-left: 0; }
+  #log-meta { display: none; }
+  td { padding: 8px; }
+  td:first-child { padding-left: 12px; }
+  td:last-child { padding-right: 12px; }
+  .when { display: none; }
+  /* Only the mark is shown: its shape says the state. The words stay for screen readers. */
+  .state { width: 72px; }
+  td.state .under { display: none; }
+  td.state .word, td.state .n { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .time { width: 104px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress i { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="bar">
+    <h1>drmanhattan</h1>
+    <div id="machine"></div>
+    <span id="status"><i></i><span>connecting…</span></span>
+  </div>
+</header>
+
+<main>
+  <div id="welcome"></div>
+
+  <section aria-labelledby="running-heading">
+    <div class="head">
+      <h2 id="running-heading" tabindex="-1">Running</h2>
+      <span class="spring"></span>
+      <div class="aside" id="capacity"></div>
+    </div>
+    <div class="card">
+      <table aria-labelledby="running-heading">
+        <thead><tr><th scope="col" class="state"><span class="sr">Slot</span></th><th scope="col"><span class="sr">Run</span></th><th scope="col" class="time"><span class="sr">Running for</span></th><th scope="col" class="when"><span class="sr">Done</span></th><th scope="col" class="source"><span class="sr">Source</span></th></tr></thead>
+        <tbody id="running"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section aria-labelledby="queue-heading">
+    <div class="head">
+      <h2 id="queue-heading" tabindex="-1">Up next<span class="count" id="queued-count"></span></h2>
+      <span class="spring"></span>
+      <div class="aside" id="queue-note"></div>
+    </div>
+    <div class="card">
+      <table aria-labelledby="queue-heading">
+        <thead><tr><th scope="col" class="state"><span class="sr">Position</span></th><th scope="col"><span class="sr">Run</span></th><th scope="col" class="time"><span class="sr">Expected</span></th><th scope="col" class="when"><span class="sr">Starts</span></th><th scope="col" class="source"><span class="sr">Source</span></th></tr></thead>
+        <tbody id="queue"></tbody>
+      </table>
+    </div>
+    <p class="sr" id="grip-help">Press the up or down arrow key to move this job in the queue.</p>
+  </section>
+
+  <section aria-labelledby="finished-heading">
+    <div class="head">
+      <h2 id="finished-heading" tabindex="-1">Finished<span class="count" id="finished-count"></span></h2>
+      <span class="spring"></span>
+      <div id="filters" role="group" aria-label="Show"></div>
+    </div>
+    <p id="summary"></p>
+    <div class="card">
+      <table aria-labelledby="finished-heading">
+        <thead><tr><th scope="col" class="state"><span class="sr">Outcome</span></th><th scope="col"><span class="sr">Run</span></th><th scope="col" class="time"><span class="sr">Ran for</span></th><th scope="col" class="when"><span class="sr">Finished</span></th><th scope="col" class="source"><span class="sr">Source</span></th></tr></thead>
+        <tbody id="finished"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="sr" id="announce" aria-live="polite"></div>
+</main>
+
+<footer>
+  <span id="footer-note"></span>
+  <details><summary>Details</summary><pre id="details"></pre></details>
+</footer>
+
+<section id="log" aria-label="Log">
+  <div id="log-grip" role="separator" aria-orientation="horizontal" aria-label="Log height" tabindex="0" title="Drag, or use the up and down arrow keys, to resize"></div>
+  <div id="log-head">
+    <span id="log-title"></span>
+    <span id="log-meta"></span>
+    <button id="log-errors" title="Jump to the next error line"></button>
+    <a id="log-raw" target="_blank" title="Open the raw log in a new tab">raw</a>
+    <button id="log-wrap" aria-pressed="true" title="Wrap long lines">wrap</button>
+    <button id="log-end" title="Jump to the newest line and follow it">end ↓</button>
+    <button id="log-close" title="Close (Esc)" aria-label="Close the log">✕</button>
+  </div>
+  <div id="log-start"></div>
+  <div id="log-body">
+    <pre id="log-text" tabindex="0" aria-label="Log output"></pre>
+    <button id="log-new">new output ↓</button>
+  </div>
+</section>
+
+<script>
+'use strict';
+
+/* ================================================================ helpers */
+
+const $ = (selector) => document.querySelector(selector);
+
+const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (c) =>
+  ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function remember(key, value) { try { localStorage.setItem(key, value); } catch (_) { /* private mode */ } }
+function recall(key) { try { return localStorage.getItem(key); } catch (_) { return null; } }
+
+/* ---------------------------------------------------------------- updating the page in place
+   Every region is redrawn from data every two seconds. Rather than replace its markup,
+   `put` patches the elements that are already there: an unchanged button stays the same
+   element, so it keeps focus, its hover and a click that is under way. Elements with a
+   `data-id` (rows, and the controls in them) are matched by it wherever they are, so a run
+   added at the top of a list, or a row moved, leaves the other rows' elements in place. */
+
+/** An element's identity: its `data-id`, and its `data-action` (a row's controls share the
+ *  row's id). Null for anything without an id. */
+function keyOf(node) {
+  if (node.nodeType !== 1 || !node.hasAttribute('data-id')) return null;
+  return `${node.getAttribute('data-id')}|${node.getAttribute('data-action') || ''}`;
+}
+
+function sameNode(a, b) {
+  return a.nodeType === b.nodeType && a.nodeName === b.nodeName && keyOf(a) === keyOf(b);
+}
+
+function patchAttributes(target, source) {
+  for (const { name } of [...target.attributes]) {
+    if (!source.hasAttribute(name)) target.removeAttribute(name);
+  }
+  for (const { name, value } of [...source.attributes]) {
+    if (target.getAttribute(name) !== value) target.setAttribute(name, value);
+  }
+}
+
+function patchChildren(target, source) {
+  const wanted = source.childNodes.length;
+  // Rows that left go first, so the rows after them stay where they are: moving a node
+  // detaches it, and focus inside it would be lost.
+  const kept = new Set([...source.childNodes].map(keyOf).filter((key) => key != null));
+  for (const child of [...target.childNodes]) if (keyOf(child) != null && !kept.has(keyOf(child))) child.remove();
+  const keyed = new Map();
+  for (const child of target.childNodes) if (keyOf(child) != null) keyed.set(keyOf(child), child);
+  [...source.childNodes].forEach((node, i) => {
+    const here = target.childNodes[i];
+    // The element this one updates: the one with its key, wherever it is, else the one here.
+    const old = keyOf(node) != null ? keyed.get(keyOf(node)) : here && keyOf(here) == null ? here : null;
+    if (old && sameNode(old, node)) {
+      if (old !== here) target.insertBefore(old, here || null);
+      if (node.nodeType === 3) { if (old.nodeValue !== node.nodeValue) old.nodeValue = node.nodeValue; }
+      else if (node.nodeType === 1) { patchAttributes(old, node); patchChildren(old, node); }
+    } else {
+      target.insertBefore(node, here || null);
+    }
+  });
+  // Everything after the new children is gone from the markup.
+  while (target.childNodes.length > wanted) target.lastChild.remove();
+}
+
+function put(element, html) {
+  if (element._html === html) return;
+  element._html = html;
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  patchChildren(element, template.content);
+}
+
+/* ---------------------------------------------------------------- formatting */
+
+const pad = (n) => String(n).padStart(2, '0');
+
+/** A duration: 45s, 3m 05s, 1h 02m. */
+function duration(seconds) {
+  if (seconds == null) return '–';
+  const s = Math.max(0, Math.round(seconds));
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
+  return h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(x)}s` : `${x}s`;
+}
+
+/** A total in the unit it reads best in: 40s, 12m, 1.5h. */
+function total(seconds) {
+  const s = seconds || 0;
+  return s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
+}
+
+/** A time of day, in the viewer's time zone: 2:31 PM. */
+function clock(epoch) {
+  return epoch ? new Date(epoch * 1000).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '–';
+}
+
+function stamp(epoch) { return epoch ? new Date(epoch * 1000).toLocaleString() : ''; }
+
+/** How long ago: just now, 12m ago, 3.5h ago, then the date. */
+function ago(epoch, now) {
+  if (!epoch) return '–';
+  const d = now - epoch;
+  if (d < 60) return 'just now';
+  if (d < 3600) return `${Math.round(d / 60)}m ago`;
+  if (d < 86400) return `${(d / 3600).toFixed(d < 36000 ? 1 : 0)}h ago`;
+  return new Date(epoch * 1000).toLocaleDateString([], { month: 'short', day: 'numeric' });
+}
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+/* ================================================================ cells
+   Every run row has the same five cells: state, run, how long, when, who sent it.
+   Controls carry a `data-action`, read by the one click handler at the end. */
+
+const MARKS = { running: '●', queued: '○', succeeded: '✓', failed: '✕', timed_out: '◷', abandoned: '!', cancelled: '–', rejected: '✕' };
+const FAILED = ['failed', 'timed_out', 'abandoned'];
+
+function stateMark(state, text = state.replace('_', ' ')) {
+  return `<span class="state-mark s-${esc(state)}" title="${esc(text)}"><i aria-hidden="true">${MARKS[state] || '·'}</i><span class="word">${esc(text)}</span></span>`;
+}
+
+const under = (html, title) => html ? `<span class="under"${title ? ` title="${esc(title)}"` : ''}>${html}</span>` : '';
+
+/** An empty value: a dash on screen, a word for screen readers. */
+const nothing = (spoken = 'none', title = '') =>
+  `<span class="faint" aria-hidden="true"${title ? ` title="${esc(title)}"` : ''}>–</span><span class="sr">${esc(spoken)}</span>`;
+
+function notes(run, extra = '') {
+  return (run.priority ? '<span class="note priority" title="Runs ahead of every job without priority">priority</span>' : '')
+    + (run.variant ? `<span class="note" title="Estimate variant">${esc(run.variant)}</span>` : '')
+    + extra;
+}
+
+/** The run cell: its name (which opens its log), its category and folder, and whatever
+ *  else the caller adds. */
+function runCell(run, extraNotes, detail = '') {
+  const open = view?.id === run.run_id;
+  return `<td>
+      <div class="label"><button class="open" data-action="open" data-id="${esc(run.run_id)}" aria-expanded="${open}" aria-controls="log" title="Show the log of ${esc(run.label)}">${esc(run.label)}</button>${notes(run, extraNotes)}</div>
+      <div class="under where"><span>${esc(run.category)}</span><span class="sep" aria-hidden="true">·</span><span title="${esc(run.cwd)}">${esc(run.cwd_short)}</span></div>
+      ${detail}
+    </td>`;
+}
+
+/** Who sent the run: the tool, its session, and a link back when there is one. */
+function sourceCell(source) {
+  if (!source) return `<td class="source">${nothing('no source')}</td>`;
+  const label = esc([source.tool, source.name || source.short].filter(Boolean).join(' · ') || 'source');
+  const title = esc([source.tool, source.name, [source.id, source.status].filter(Boolean).join(' · '),
+    source.live === false ? 'the session has ended' : ''].filter(Boolean).join('\n'));
+  const name = source.url ? `<a href="${esc(source.url)}" title="${title}">${label}</a>` : `<span title="${title}">${label}</span>`;
+  const ended = source.live === false ? '<i class="ended" title="The session has ended"></i>' : '';
+  return `<td class="source"><div class="who">${ended}${name}</div></td>`;
+}
+
+function rowStart(run, extra = '') {
+  const selected = view?.id === run.run_id ? ' selected' : '';
+  return `<tr class="run${selected}" data-id="${esc(run.run_id)}"${extra}>`;
+}
+
+const emptyRow = (text) => `<tr data-id="none"><td class="none" colspan="5">${text}</td></tr>`;
+
+/** "Usually 1m 36s, at most 1m 40s in 9 runs of 10", for tooltips. */
+function usualRange(run, scaled = '') {
+  if (!run.typical_seconds) return 'No earlier runs to estimate from';
+  return `Usually ${duration(run.typical_seconds)}${run.typical_p90 ? `, at most ${duration(run.typical_p90)} in 9 runs of 10` : ''}${scaled}`;
+}
+
+/* ---------------------------------------------------------------- running */
+
+/** What the job says it is doing: its step, the commands in flight against their usual
+ *  time, else its last line of output. */
+function doing(activity) {
+  if (!activity) return '';
+  const lines = [];
+  if (activity.step) {
+    const { n, of, text } = activity.step;
+    lines.push(`<div class="now">Step ${esc(n)}${of ? '/' + esc(of) : ''}${text ? ' · ' + esc(text) : ''}</div>`);
+  }
+  for (const cmd of activity.active || []) {
+    const over = cmd.typical && cmd.elapsed > cmd.typical;
+    const usual = cmd.typical ? `, usually ${duration(cmd.typical)}` : '';
+    lines.push(`<div class="cmd${over ? ' over' : ''}">${esc(cmd.label)}<span class="num"> · ${cmd.elapsed ? duration(cmd.elapsed) : 'starting'}${usual}</span></div>`);
+  }
+  if (!lines.length && activity.last) lines.push(`<div class="last" title="${esc(activity.last)}">${esc(activity.last)}</div>`);
+  return lines.length ? `<div class="doing">${lines.join('')}</div>` : '';
+}
+
+function runningRow(run, now) {
+  const usual = run.typical_seconds;
+  const over = run.over_p90 || (!run.typical_p90 && usual && run.elapsed > usual);
+  const range = usualRange(run, run.load_factor ? `, scaled ×${run.load_factor} for the current load` : '');
+  const progress = usual
+    ? `<div class="progress" aria-hidden="true"><i class="${over ? 'over' : ''}" style="width:${Math.min(100, (100 * run.elapsed) / usual)}%"></i></div>`
+    : '';
+  // Past its usual time, the elapsed cell says so: it is the one cell every width shows.
+  const limit = run.typical_p90 || usual;
+  const against = over
+    ? `<span class="warn">over usual by ${duration(run.elapsed - limit)}</span>`
+    : usual ? `of ~${duration(usual)}` : 'first run';
+  const when = !over && run.remaining_estimate != null
+    ? `<span class="num">done ~${clock(now + run.remaining_estimate)}</span>${under(`in ~${duration(run.remaining_estimate)}`)}`
+    : nothing('unknown');
+  return rowStart(run)
+    + `<td class="state" title="Started ${esc(clock(run.started_at))}, after waiting ${esc(duration(run.wait_seconds))}">${stateMark('running', `slot ${run.slot}`)}</td>`
+    + runCell(run, '', doing(run.activity))
+    + `<td class="time"><span class="num">${duration(run.elapsed)}</span>${under(against, range)}${progress}</td>`
+    + `<td class="when">${when}</td>`
+    + sourceCell(run.source)
+    + '</tr>';
+}
+
+let capacityError = '';
+
+function renderRunning(d) {
+  const cap = d.capacity, busy = d.running.length, max = d.capacity_ui_max || 4, ov = d.capacity_override;
+  const override = ov
+    ? `<span class="warn" title="Back to ${d.capacity_default} at ${esc(stamp(ov.until))}">until ${clock(ov.until)}</span><button class="link" data-action="capacity" data-value="reset">reset</button>`
+    : '';
+  put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
+    + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use</span>`
+    + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${cap <= 1 ? 'disabled' : ''} title="One slot fewer for the next 4 hours" aria-label="Fewer slots">−</button>`
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${cap >= max ? 'disabled' : ''} title="One slot more for the next 4 hours: more jobs at once, each slower" aria-label="More slots">+</button>`
+    + override);
+  const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
+  put($('#running'), busy ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
+}
+
+/* ---------------------------------------------------------------- up next */
+
+let queueError = '';
+
+function queuedRow(run, i, d) {
+  const movable = !run.priority;
+  const first = i === 0 || d.queued[i - 1].priority, last = i === d.queued.length - 1;
+  const id = esc(run.run_id), label = esc(run.label);
+  const controls = movable
+    ? `<button class="grip" data-action="grip" data-id="${id}" title="Drag to reorder" aria-label="Move ${label}" aria-describedby="grip-help">⠿</button>`
+      + `<span class="n">${i + 1}</span>`
+      + `<button class="move" data-action="up" data-id="${id}" ${first ? 'disabled' : ''} title="Move up" aria-label="Move ${label} up">↑</button>`
+      + `<button class="move" data-action="down" data-id="${id}" ${last ? 'disabled' : ''} title="Move down" aria-label="Move ${label} down">↓</button>`
+    : `<span class="grip fixed" aria-hidden="true">⠿</span><span class="n">${i + 1}</span>`;
+  const extra = (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
+    + (d.manual_order && !run.manual && !run.priority ? '<span class="note" title="Queued after you reordered: follows the jobs you placed, shortest first">new</span>' : '');
+  const range = usualRange(run);
+  const expected = run.typical_seconds ? `<span class="num" title="${esc(range)}">~${duration(run.typical_seconds)}</span>` : nothing('no estimate', range);
+  const when = run.eta_start && !run.eta_open_ended
+    ? `<span class="num">starts ~${clock(run.eta_start)}</span>${under(`in ${duration(run.eta_wait)}`)}`
+    : nothing('unknown', 'A job ahead of it has no estimate');
+  return rowStart(run, ` data-movable="${movable ? 1 : 0}"`)
+    + `<td class="state"><span class="position">${controls}</span></td>`
+    + runCell(run, extra)
+    + `<td class="time">${expected}${under(`waiting ${duration(run.waiting)}`, `Queued ${stamp(run.wait_started_at)}`)}</td>`
+    + `<td class="when">${when}</td>`
+    + sourceCell(run.source)
+    + '</tr>';
+}
+
+function renderQueue(d) {
+  put($('#queued-count'), d.queued.length ? `<span class="sr">, </span>${d.queued.length}` : '');
+  const manual = d.manual_order
+    ? '<span title="Jobs you placed go first, in that order; later ones follow them, shortest first">in your order</span><button class="link" data-action="reset-order">back to automatic</button>'
+    : '';
+  put($('#queue-note'), (queueError ? `<span class="error">${esc(queueError)}</span>` : '') + manual);
+  if (drag) return; // a drag in progress owns the rows
+  put($('#queue'), d.queued.length ? d.queued.map((run, i) => queuedRow(run, i, d)).join('') : emptyRow('Nothing is waiting.'));
+}
+
+/* ---------------------------------------------------------------- finished */
+
+const FILTERS = [
+  ['all', 'all', () => true],
+  ['failed', 'failed', (run) => FAILED.includes(run.state)],
+  ['succeeded', 'passed', (run) => run.state === 'succeeded'],
+  ['cancelled', 'cancelled', (run) => run.state === 'cancelled'],
+];
+let filter = recall('filter') || 'all';
+
+/** The last day as a sentence: how many runs, how many failed, and whether the queue cost
+ *  time. Clauses that would only say zero are left out. */
+function summary(m) {
+  if (!m || !m.runs) return '';
+  const b = (n) => `<b>${n}</b>`;
+  let text = `In the last 24 hours, ${b(m.runs)} ${m.runs === 1 ? 'run' : 'runs'}`;
+  text += m.failures ? `, <b class="bad" title="failed, timed out or abandoned">${m.failures}</b> failed.` : ', none failed.';
+  if (m.ran) {
+    text += m.wait_seconds >= 1
+      ? ` They waited ${b(total(m.wait_seconds))} and ran ${b(total(m.run_seconds))}`
+      : ` They ran ${b(total(m.run_seconds))} without waiting`;
+    text += m.waited_longer ? `; ${b(m.waited_longer)} waited longer than ${m.waited_longer === 1 ? 'it' : 'they'} ran.` : '.';
+  }
+  return text;
+}
+
+function finishedRow(run, now) {
+  const exit = run.exit_status != null && run.exit_status !== 0 ? `exit ${esc(run.exit_status)}` : '';
+  const error = FAILED.includes(run.state) && (run.error_line || run.failure_reason);
+  const usual = run.typical_seconds;
+  let pace = '';
+  if (usual && run.duration != null && run.state === 'succeeded') {
+    pace = run.duration > (run.typical_p90 || usual) ? 'slow' : run.duration < usual * 0.6 ? 'fast' : '';
+  }
+  const waited = run.wait_seconds >= 1 ? `waited ${duration(run.wait_seconds)}` : '';
+  const load = run.load_avg != null ? `Load ${run.load_avg} on average, ${run.load_max} at peak` : '';
+  return rowStart(run)
+    + `<td class="state">${stateMark(run.state)}${under(exit ? `<code>${exit}</code>` : '')}</td>`
+    + runCell(run, '', error ? `<div class="error-line" title="${esc(error)}">${esc(error)}</div>` : '')
+    + `<td class="time"><span class="num"${load ? ` title="${esc(load)}"` : ''}>${duration(run.duration)}</span>${under([pace, waited].filter(Boolean).join(' · '), usual ? `Usually ${duration(usual)}` : '')}</td>`
+    + `<td class="when" title="${esc(stamp(run.finished_at))}"><span class="num">${clock(run.finished_at)}</span>${under(ago(run.finished_at, now))}</td>`
+    + sourceCell(run.source)
+    + '</tr>';
+}
+
+function renderFinished(d) {
+  put($('#finished-count'), d.done.length ? `<span class="sr">, </span>${d.done.length}` : '');
+  put($('#filters'), d.done.length ? FILTERS.map(([key, name, keep]) =>
+    `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${d.done.filter(keep).length}</span></button>`).join('') : '');
+  put($('#summary'), summary(d.metrics_24h));
+  const keep = (FILTERS.find(([key]) => key === filter) || FILTERS[0])[2];
+  const rows = d.done.filter(keep);
+  put($('#finished'), rows.length
+    ? rows.map((run) => finishedRow(run, d.now)).join('')
+    : emptyRow(d.done.length ? 'No runs match this filter.' : 'Nothing has finished yet.'));
+}
+
+/* ================================================================ the machine (header) */
+
+/** One header figure. A warning colour is also said in words, for screen readers. */
+function figure(cls, title, html, action = '') {
+  const level = cls.includes('hot') ? '<span class="sr">, very high</span>' : cls.includes('warm') ? '<span class="sr">, high</span>' : '';
+  return action
+    ? `<button class="figure${cls}" data-action="${action}" title="${esc(title)}">${html}${level}</button>`
+    : `<span class="figure${cls}" title="${esc(title)}">${html}${level}</span>`;
+}
+
+/** CPU: its real usage (as Activity Monitor counts it) and the load per core: amber once
+ *  threads wait for a core (over 1 per core), red at twice that. */
+function cpuFigure(load, cores, usage) {
+  const perCore = load && cores ? load[0] / cores : null;
+  if (perCore == null && usage == null) return '';
+  const cls = perCore == null ? '' : perCore >= 2 ? ' hot' : perCore >= 1 ? ' warm' : '';
+  const per = perCore == null ? '' : perCore < 10 ? perCore.toFixed(1) : Math.round(perCore);
+  const title = (usage != null ? `CPU usage: ${usage}% of ${cores} cores busy over the last few seconds.\n\n` : '')
+    + (perCore != null ? `Load: ${load[0]} threads running or ready to run, ${per} per core. `
+      + (perCore > 1 ? 'With more than one per core they take turns.' : 'Under one per core, nothing waits for a core.')
+      + `\nLoad over 1, 5 and 15 minutes: ${load.join(', ')}` : '');
+  return figure(cls, title, (usage != null ? `CPU <b>${usage}%</b>` : '') + (perCore != null ? `${usage != null ? ' · ' : ''}load <b>${per}×</b>` : ''));
+}
+
+/** Memory as Activity Monitor shows it, coloured by the system's memory pressure. */
+function memoryFigure(m) {
+  if (!m) return '';
+  const gb = (bytes) => (bytes / 2 ** 30).toFixed(bytes < 10 * 2 ** 30 ? 1 : 0);
+  const cls = m.pressure === 'critical' ? ' hot' : m.pressure === 'warn' ? ' warm' : '';
+  const state = m.pressure === 'critical' ? 'critically low' : m.pressure === 'warn' ? 'tight' : 'fine';
+  const title = `Memory is ${state}: ${gb(m.used)} of ${gb(m.total)} GB in use, ${gb(m.swap_used)} GB swapped to disk.`;
+  return figure(cls, title, `RAM <b>${gb(m.used)}/${gb(m.total)} GB</b>${m.swap_used > 2 ** 30 ? ` · ${gb(m.swap_used)} GB swap` : ''}`);
+}
+
+/** CPU temperature, hottest sensor, with the last few minutes as a line. Click to switch
+ *  between °C and °F. Amber from 80 °C; red from 95 °C or when the system throttles. */
+const temperatures = [];
+let temperatureAt = null;
+let unit = recall('unit') === 'F' ? 'F' : 'C';
+const degrees = (c, places = 0) => `${(unit === 'F' ? (c * 9) / 5 + 32 : c).toFixed(places)}°${unit}`;
+
+function temperatureFigure(t, now) {
+  if (!t) return '';
+  if (temperatureAt !== now) {
+    temperatureAt = now;
+    temperatures.push(t.cpu_max);
+    if (temperatures.length > 150) temperatures.shift();
+  }
+  const throttled = t.thermal_state === 'serious' || t.thermal_state === 'critical';
+  const cls = throttled || t.cpu_max >= 95 ? ' hot' : t.cpu_max >= 80 ? ' warm' : '';
+  const lo = Math.min(...temperatures) - 2, hi = Math.max(lo + 10, Math.max(...temperatures) + 2), w = 40, h = 12;
+  const points = temperatures.map((v, i) =>
+    `${(temperatures.length < 2 ? w : (i * w) / (temperatures.length - 1)).toFixed(1)},${(h - 1 - ((v - lo) / (hi - lo)) * (h - 2)).toFixed(1)}`).join(' ');
+  const title = `Hottest CPU sensor ${degrees(t.cpu_max, 1)}, average ${degrees(t.cpu_avg, 1)}`
+    + (t.thermal_state ? `\nThermal state: ${t.thermal_state}` : '') + `\nClick for °${unit === 'C' ? 'F' : 'C'}`;
+  const line = `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" aria-hidden="true"><polyline points="${points}" fill="none" stroke="currentColor" stroke-width="1.25" stroke-linejoin="round"/></svg>`;
+  return figure(cls, title, `Temp <b>${degrees(t.cpu_max)}</b>${line}${throttled ? ' <b>throttling</b>' : ''}<span class="sr">, switch to °${unit === 'C' ? 'F' : 'C'}</span>`, 'unit');
+}
+
+function renderMachine(d) {
+  put($('#machine'), cpuFigure(d.load, d.ncpu, d.cpu_pct) + memoryFigure(d.memory) + temperatureFigure(d.thermals, d.now));
+}
+
+/* ================================================================ first visit */
+
+function welcome(d) {
+  if (d.running.length || d.queued.length || d.done.length || d.metrics_24h.runs) return '';
+  const example = JSON.stringify({ command: 'make test', cwd: '/path/to/project', label: 'tests' });
+  return `<div class="card welcome">
+      <h3>No jobs yet</h3>
+      <p>Queue one from a shell. It waits for a slot and prints its output:</p>
+      <pre>manhattan submit --wait -- make test</pre>
+      <p>Or have any program write a JSON file into the inbox, <code>${esc(d.inbox)}</code>. Its log, status and exit code appear beside it.</p>
+      <pre>${esc(example)}</pre>
+    </div>`;
+}
+
+/* ================================================================ announcements
+   A screen reader hears what changed, not the whole page every two seconds: a job
+   starting or finishing, the connection dropping, a job moved, an error. */
+
+let knownStates = null; // run id -> state, from the previous refresh
+let missedFailures = 0; // runs that failed while this tab was in the background
+const OUTCOMES = { succeeded: 'succeeded', failed: 'failed', timed_out: 'timed out', abandoned: 'was abandoned', cancelled: 'was cancelled', rejected: 'was rejected' };
+
+function announce(message) {
+  const region = $('#announce');
+  region.textContent = '';
+  // Set after a pause, so the same message twice is heard twice.
+  setTimeout(() => { region.textContent = message; }, 50);
+}
+
+function announceChanges(d) {
+  const states = new Map([...d.running, ...d.queued, ...d.done].map((run) => [run.run_id, run.state]));
+  if (knownStates) {
+    const said = [];
+    for (const run of d.running) {
+      if (knownStates.get(run.run_id) !== 'running') said.push(`${run.label} started.`);
+    }
+    for (const run of d.done) {
+      const before = knownStates.get(run.run_id);
+      if (before && before !== run.state) {
+        const exit = run.state === 'failed' && run.exit_status ? `, exit ${run.exit_status}` : '';
+        said.push(`${run.label} ${OUTCOMES[run.state] || run.state}${exit}.`);
+        if (document.hidden && FAILED.includes(run.state)) missedFailures += 1;
+      }
+    }
+    if (said.length) announce(said.join(' '));
+  }
+  knownStates = states;
+}
+
+/* ================================================================ the log pane
+   One viewer, outside the regions that are redrawn every two seconds, so its scroll
+   position and any selected text survive. It follows the end of the log while scrolled
+   to the bottom; scrolled up, it holds still and offers "new output". */
+
+let view = null; // { id, text, shown, follow, busy, fetchedState }
+const LIVE = new Set(['running', 'queued']);
+const pane = $('#log'), text = $('#log-text'), newButton = $('#log-new'), errorButton = $('#log-errors');
+
+const ANSI_COLOURS = { 30: '#6e7681', 31: 'var(--red)', 32: 'var(--green)', 33: 'var(--amber)', 34: 'var(--blue)', 35: 'var(--purple)', 36: 'var(--cyan)', 37: 'var(--fg)' };
+
+/** Bold and colour escape codes, as spans; everything else escaped. */
+function ansi(line) {
+  let out = '', open = false;
+  const parts = line.split(/\x1b\[([0-9;]*)m/);
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 0) { out += esc(parts[i]); continue; }
+    let style = '';
+    for (const code of parts[i].split(';').map(Number)) {
+      if (code === 1) style += 'font-weight:700;';
+      else if (ANSI_COLOURS[code]) style += `color:${ANSI_COLOURS[code]};`;
+      else if (ANSI_COLOURS[code - 60]) style += `color:${ANSI_COLOURS[code - 60]};`;
+    }
+    if (open) { out += '</span>'; open = false; }
+    if (style) { out += `<span style="${style}">`; open = true; }
+  }
+  return out + (open ? '</span>' : '');
+}
+
+// Some test runners print private-use glyphs (SF Symbols) that only render in Apple's fonts.
+const SYMBOLS = { 0x1007c8: '◇', 0x10105b: '✔', 0x100884: '✘', 0x10065f: '↷', 0x1001ff: '⚠', 0x100135: '↳' };
+
+/** The kind of a log line, for its colour: ok, err, warn, head or nothing. */
+function lineKind(plain) {
+  if (/^\s*◇/.test(plain)) return '';
+  // Test names are quoted; words like "failed" inside them say nothing about the outcome.
+  const unquoted = plain.replace(/"[^"]*"/g, '""');
+  if (/^\s*✔|\bpassed after\b|Build complete!|^drmanhattan · succeeded|^\s*Executed .* with 0 failures|^\s*PASS\b|\bpassed\b.*\bin [\d.]+s/.test(plain)) return 'ok';
+  if (/^\s*✘|\berror:|^\s*(fatal )?error\b|\bfailed\b|^drmanhattan · (timed out|abandoned)|\bpanic\b|^\s*FAIL\b|Traceback \(most recent/i.test(unquoted)) return 'err';
+  if (/\bwarning:|^\s*⚠|^\s*WARN\b/i.test(unquoted)) return 'warn';
+  if (/^(drmanhattan |==+|---+ |#+ |Step \d|\[\d+\/\d+\] (Compiling|Linking|Building))/.test(plain)) return 'head';
+  return '';
+}
+
+// A run of "<command> still running (… elapsed)" heartbeats, as some build tools print every
+// 30 seconds, collapses to the latest line per command, with a count.
+const HEARTBEAT = /^\s*(?:\[\d\d:\d\d:\d\d\] )?(.+?) still running \((.+) elapsed\)\s*$/;
+function collapseHeartbeats(lines) {
+  const out = [];
+  let block = null;
+  const flush = () => {
+    if (!block) return;
+    for (const [, beat] of block) out.push(beat.n > 1 ? `${beat.line}  · ${beat.n} heartbeats` : beat.line);
+    block = null;
+  };
+  for (const line of lines) {
+    const m = HEARTBEAT.exec(line.replace(/\x1b\[[0-9;]*m/g, ''));
+    if (!m) { flush(); out.push(line); continue; }
+    block = block || new Map();
+    const previous = block.get(m[1]);
+    block.delete(m[1]);
+    block.set(m[1], { line, n: (previous ? previous.n : 0) + 1 });
+  }
+  flush();
+  return out;
+}
+
+// drmanhattan's own lines in a job's log. The file keeps them so that it explains itself.
+// The pane says where and when the job started above the output, so those two lines are
+// left out; the rest (how it ended, a timeout, a cut) become notes, apart from the output.
+const OWN = 'drmanhattan · ';
+const FRAMING = /^drmanhattan · (.+ started in slot \d+ at .+ · run \S+|in .+?: .*)$/;
+// Progress markers are for drmanhattan too. A step becomes a divider; a command's start and
+// end are left out, since the job's row shows the commands in flight.
+const STEP = /^\s*::step\s+(\d+)(?:\s*\/\s*(\d+))?\s*(.*)$/;
+const COMMAND_MARK = /^\s*::(start|done)\s+\S/;
+
+function formatLog(raw) {
+  // A log ends with a newline; it does not start an empty last line.
+  const lines = raw.replace(/\n$/, '').split('\n').filter((line) => {
+    line = line.replace(/\r+$/, '');
+    return !FRAMING.test(line) && !COMMAND_MARK.test(line);
+  });
+  return collapseHeartbeats(lines).map((line) => {
+    line = line.replace(/\r+$/, '');
+    const cr = line.lastIndexOf('\r');
+    if (cr >= 0) line = line.slice(cr + 1); // a progress bar: keep what it drew last
+    line = line
+      .replace(/[\u{F0000}-\u{10FFFF}]/gu, (c) => SYMBOLS[c.codePointAt(0)] || '◆')
+      .replace(/\x1b\[[0-9;?]*[A-HJKSTfhlnsu]|\x1b\][^\x07]*\x07|\x1b[()][0-9A-B]/g, '');
+    const plain = line.replace(/\x1b\[[0-9;]*m/g, '');
+    const step = STEP.exec(plain);
+    if (step) {
+      const [, n, of, what] = step;
+      return `<span class="step-mark">Step ${esc(n)}${of ? '/' + esc(of) : ''}${what ? ' · ' + esc(what) : ''}</span>`;
+    }
+    const kind = lineKind(plain);
+    if (plain.startsWith(OWN)) {
+      return `<span class="note${kind ? ' ' + kind : ''}" role="note"><span class="note-tag">drmanhattan<span class="sr">:</span></span>`
+        + `<span>${esc(plain.slice(OWN.length))}</span></span>`;
+    }
+    return `<span class="ln${kind ? ' ' + kind : ''}">${ansi(line) || ' '}</span>`;
+  }).join('');
+}
+
+// The job's error lines, which the error button steps through (drmanhattan's notes are not lines).
+const ERROR_LINES = '.ln.err';
+const atBottom = () => text.scrollHeight - text.scrollTop - text.clientHeight < 24;
+const allRuns = () => (last ? [...last.running, ...last.queued, ...last.done] : []);
+const findRun = (id) => allRuns().find((run) => run.run_id === id) || null;
+
+function paint() {
+  if (!view || view.text == null || view.shown === view.text) return;
+  const selecting = String(getSelection()).length && text.contains(getSelection().anchorNode);
+  if ((!view.follow || selecting) && view.shown != null) {
+    newButton.style.display = 'block';
+    return;
+  }
+  text.innerHTML = formatLog(view.text);
+  view.shown = view.text;
+  newButton.style.display = 'none';
+  if (view.follow) text.scrollTop = text.scrollHeight;
+  const errors = text.querySelectorAll(ERROR_LINES).length;
+  errorButton.style.display = errors ? 'inline-block' : 'none';
+  errorButton.textContent = `${plural(errors, 'error line', 'error lines')} ↓`;
+}
+
+async function fetchLog() {
+  if (!view || view.busy) return;
+  const id = view.id;
+  view.busy = true;
+  let body;
+  try {
+    const response = await fetch(`/api/log?run_id=${encodeURIComponent(id)}&lines=2000`);
+    body = response.ok ? await response.text() : `(log unavailable: ${response.status} ${await response.text()})`;
+  } catch (_) {
+    body = '(log unavailable)';
+  }
+  if (!view || view.id !== id) return;
+  view.busy = false;
+  view.text = body;
+  view.fetchedState = findRun(id)?.state;
+  paint();
+}
+
+function logHeading() {
+  if (!view) return;
+  const run = findRun(view.id);
+  if (!run) { $('#log-meta').textContent = view.id; $('#log-start').textContent = ''; return; }
+  put($('#log-title'), `${esc(run.label)} ${stateMark(run.state)}${notes(run)}`);
+  put($('#log-meta'), esc(run.run_id));
+  const start = [
+    run.slot ? `slot ${esc(run.slot)}` : '',
+    run.started_at ? `started ${esc(clock(run.started_at))}` : 'not started',
+    `in ${esc(run.cwd_short || run.cwd)}`,
+    run.command ? `<code>${esc(run.command.join(' '))}</code>` : '',
+  ].filter(Boolean);
+  put($('#log-start'), start.join(' · '));
+  $('#log-start').title = `${run.cwd}\n${(run.command || []).join(' ')}`;
+  // The files and the process group are for digging further: a tooltip, not the heading.
+  $('#log-meta').title = [
+    run.job_file && `job file ${run.job_file}`,
+    run.log && `log ${run.log}`,
+    run.process_group && `process group ${run.process_group}`,
+  ].filter(Boolean).join('\n');
+}
+
+function openLog(id) {
+  if (view?.id === id) return closeLog();
+  view = { id, text: null, shown: null, follow: true };
+  text.innerHTML = '<span class="faint">loading…</span>';
+  newButton.style.display = 'none';
+  errorButton.style.display = 'none';
+  document.documentElement.classList.add('log-open');
+  $('#log-raw').href = `/api/log?run_id=${encodeURIComponent(id)}&lines=2000`;
+  pane.setAttribute('aria-label', `Log of ${findRun(id)?.label || 'the run'}`);
+  logHeading();
+  if (last) render(last);
+  fetchLog();
+  text.focus({ preventScroll: true });
+}
+
+function closeLog() {
+  const id = view?.id;
+  view = null;
+  document.documentElement.classList.remove('log-open');
+  text.innerHTML = '';
+  if (last) render(last);
+  // Back to the run the log was opened from; if a filter hid it, to its section.
+  const opener = id && document.querySelector(`.open[data-id="${CSS.escape(id)}"]`);
+  (opener || $('#finished-heading')).focus();
+}
+
+function refreshLog() {
+  if (!view) return;
+  logHeading();
+  const run = findRun(view.id);
+  if (view.text == null || (run && (LIVE.has(run.state) || run.state !== view.fetchedState))) fetchLog();
+}
+
+text.addEventListener('scroll', () => {
+  if (!view) return;
+  const bottom = atBottom();
+  if (bottom !== view.follow) { view.follow = bottom; if (bottom) paint(); }
+});
+newButton.onclick = $('#log-end').onclick = () => {
+  if (!view) return;
+  view.follow = true;
+  view.shown = null;
+  paint();
+  text.scrollTop = text.scrollHeight;
+};
+// Steps through the error lines from the highlighted one, wrapping to the first. (Scrolling
+// cannot move past the end, where a failed run's errors usually are.)
+errorButton.onclick = () => {
+  if (!view) return;
+  const errors = [...text.querySelectorAll(ERROR_LINES)];
+  if (!errors.length) return;
+  const current = errors.findIndex((e) => e.classList.contains('hit'));
+  const next = errors[(current + 1) % errors.length];
+  if (current >= 0) errors[current].classList.remove('hit');
+  next.classList.add('hit');
+  view.follow = false;
+  text.scrollTop = Math.max(0, next.offsetTop - text.clientHeight / 3);
+  errorButton.textContent = `error ${errors.indexOf(next) + 1} of ${errors.length} ↓`;
+};
+$('#log-close').onclick = closeLog;
+
+const wrapButton = $('#log-wrap');
+function setWrap(on) {
+  text.classList.toggle('wrap', on);
+  wrapButton.setAttribute('aria-pressed', String(on));
+  remember('wrap', on ? '1' : '0');
+}
+wrapButton.onclick = () => setWrap(!text.classList.contains('wrap'));
+setWrap(recall('wrap') !== '0');
+
+/* The pane's height: drag its top edge, or focus it and press ↑ or ↓. */
+const paneGrip = $('#log-grip');
+function setPaneHeight(h) {
+  h = Math.round(Math.max(140, Math.min(innerHeight - 96, h)));
+  document.documentElement.style.setProperty('--pane-height', `${h}px`);
+  paneGrip.setAttribute('aria-valuenow', String(h));
+  remember('pane', h);
+  return h;
+}
+if (+recall('pane')) setPaneHeight(+recall('pane'));
+paneGrip.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  paneGrip.setPointerCapture(e.pointerId);
+  const move = (ev) => setPaneHeight(innerHeight - ev.clientY);
+  const up = () => {
+    paneGrip.removeEventListener('pointermove', move);
+    paneGrip.removeEventListener('pointerup', up);
+    paneGrip.removeEventListener('pointercancel', up);
+  };
+  paneGrip.addEventListener('pointermove', move);
+  paneGrip.addEventListener('pointerup', up);
+  paneGrip.addEventListener('pointercancel', up);
+});
+paneGrip.addEventListener('keydown', (e) => {
+  if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+  e.preventDefault();
+  setPaneHeight(pane.offsetHeight + (e.key === 'ArrowUp' ? 40 : -40));
+});
+
+/* ================================================================ reordering the queue
+   Drag a row's grip (mouse or touch); or use its ↑ and ↓ buttons; or focus the grip and
+   press ↑ or ↓. Each saves the whole order of the jobs without priority; priority jobs
+   always come first. The queue is not redrawn while a drag is in progress. */
+
+let drag = null;
+const movableRows = () => [...$('#queue').querySelectorAll('tr[data-movable="1"]')];
+const movableIds = () => movableRows().map((r) => r.dataset.id);
+const renumber = () => [...$('#queue').querySelectorAll('tr[data-id]')].forEach((row, i) => {
+  const n = row.querySelector('.n');
+  if (n) n.textContent = i + 1;
+});
+
+function endDrag(commit) {
+  if (!drag) return;
+  const { row, before, cleanup } = drag;
+  cleanup();
+  row.classList.remove('dragging');
+  document.documentElement.classList.remove('dragging');
+  drag = null;
+  const order = movableIds();
+  if (commit && order.join() !== before) saveOrder(order);
+  else { $('#queue')._html = null; if (last) render(last); } // put the rows back
+}
+
+function startDrag(e, grip) {
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  e.preventDefault();
+  // The listeners sit on the document: moving the row through the DOM drops pointer capture.
+  const row = grip.closest('tr'), pointer = e.pointerId;
+  const move = (ev) => {
+    if (ev.pointerId !== pointer) return;
+    const others = movableRows().filter((r) => r !== row);
+    const below = others.find((r) => { const box = r.getBoundingClientRect(); return ev.clientY < box.top + box.height / 2; });
+    if (below) { if (row.nextElementSibling !== below) below.before(row); }
+    else { const end = others[others.length - 1]; if (end && end.nextElementSibling !== row) end.after(row); }
+    renumber();
+    if (ev.clientY < 72) scrollBy(0, -12); else if (ev.clientY > innerHeight - 72) scrollBy(0, 12);
+  };
+  const up = (ev) => { if (ev.pointerId === pointer) endDrag(true); };
+  // A gesture the system takes over is not a drop: the rows go back.
+  const cancel = (ev) => { if (ev.pointerId === pointer) endDrag(false); };
+  document.addEventListener('pointermove', move);
+  document.addEventListener('pointerup', up);
+  document.addEventListener('pointercancel', cancel);
+  const cleanup = () => {
+    document.removeEventListener('pointermove', move);
+    document.removeEventListener('pointerup', up);
+    document.removeEventListener('pointercancel', cancel);
+  };
+  drag = { row, before: movableIds().join(), cleanup };
+  row.classList.add('dragging');
+  document.documentElement.classList.add('dragging');
+}
+
+/** Moves the job `id` by `step` places (−1 up, +1 down), then focuses `focus` in its row. */
+function moveBy(id, step, focus) {
+  const ids = movableIds(), from = ids.indexOf(id), to = from + step;
+  if (from < 0 || to < 0 || to >= ids.length) return;
+  ids.splice(from, 1);
+  ids.splice(to, 0, id);
+  const label = findRun(id)?.label || 'The job';
+  const priority = last ? last.queued.filter((r) => r.priority).length : 0;
+  saveOrder(ids, id, focus);
+  announce(`${label} moved to position ${to + 1 + priority}.`);
+}
+
+/* ---------------------------------------------------------------- changes to the queue
+   A change shows at once, before the server confirms it. A poll that was already under
+   way when the change was made would show the old state, so its answer is dropped. */
+
+let changes = 0;   // changes made so far
+let pending = 0;   // changes sent and not yet answered
+
+async function post(path, body) {
+  changes += 1;
+  pending += 1;
+  try {
+    const response = await fetch(path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Drmanhattan': '1' },
+      body: JSON.stringify(body),
+    });
+    if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error || `HTTP ${response.status}`);
+  } finally {
+    pending -= 1;
+    changes += 1; // an answer from before this point may predate the change
+  }
+}
+
+async function saveOrder(order, focusId, focusAction = 'grip') {
+  if (last) {
+    const position = new Map(order.map((id, i) => [id, i]));
+    const at = (run) => (position.has(run.run_id) ? position.get(run.run_id) : Infinity);
+    const priority = last.queued.filter((run) => run.priority);
+    const rest = last.queued.filter((run) => !run.priority).sort((a, b) => at(a) - at(b));
+    rest.forEach((run) => { run.manual = position.has(run.run_id); });
+    last.queued = [...priority, ...rest];
+    last.manual_order = true;
+    render(last);
+  }
+  if (focusId) {
+    const row = $(`#queue tr[data-id="${CSS.escape(focusId)}"]`);
+    // At the top or bottom the button pressed is now disabled: the grip takes the focus.
+    const button = row?.querySelector(`[data-action="${focusAction}"]:not([disabled])`) || row?.querySelector('[data-action="grip"]');
+    button?.focus();
+  }
+  try { await post('/api/queue-order', { order }); queueError = ''; }
+  catch (e) { queueError = `could not save the order: ${e.message}`; announce(queueError); }
+  tick();
+}
+
+async function resetOrder() {
+  try { await post('/api/queue-order', { order: null }); queueError = ''; }
+  catch (e) { queueError = `could not reset the order: ${e.message}`; announce(queueError); }
+  tick();
+}
+
+/** − and + set the number of slots for four hours; back at the standing number, the
+ *  override is simply removed. */
+async function setCapacity(value) {
+  if (!last) return;
+  const standing = last.capacity_default || 1;
+  const n = value === 'reset' ? standing : Number(value);
+  const slots = n === standing ? null : Math.max(1, Math.min(last.capacity_ui_max || 4, n));
+  try { await post('/api/capacity', { slots }); capacityError = ''; }
+  catch (e) { capacityError = `could not change the slots: ${e.message}`; announce(capacityError); }
+  tick();
+}
+
+/* ================================================================ input
+   One handler for every control on the page, by its `data-action`. */
+
+document.addEventListener('click', (e) => {
+  const control = e.target.closest('[data-action]');
+  if (control) {
+    const { action, id, value } = control.dataset;
+    if (action === 'open') openLog(id);
+    else if (action === 'up') moveBy(id, -1, 'up');
+    else if (action === 'down') moveBy(id, 1, 'down');
+    else if (action === 'filter') { filter = value; remember('filter', value); render(last); }
+    else if (action === 'capacity') setCapacity(value);
+    else if (action === 'reset-order') resetOrder();
+    else if (action === 'unit') { unit = unit === 'C' ? 'F' : 'C'; remember('unit', unit); render(last); }
+    return;
+  }
+  // A click anywhere else on a run's row opens its log too, unless it was on a link.
+  const row = e.target.closest('tr.run');
+  if (row && !e.target.closest('a') && !getSelection().toString()) openLog(row.dataset.id);
+});
+
+document.addEventListener('pointerdown', (e) => {
+  const grip = e.target.closest('[data-action="grip"]');
+  if (grip) startDrag(e, grip);
+});
+
+document.addEventListener('keydown', (e) => {
+  const grip = e.target.closest?.('[data-action="grip"]');
+  if (grip && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+    e.preventDefault();
+    moveBy(grip.dataset.id, e.key === 'ArrowUp' ? -1 : 1, 'grip');
+    return;
+  }
+  if (e.key !== 'Escape') return;
+  if (drag) endDrag(false); // Esc during a drag cancels it, and only that
+  else if (view) closeLog();
+});
+
+/* ================================================================ rendering and polling */
+
+let last = null;
+
+function render(d) {
+  if (d !== last) announceChanges(d);
+  last = d;
+  put($('#welcome'), welcome(d));
+  renderMachine(d);
+  renderRunning(d);
+  renderQueue(d);
+  renderFinished(d);
+  const model = d.load_model || {};
+  const scaled = model.active && model.factor !== 1 ? ` Estimates are scaled ×${esc(model.factor)} for the current load.` : '';
+  put($('#footer-note'), `Choose a run to see its log; Esc closes it.${scaled}`);
+  $('#details').textContent = `inbox: ${d.inbox}\nstate: ${d.state_dir}\n${d.history_count} timing samples\n`
+    + (model.active ? `load model on, from ${model.runs} runs`
+      : `load model learning: ${Math.min(model.runs || 0, model.need || 20)} of ${model.need || 20} runs with a load reading`);
+  setTitle(d);
+  favicon(d.running.length ? (d.running.some((run) => run.over_p90) ? '--amber' : '--blue') : '--faint');
+}
+
+/** The tab's title says the queue's state at a glance, as other tabs are used:
+ *  "▶ 3 queued · drmanhattan" while jobs run, "✕ 1 failed · …" for failures that
+ *  happened while the tab was in the background, "offline · …" without the daemon. */
+function setTitle(d, offline = false) {
+  const parts = [];
+  if (offline) parts.push('offline');
+  if (missedFailures) parts.push(`✕ ${missedFailures} failed`);
+  if (d?.queued.length) parts.push(`${d.queued.length} queued`);
+  const running = !offline && d?.running.length ? '▶ ' : '';
+  document.title = `${running}${[...parts, 'drmanhattan'].join(' · ')}`;
+}
+
+let faviconColour = '';
+function favicon(token) {
+  if (faviconColour === token) return;
+  faviconColour = token;
+  const colour = getComputedStyle(document.documentElement).getPropertyValue(token).trim() || '#888';
+  $('#favicon').href = 'data:image/svg+xml,' + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6.5" fill="${colour}"/></svg>`);
+}
+
+// Polls every two seconds, one request at a time, and not at all while the tab is hidden.
+let timer = null, inFlight = false, again = false, lastOk = 0;
+function schedule() { clearTimeout(timer); timer = setTimeout(() => { if (!document.hidden) tick(); }, 2000); }
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) return;
+  missedFailures = 0; // seen now
+  if (last) setTitle(last);
+  tick();
+});
+
+async function tick() {
+  if (inFlight) { again = true; return; }
+  inFlight = true;
+  clearTimeout(timer);
+  try { await poll(); }
+  finally {
+    inFlight = false;
+    if (again) { again = false; tick(); } else schedule();
+  }
+}
+
+async function poll() {
+  const status = $('#status');
+  const changesBefore = changes;
+  try {
+    const response = await fetch('/api/state');
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const d = await response.json();
+    if (d.error) throw new Error(d.error);
+    // A change made, or still on its way, while this was asked: its answer may predate it.
+    // Every change asks again once it is answered.
+    if (changes !== changesBefore || pending) return;
+    if (status.className === 'offline') announce('Connected to drmanhattan again.');
+    render(d);
+    refreshLog();
+    lastOk = Date.now();
+    status.className = '';
+    status.title = '';
+    status.lastElementChild.textContent = `live · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
+  } catch (e) {
+    if (status.className !== 'offline') announce('Lost the connection to drmanhattan. Retrying.');
+    status.className = 'offline';
+    status.title = String(e);
+    const since = lastOk ? ` since ${new Date(lastOk).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : '';
+    status.lastElementChild.textContent = `offline${since}, retrying; this page is out of date`;
+    setTitle(last, true);
+    favicon('--red');
+  }
+}
+
+tick();
+</script>
+</body>
+</html>

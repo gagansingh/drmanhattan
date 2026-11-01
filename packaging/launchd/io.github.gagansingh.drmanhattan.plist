@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Runs drmanhattan under your login on macOS. Replace YOU with your user name, then:
+
+    cp packaging/launchd/io.github.gagansingh.drmanhattan.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/io.github.gagansingh.drmanhattan.plist
+
+  Run `drmanhattan` once in a terminal first to answer its one-time question (a service has
+  no terminal to ask in). Its output goes to drmanhattan.log in its data directory
+  (`drmanhattan paths` shows where), which it rotates itself. It is restarted if it crashes, not after `drmanhattan stop`. Jobs
+  inherit the PATH below: add the directories your builds need.
+-->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.github.gagansingh.drmanhattan</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/YOU/.local/bin/drmanhattan</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+</dict>
+</plist>

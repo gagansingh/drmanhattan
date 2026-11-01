@@ -1,0 +1,33 @@
+[package]
+name = "drmanhattan"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "A local job queue for heavy commands: a watched folder, slots with fair admission, and a live dashboard."
+license = "MIT"
+repository = "https://github.com/gagansingh/drmanhattan"
+readme = "README.md"
+keywords = ["job-queue", "build", "ci", "local", "dashboard"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "drmanhattan"
+path = "src/main.rs"
+
+[[bin]]
+name = "manhattan"
+path = "src/bin/manhattan.rs"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+notify = { version = "6", default-features = false, features = ["macos_fsevent"] }
+tiny_http = "0.12"
+libc = "0.2"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

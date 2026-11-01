@@ -1,0 +1,194 @@
+//! A run's record: the job plus everything that happened to it. The same record is written
+//! to `state/runs/<run id>.json` (where a restarted daemon reads it back) and, without the
+//! job's environment, to `<job>.status.json` beside the job file.
+
+use serde::{Deserialize, Serialize};
+
+use crate::job::{Job, RunId};
+use crate::time::Timestamp;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum State {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+    TimedOut,
+    Abandoned,
+}
+
+impl State {
+    pub(crate) fn is_terminal(self) -> bool {
+        !matches!(self, State::Queued | State::Running)
+    }
+
+    /// Failed, timed out or abandoned: the run did not do its job. (A cancel was asked for.)
+    pub(crate) fn is_failure(self) -> bool {
+        matches!(self, State::Failed | State::TimedOut | State::Abandoned)
+    }
+
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            State::Queued => "queued",
+            State::Running => "running",
+            State::Succeeded => "succeeded",
+            State::Failed => "failed",
+            State::Cancelled => "cancelled",
+            State::TimedOut => "timed_out",
+            State::Abandoned => "abandoned",
+        }
+    }
+}
+
+impl std::fmt::Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// The machine's load average while a run ran: sampled at its start, every heartbeat, and
+/// at its end.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
+pub(crate) struct LoadStats {
+    pub(crate) average: f64,
+    pub(crate) peak: f64,
+    pub(crate) samples: u32,
+}
+
+impl LoadStats {
+    pub(crate) fn of(samples: &[f64]) -> Option<LoadStats> {
+        let round = |x: f64| (x * 10.0).round() / 10.0;
+        (!samples.is_empty()).then(|| LoadStats {
+            average: round(samples.iter().sum::<f64>() / samples.len() as f64),
+            peak: round(samples.iter().copied().fold(0.0, f64::max)),
+            samples: u32::try_from(samples.len()).unwrap_or(u32::MAX),
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub(crate) struct Record {
+    pub(crate) run_id: RunId,
+    pub(crate) state: State,
+    #[serde(flatten)]
+    pub(crate) job: Job,
+    /// The daemon that queued or ran this run.
+    pub(crate) daemon_pid: u32,
+    pub(crate) queued_at: Timestamp,
+    /// The typical duration this run was ranked by, in seconds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) expected_seconds: Option<u64>,
+    /// Queued longer than this, it goes ahead of shorter newcomers.
+    pub(crate) skip_after_seconds: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slot: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) process_group: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_status: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) finished_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) failure_reason: Option<String>,
+    /// For a failed run: the line of its log to read first.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error_line: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) load_at_start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) load: Option<LoadStats>,
+}
+
+impl Record {
+    pub(crate) fn new(run_id: RunId, job: Job, expected_seconds: Option<u64>, skip_after_seconds: u64) -> Record {
+        Record {
+            run_id,
+            state: State::Queued,
+            job,
+            daemon_pid: std::process::id(),
+            queued_at: Timestamp::now(),
+            expected_seconds,
+            skip_after_seconds,
+            slot: None,
+            started_at: None,
+            process_group: None,
+            exit_status: None,
+            finished_at: None,
+            failure_reason: None,
+            error_line: None,
+            load_at_start: None,
+            load: None,
+        }
+    }
+
+    /// The record as `<job>.status.json` shows it: the job's environment may hold secrets
+    /// and stays in the private state directory.
+    pub(crate) fn public(&self) -> Record {
+        let mut public = self.clone();
+        public.job.env.clear();
+        public
+    }
+
+    /// What `<job>.exit` says once the run is over: the command's own status when it has
+    /// one; otherwise 124 for a timeout, 130 for a cancel before it started, 1 otherwise.
+    pub(crate) fn exit_code(&self) -> i32 {
+        self.exit_status.unwrap_or(match self.state {
+            State::TimedOut => 124,
+            State::Cancelled => 130,
+            _ => 1,
+        })
+    }
+
+    /// When the run finished, or the latest thing that happened to it.
+    pub(crate) fn last_event(&self) -> Timestamp {
+        self.finished_at.or(self.started_at).unwrap_or(self.queued_at)
+    }
+}
+
+/// `<job>.status.json` for a job file that never became a run: one that was not a valid
+/// job, or one a previous daemon claimed and lost track of.
+#[derive(Serialize)]
+pub(crate) struct FileStatus<'a> {
+    pub(crate) state: &'static str,
+    pub(crate) failure_reason: &'a str,
+    pub(crate) job_file: &'a std::path::Path,
+    pub(crate) finished_at: Timestamp,
+}
+
+impl<'a> FileStatus<'a> {
+    pub(crate) fn rejected(reason: &'a str, job_file: &'a std::path::Path) -> FileStatus<'a> {
+        FileStatus { state: "rejected", failure_reason: reason, job_file, finished_at: Timestamp::now() }
+    }
+
+    pub(crate) fn abandoned(reason: &'a str, job_file: &'a std::path::Path) -> FileStatus<'a> {
+        FileStatus { state: State::Abandoned.as_str(), failure_reason: reason, job_file, finished_at: Timestamp::now() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::job::{JobFiles, JobSpec};
+
+    #[test]
+    fn a_record_round_trips_through_its_file() {
+        let inbox = std::env::temp_dir();
+        let files = JobFiles::new(&inbox, "round-trip");
+        let job =
+            JobSpec::parse(r#"{"command": ["true"], "env": {"A": "1"}}"#).unwrap().resolve(&files, &inbox).unwrap();
+        std::fs::write(files.claimed(), "{}").unwrap();
+        let job = Job { claim: crate::fsutil::file_id(&files.claimed()), ..job };
+        let mut rec = Record::new(RunId::new(), job, Some(5), 600);
+        rec.load = LoadStats::of(&[1.0, 2.0]);
+        let text = serde_json::to_string(&rec).unwrap();
+        let back: Record = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.job, rec.job);
+        assert_eq!((&back.run_id, back.load), (&rec.run_id, rec.load));
+        assert!(serde_json::to_string(&rec.public()).unwrap().find("\"env\"").is_none());
+        let _ = std::fs::remove_file(files.claimed());
+    }
+}
