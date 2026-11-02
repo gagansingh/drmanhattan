@@ -8,7 +8,10 @@ mod manual_order;
 use std::str::FromStr;
 use std::time::Duration;
 
-pub(crate) use capacity::{effective_capacity, read_override, standing_capacity, write_override, Override, MAX_SLOTS};
+pub(crate) use capacity::{
+    effective_capacity, read_override, read_worker_override, standing_capacity, worker_capacity, write_override,
+    write_worker_override, Override, MAX_SLOTS,
+};
 pub(crate) use config::{load_config, save_config};
 pub(crate) use manual_order::{read_manual_order, write_manual_order, ManualOrder};
 
@@ -42,6 +45,8 @@ pub(crate) struct Settings {
     pub(crate) slots_env: Option<String>,
     /// The most `prepare` commands run at once.
     pub(crate) max_prepares: usize,
+    /// How often each worker is asked for its readings.
+    pub(crate) worker_poll: Duration,
 }
 
 const DAY: u64 = 86_400;
@@ -68,6 +73,7 @@ impl Settings {
                 &format!("an integer from 1 to {MAX_SLOTS}"),
             )?,
             slots_env: std::env::var("DRMANHATTAN_SLOTS").ok(),
+            worker_poll: seconds_env("DRMANHATTAN_WORKER_POLL_SECONDS", 15.0, 0.1)?,
             max_prepares: env_or(
                 "DRMANHATTAN_MAX_PREPARES",
                 4,

@@ -136,7 +136,7 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
 
 /// Reads what the log gained, publishes the run's activity, and learns the durations of
 /// the commands that finished. The log is read with no lock held.
-fn follow_log(w: &Watch, activity: &mut Activity) {
+pub(super) fn follow_log(w: &Watch, activity: &mut Activity) {
     let finished = activity.scan(&w.rec.job.log, w.patterns, Timestamp::now());
     *crate::sync::lock(w.activity) = activity.clone();
     if finished.is_empty() {

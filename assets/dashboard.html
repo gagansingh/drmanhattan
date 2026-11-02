@@ -107,6 +107,18 @@ h2:focus { outline: none; }
 }
 .step:hover:not(:disabled) { border-color: var(--dim); color: var(--fg); }
 .step:disabled { opacity: 0.4; cursor: default; }
+/* One bar per machine above its runs, once there are workers. */
+tr.machine td { padding: 8px 16px; background: var(--raised); border-top: 1px solid var(--line); }
+tr.machine:first-child td { border-top: 0; }
+.machine-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; color: var(--dim); font-size: 12px; line-height: 20px; }
+.machine-bar .name { display: inline-flex; align-items: center; gap: 6px; color: var(--fg); font: 650 12px/20px var(--mono); }
+.machine-bar .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); }
+.machine-bar .dot.off { background: var(--red); }
+.machine-bar .dot.unknown { background: var(--faint); }
+.machine-bar .slots { display: inline-flex; align-items: center; gap: 6px; }
+.machine-bar .slots b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
+.machine-bar .figures { display: inline-flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
+.machine-bar .reason { color: var(--amber); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
 
 /* ---------------------------------------------------------------- run tables
@@ -607,7 +619,7 @@ function runningRow(run, now) {
     : nothing('unknown');
   return rowStart(run)
     + `<td class="state" title="Started ${esc(clock(run.started_at))}, after waiting ${esc(duration(run.wait_seconds))}">${stateMark('running', `slot ${run.slot}`)}</td>`
-    + runCell(run, '', doing(run.activity))
+    + runCell(run, run.machine && !run.remote_job ? `<span class="note warn" title="Its files are being mirrored to ${esc(run.machine)}">sending to ${esc(run.machine)}</span>` : '', doing(run.activity))
     + `<td class="time"><span class="num">${duration(run.elapsed)}</span>${under(against, range)}${progress}</td>`
     + `<td class="when">${when}</td>`
     + sourceCell(run.source)
@@ -616,7 +628,45 @@ function runningRow(run, now) {
 
 let capacityError = '';
 
+/** A worker's temperature: the hottest sensor, no history line. */
+function plainTemperature(t) {
+  if (!t) return '';
+  const throttled = t.thermal_state === 'serious' || t.thermal_state === 'critical';
+  const cls = throttled || t.cpu_max >= 95 ? ' hot' : t.cpu_max >= 80 ? ' warm' : '';
+  const title = `Hottest CPU sensor ${degrees(t.cpu_max, 1)}, average ${degrees(t.cpu_avg, 1)}` + (t.thermal_state ? `\nThermal state: ${t.thermal_state}` : '');
+  return figure(cls, title, `Temp <b>${degrees(t.cpu_max)}</b>${throttled ? ' <b>throttling</b>' : ''}`, 'unit');
+}
+
+/** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
+ *  worker), its CPU, memory and temperature, and why it is not taking work. */
+function machineBar(m, d) {
+  const s = m.local ? { load: d.load, ncpu: d.ncpu, cpu_pct: d.cpu_pct, memory: d.memory, thermals: d.thermals } : (m.stats || {});
+  const online = m.local || m.online === true ? 'online' : m.online === false ? 'offline' : 'not asked yet';
+  const dot = online === 'online' ? '' : online === 'offline' ? ' off' : ' unknown';
+  const cap = m.capacity, min = m.local ? 1 : 0, max = Math.max(d.capacity_ui_max || 4, m.capacity_default);
+  const who = m.local ? '' : ` data-worker="${esc(m.name)}"`;
+  const ov = m.capacity_override;
+  const override = ov
+    ? `<span class="warn" title="Back to ${m.capacity_default} at ${esc(stamp(ov.until))}">until ${clock(ov.until)}</span><button class="link" data-action="capacity" data-value="reset"${who}>reset</button>`
+    : '';
+  const fewer = !m.local && cap === 1 ? 'Pause it for the next 4 hours: what runs there finishes, nothing new is sent' : 'One slot fewer for the next 4 hours';
+  const slots = `<span class="slots"><span><b>${m.running}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'}${m.paused ? ' · <b class="warn">paused</b>' : ''}</span>`
+    + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${cap <= min ? 'disabled' : ''} title="${fewer}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${cap >= max ? 'disabled' : ''} title="One slot more for the next 4 hours" aria-label="More slots on ${esc(m.name)}">+</button>${override}</span>`;
+  const figures = online === 'offline' ? ''
+    : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals));
+  const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
+  const reason = m.reason
+    ? `<span class="reason" title="${m.reason_until ? `Tried again after ${esc(clock(m.reason_until))}` : ''}">not taking work: ${esc(m.reason)}</span>`
+    : '';
+  const name = m.local ? 'this machine' : m.name;
+  return `<tr class="machine" data-id="machine-${esc(m.name)}"><td colspan="5"><div class="machine-bar">`
+    + `<span class="name" title="${esc([online, m.ssh ? `ssh ${m.ssh}` : '', seen].filter(Boolean).join(' · '))}"><i class="dot${dot}" aria-hidden="true"></i>${esc(name)}<span class="sr">, ${online}</span></span>`
+    + `${slots}<span class="figures">${figures}</span>${reason}</div></td></tr>`;
+}
+
 function renderRunning(d) {
+  if (d.machines && d.machines.length) return renderMachines(d);
   const cap = d.capacity, busy = d.running.length, max = d.capacity_ui_max || 4, ov = d.capacity_override;
   const override = ov
     ? `<span class="warn" title="Back to ${d.capacity_default} at ${esc(stamp(ov.until))}">until ${clock(ov.until)}</span><button class="link" data-action="capacity" data-value="reset">reset</button>`
@@ -628,6 +678,16 @@ function renderRunning(d) {
     + override);
   const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
   put($('#running'), busy ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
+}
+
+/** With workers: each machine's bar, then the runs in its slots. */
+function renderMachines(d) {
+  put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
+    + `<span><b>${d.running.length}</b> running on <b>${d.machines.length}</b> machines</span>`);
+  put($('#running'), d.machines.map((m) => {
+    const here = d.running.filter((run) => (run.machine || 'local') === m.name).sort((a, b) => (a.slot || 0) - (b.slot || 0));
+    return machineBar(m, d) + here.map((run) => runningRow(run, d.now)).join('');
+  }).join(''));
 }
 
 /* ---------------------------------------------------------------- up next */
@@ -648,6 +708,7 @@ function queuedRow(run, i, d) {
     running: ['preparing', 'Its prepare command is running; it can take a slot once that succeeds'],
     succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
   const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
+    + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">runs here</span>` : '')
     + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (d.manual_order && !run.manual && !run.priority ? '<span class="note" title="Queued after you reordered: follows the jobs you placed, shortest first">new</span>' : '');
@@ -713,7 +774,7 @@ function finishedRow(run, now) {
   const load = run.load_avg != null ? `Load ${run.load_avg} on average, ${run.load_max} at peak` : '';
   return rowStart(run)
     + `<td class="state">${stateMark(run.state)}${under(exit ? `<code>${exit}</code>` : '')}</td>`
-    + runCell(run, '', error ? `<div class="error-line" title="${esc(error)}">${esc(error)}</div>` : '')
+    + runCell(run, run.machine ? `<span class="note" title="It ran on the worker ${esc(run.machine)}">on ${esc(run.machine)}</span>` : '', error ? `<div class="error-line" title="${esc(error)}">${esc(error)}</div>` : '')
     + `<td class="time"><span class="num"${load ? ` title="${esc(load)}"` : ''}>${duration(run.duration)}</span>${under([pace, waited].filter(Boolean).join(' · '), usual ? `Usually ${duration(usual)}` : '')}</td>`
     + `<td class="when" title="${esc(stamp(run.finished_at))}"><span class="num">${clock(run.finished_at)}</span>${under(ago(run.finished_at, now))}</td>`
     + sourceCell(run.source)
@@ -1230,12 +1291,15 @@ async function resetOrder() {
 
 /** − and + set the number of slots for four hours; back at the standing number, the
  *  override is simply removed. */
-async function setCapacity(value) {
+async function setCapacity(value, worker) {
   if (!last) return;
-  const standing = last.capacity_default || 1;
+  const machine = worker && (last.machines || []).find((m) => m.name === worker);
+  if (worker && !machine) return;
+  const standing = machine ? machine.capacity_default : last.capacity_default || 1;
+  const max = Math.max(last.capacity_ui_max || 4, standing);
   const n = value === 'reset' ? standing : Number(value);
-  const slots = n === standing ? null : Math.max(1, Math.min(last.capacity_ui_max || 4, n));
-  try { await post('/api/capacity', { slots }); capacityError = ''; }
+  const slots = n === standing ? null : Math.max(machine ? 0 : 1, Math.min(max, n));
+  try { await post('/api/capacity', machine ? { worker, slots } : { slots }); capacityError = ''; }
   catch (e) { capacityError = `could not change the slots: ${e.message}`; announce(capacityError); }
   tick();
 }
@@ -1251,7 +1315,7 @@ document.addEventListener('click', (e) => {
     else if (action === 'up') moveBy(id, -1, 'up');
     else if (action === 'down') moveBy(id, 1, 'down');
     else if (action === 'filter') { filter = value; remember('filter', value); render(last); }
-    else if (action === 'capacity') setCapacity(value);
+    else if (action === 'capacity') setCapacity(value, control.dataset.worker);
     else if (action === 'reset-order') resetOrder();
     else if (action === 'unit') { unit = unit === 'C' ? 'F' : 'C'; remember('unit', unit); render(last); }
     return;

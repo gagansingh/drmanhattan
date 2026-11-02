@@ -25,6 +25,10 @@ pub(crate) struct HistoryRow {
     /// The run's average load, for the load model.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) load: Option<f64>,
+    /// The worker it ran on; none for this machine. Each machine's estimates come from its
+    /// own runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) machine: Option<String>,
 }
 
 pub(crate) fn append(paths: &Paths, row: &HistoryRow) -> Result<()> {

@@ -43,6 +43,11 @@ pub(super) struct RunView {
     prepare: Option<PrepareState>,
     group: Option<String>,
     superseded_by: Option<RunId>,
+    /// The worker it runs or ran on; none for this machine.
+    machine: Option<String>,
+    /// Its job's name on the worker, once it has been handed over.
+    remote_job: Option<String>,
+    remote_fallback: Option<String>,
     /// Waiting: another job of its group is running, so it cannot start yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) group_busy: Option<bool>,
@@ -136,6 +141,9 @@ impl RunView {
             prepare: rec.prepare_status.as_ref().map(|p| p.state),
             group: job.group.clone(),
             superseded_by: rec.superseded_by.clone(),
+            machine: rec.machine.clone(),
+            remote_job: rec.remote_run.as_ref().map(|r| r.job.clone()),
+            remote_fallback: rec.remote_fallback.clone(),
             group_busy: None,
             timeout: job.timeout,
             typical_seconds: est.p50,

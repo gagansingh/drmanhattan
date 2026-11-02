@@ -6,6 +6,7 @@ mod runs;
 mod source;
 mod status;
 mod submit;
+mod workers;
 
 use crate::log;
 
@@ -22,6 +23,8 @@ usage:
                                           wait for a run to start or finish
   drmanhattan follow <run> [--from BYTES] print a run's log as it grows, until it finishes
   drmanhattan cancel <run>                cancel a queued or running run
+  drmanhattan workers [add <ssh-alias>]   the machines that run jobs for this one, over SSH
+  drmanhattan machine-stats               this machine's readings, as JSON, for a dispatcher
   drmanhattan stop                        stop the daemon (running jobs get a grace period)
   drmanhattan slots [N]                   show or set how many jobs may run at once
   drmanhattan paths                       where the inbox, state and data live
@@ -76,6 +79,11 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "wait" => runs::wait(rest),
         "follow" => runs::follow(rest),
         "cancel" => runs::cancel(rest),
+        "workers" => workers::workers(rest),
+        "machine-stats" => crate::workers::machine_stats(rest),
+        // What a dispatcher runs on a worker; not for people.
+        "__dispatch-probe" => crate::workers::dispatch_probe(rest),
+        "__dispatch-submit" => crate::workers::dispatch_submit(rest),
         "stop" => commands::stop(rest),
         "slots" => commands::slots(rest),
         "paths" => commands::paths(rest),

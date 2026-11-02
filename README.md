@@ -132,6 +132,91 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
+A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
+`DRMANHATTAN_SLOT` (the slot it holds, from 1) set, besides its `env`.
+
+## Workers: running jobs on other machines
+
+drmanhattan can hand jobs to other machines over SSH. A worker is just another
+drmanhattan: each one runs its own daemon, started and confirmed by a person at that
+machine, and takes jobs through its own inbox. Workers add slots; they are never needed.
+When one is gone, its jobs run here.
+
+On this machine, `config.json` in the data directory lists them:
+
+```json
+{
+  "workers": [
+    { "name": "air", "ssh": "air", "slots": 1, "tags": ["xcode-27"],
+      "check": "pg_isready -q",
+      "args_path_map": { "/Volumes/Disk/derived": "~/Library/Caches/derived" } }
+  ]
+}
+```
+
+| field | meaning |
+| --- | --- |
+| `ssh` | an alias from `~/.ssh/config`, or `user@host`; key-based auth only |
+| `name` | its name on the dashboard and in run records (default: the alias) |
+| `slots` | how many of its slots this machine may use (default 1); 0 pauses it |
+| `tags` | what it offers; a job's `requires` must all be among them |
+| `check` | a command run on it before each hand-over: exit 0 means ready, else its first line of output says why not |
+| `args_path_map` | argument prefixes rewritten for it, for paths that exist only here |
+| `min_free_gb` | free space it must keep on the disk holding its home (default 20) |
+| `mirror_days` | its mirrors unused this long are removed (default 7) |
+| `drmanhattan` | the command on it, when `drmanhattan` is not on its non-interactive `PATH` |
+
+`drmanhattan workers add <ssh-alias> [--slots N] [--tag T]` checks the machine (it answers
+with its key alone, runs the same drmanhattan version, confirmed and running) and adds it.
+`drmanhattan workers` lists them with their state.
+
+A job says whether it may go to a worker:
+
+| field | meaning |
+| --- | --- |
+| `remote` | `"never"` (the default), `"allowed"` (only while every slot here is busy) or `"prefer"` (a free worker before a slot here) |
+| `requires` | tags the worker must have |
+| `sync` | paths to mirror to the worker, at the same absolute paths: strings, or `{"path": …, "exclude": [rsync patterns]}`; default: the job's `cwd` |
+| `sync_git` | `true` also mirrors the git metadata of the synced checkouts, so `HEAD`, branches and commits resolve there |
+| `env_forward` | the daemon's environment variables, by name or `PREFIX_*`, that go too; the job's `env` always does |
+
+`submit` takes `--remote`, `--requires`, `--sync` and `--sync-git`.
+
+What happens:
+
+- **Admission.** The order is the usual one. A worker slot goes to the best-placed waiter
+  that may use it: `remote` allows it, the worker has its tags, it is not paused, and it is
+  not out of admission after a failure.
+- **Hand-over.** Dispatches to one worker go one at a time. This machine reaches the
+  worker, checks its version, that it holds fewer of its own slots than this machine may
+  use, its free disk and its `check`; mirrors the `sync` paths with `rsync -a --delete`
+  (leaving out what git ignores there, `.git` itself and `.DS_Store`; the worker keeps its
+  own copies of those); writes the job into the worker's inbox; and waits up to two minutes
+  for it to start. Paths must lie inside the home directory, and both machines must use the
+  same user and home path. A job's `prepare` runs here while it waits and again on the worker
+  before its command.
+- **Fallback.** If any of that fails, the job runs here, with one line in its log
+  (`worker air unavailable: <reason>; running here`) and `remote_fallback` in its status. A
+  failure of the worker's keeps it out of admission for two minutes, with the reason on the
+  dashboard.
+- **While it runs.** The worker's log streams into the job's own log here, so `follow`,
+  `wait`, the dashboard and the error line work as usual. Cancel and timeout here stop it
+  there. A dropped connection is retried every five seconds; a worker silent for three
+  minutes fails the run with `worker lost`. The worker also gets the job's timeout plus two
+  minutes, in case this machine is gone. Stopping or restarting this machine's daemon leaves
+  the job running there, and the next start follows it again.
+- **Results.** The job's `.status.json` here has `machine` (the worker) and `remote_run`
+  (its job there). Estimates are kept per machine.
+- **Housekeeping.** The worker records each mirror it receives. On each hand-over it
+  removes the mirrors this machine no longer has and those unused for `mirror_days`, never
+  one a job there is using, and never a path it had before any mirror arrived.
+
+The dashboard then shows a bar for each machine: whether it answers, its slots with −
+and + (down to 0, which pauses a worker), its CPU, load, memory and temperature, its
+running jobs, and why it is not taking work while that is so. `DRMANHATTAN_SSH` and
+`DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+(15) sets how often each worker is asked for its readings.
+
 ## Following one run
 
 A run can be named by its run id, its short id (the `#094a70` in the queue's terminal), or
@@ -271,7 +356,7 @@ and + buttons change the number of slots for four hours; drag a waiting job to r
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `stop`, `slots [N]` and `paths`. Each has `--help`.
+`cancel`, `workers`, `machine-stats`, `stop`, `slots [N]` and `paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |

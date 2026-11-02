@@ -87,6 +87,14 @@ mod tests {
             fail_patterns: Vec::new(),
             prepare: None,
             group: None,
+            remote: Default::default(),
+            requires: Vec::new(),
+            sync: Vec::new(),
+            sync_git: false,
+            env_forward: Vec::new(),
+            dispatched_from: None,
+            dispatch_id: None,
+            slots_hint: None,
             claim: None,
         };
         let mut r = Record::new(id.parse().unwrap(), job, expected, 600);

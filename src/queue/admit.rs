@@ -5,12 +5,13 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::activity::{Activity, Patterns};
-use crate::job::{PrepareState, Record, State};
+use crate::job::{PrepareState, Record, RemoteMode, RunId, State};
 use crate::log::{self, Tone};
 use crate::process;
 use crate::queue::{rank, Live, Queue, RunEvent};
 use crate::settings::{ManualOrder, MAX_SLOTS};
 use crate::time::{human, Timestamp};
+use crate::workers;
 
 /// A run just admitted: everything its runner thread needs.
 pub(crate) struct Admitted {
@@ -24,10 +25,11 @@ pub(crate) struct Admitted {
 }
 
 impl Queue {
-    /// Admits waiters, in rank order, while fewer than `capacity` run. The caller starts a
-    /// runner thread for each. Lowering the capacity stops admissions until enough runs
-    /// finish; raising it admits more on this pass.
-    pub(crate) fn admit(&mut self, capacity: u32, manual: &ManualOrder) -> Vec<Admitted> {
+    /// Admits waiters, in rank order, into free slots: this machine's while fewer than
+    /// `capacity` run here, and the workers' while fewer than each one's capacity run there.
+    /// The caller starts a runner thread for each. Lowering a capacity stops admissions
+    /// there until enough runs finish; raising it admits more on this pass.
+    pub(crate) fn admit(&mut self, capacity: u32, workers: &[workers::Slots], manual: &ManualOrder) -> Vec<Admitted> {
         let now = Timestamp::now();
         let order = rank(self.records(State::Queued), manual, now);
         let mut admitted = Vec::new();
@@ -35,19 +37,16 @@ impl Queue {
         let mut busy_groups: HashSet<String> =
             self.records(State::Running).filter_map(|r| r.job.group.clone()).collect();
         for next in order {
-            if self.count(State::Running) >= capacity as usize {
-                break;
-            }
             let Some(waiter) = self.runs.get(&next.run_id).map(|e| &e.rec) else { continue };
             if !waiter.is_ready() {
                 continue; // still preparing
             }
-            if let Some(group) = &waiter.job.group {
-                if !busy_groups.insert(group.clone()) {
-                    continue; // another of its group is running
-                }
+            if waiter.job.group.as_ref().is_some_and(|g| busy_groups.contains(g)) {
+                continue; // another of its group is running
             }
-            let slot = self.free_slot();
+            let Some(machine) = self.place(waiter, capacity, workers) else { continue };
+            busy_groups.extend(waiter.job.group.clone());
+            let slot = self.free_slot(machine.as_deref());
             let default_patterns = self.default_patterns.clone();
             let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
             let (control, events) = mpsc::channel();
@@ -56,10 +55,18 @@ impl Queue {
             let rec = &mut entry.rec;
             rec.state = State::Running;
             rec.slot = Some(slot);
+            let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
+            rec.machine = machine;
             rec.started_at = Some(now);
             rec.load_at_start = process::load_now().map(|l| (l * 10.0).round() / 10.0);
             let waited = format!("waited {}", human(rec.queued_at.until(now)));
-            log::event(Tone::Start, "started", &rec.job.label, Some(&rec.run_id), &[format!("slot {slot}"), waited]);
+            log::event(
+                Tone::Start,
+                "started",
+                &rec.job.label,
+                Some(&rec.run_id),
+                &[format!("slot {slot}{on}"), waited],
+            );
             let record = rec.clone();
             self.persist(&next.run_id);
             admitted.push(Admitted { record, events, exit_sender: control, activity, default_patterns });
@@ -98,9 +105,60 @@ impl Queue {
         started
     }
 
-    /// The lowest slot number no running run holds.
-    fn free_slot(&self) -> u32 {
-        let used: HashSet<u32> = self.records(State::Running).filter_map(|r| r.slot).collect();
+    /// Where a ready waiter can run now: Some(None) here, Some(Some(worker)) on a worker, None
+    /// nowhere yet. A job runs here unless its `remote` says otherwise: `allowed` goes to a
+    /// worker only while every slot here is busy, `prefer` to a free worker first. A worker
+    /// must have a free slot, every tag the job `requires`, and not be out of admission after
+    /// a failure; a run that a worker could not take stays here.
+    fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
+        let running_on = |m: Option<&str>| self.records(State::Running).filter(|r| r.machine.as_deref() == m).count();
+        // A worker's dispatcher may grant more of its slots than it would use itself.
+        let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
+        let here = (running_on(None) < local_capacity as usize).then_some(None);
+        if rec.job.remote == RemoteMode::Never || rec.remote_fallback.is_some() {
+            return here;
+        }
+        let worker = workers
+            .iter()
+            .find(|w| {
+                !w.unavailable
+                    && running_on(Some(&w.name)) < w.capacity as usize
+                    && rec.job.requires.iter().all(|t| w.tags.contains(t))
+            })
+            .map(|w| Some(w.name.clone()));
+        match rec.job.remote {
+            RemoteMode::Prefer => worker.or(here),
+            _ => here.or(worker),
+        }
+    }
+
+    /// The lowest slot number no running run on `machine` (None: this one) holds.
+    fn free_slot(&self, machine: Option<&str>) -> u32 {
+        let used: HashSet<u32> =
+            self.records(State::Running).filter(|r| r.machine.as_deref() == machine).filter_map(|r| r.slot).collect();
         (1..=MAX_SLOTS).find(|n| !used.contains(n)).unwrap_or(MAX_SLOTS)
+    }
+
+    /// Runs on a worker that were running when the daemon last stopped: their runners pick
+    /// up following them where they are. Called once, after recovery.
+    pub(crate) fn reattach(&mut self) -> Vec<Admitted> {
+        let ids: Vec<RunId> =
+            self.records(State::Running).filter(|r| r.remote_run.is_some()).map(|r| r.run_id.clone()).collect();
+        let mut started = Vec::new();
+        for run_id in ids {
+            let default_patterns = self.default_patterns.clone();
+            let Some(entry) = self.runs.get_mut(&run_id) else { continue };
+            let (control, events) = mpsc::channel();
+            let activity = Arc::new(Mutex::new(Activity::default()));
+            entry.live = Some(Live { control: control.clone(), activity: activity.clone() });
+            started.push(Admitted {
+                record: entry.rec.clone(),
+                events,
+                exit_sender: control,
+                activity,
+                default_patterns,
+            });
+        }
+        started
     }
 }

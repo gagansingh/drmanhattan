@@ -3,6 +3,8 @@
 //! The first Ctrl-C (or SIGTERM, which `drmanhattan stop` sends) is graceful: no new runs
 //! start, running ones get the shutdown grace period to finish, queued ones stay for the
 //! next start. A second one stops at once: running jobs are cancelled and recorded so.
+//! Jobs running on workers are never stopped: they carry on there, and the next start
+//! follows them again.
 
 use std::time::{Duration, Instant};
 
@@ -25,7 +27,8 @@ pub(super) fn signals() -> usize {
 pub(super) fn announce(shared: &Shared, settings: &Settings) {
     let (running, queued) = {
         let q = queue::lock(shared);
-        let running: Vec<String> = q.records(State::Running).map(|r| r.job.label.clone()).collect();
+        let running: Vec<String> =
+            q.records(State::Running).filter(|r| r.machine.is_none()).map(|r| r.job.label.clone()).collect();
         (running, q.count(State::Queued))
     };
     let waiting = if running.is_empty() {
@@ -53,7 +56,9 @@ pub(super) fn announce(shared: &Shared, settings: &Settings) {
 pub(super) fn force_stop(shared: &Shared, settings: &Settings) {
     let running: Vec<RunId> = {
         let mut q = queue::lock(shared);
-        let ids: Vec<RunId> = q.records(State::Running).map(|r| r.run_id.clone()).collect();
+        // Runs on workers are left to finish there: the next start follows them again.
+        let ids: Vec<RunId> =
+            q.records(State::Running).filter(|r| r.machine.is_none()).map(|r| r.run_id.clone()).collect();
         for run_id in &ids {
             q.cancel(run_id);
         }

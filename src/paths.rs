@@ -8,6 +8,8 @@
 //!     heartbeat                 rewritten every few seconds while the daemon runs
 //!     capacity-override         "<slots> <until>", the dashboard's - and + buttons
 //!     manual-order              run ids, one per line, first goes first (drag to reorder)
+//!     capacity-override.worker-<name>   the same for a worker; 0 pauses it
+//!     workers/<name>.json       what this daemon last saw of each worker
 //!
 //! Data (durable; ~/Library/Application Support/drmanhattan on macOS):
 //!     history.jsonl             one line per finished run: the timings estimates learn from
@@ -16,6 +18,8 @@
 //!     config.json               the standing slot count and default activity patterns
 //!     acknowledged.json         when the first start was confirmed (see `acknowledge`)
 //!     drmanhattan.log           the daemon's own output, rotated at 5 MB (one older copy kept)
+//!     workers/<name>.synced     paths mirrored to a worker, for its housekeeping
+//!     mirrors.json              on a worker: the mirrors dispatchers sent it
 //!
 //! Inbox (~/.drmanhattan/inbox by default): job files and the results written beside them.
 //! ```
@@ -97,6 +101,21 @@ impl Paths {
     }
     pub(crate) fn acknowledgement(&self) -> PathBuf {
         self.data.join("acknowledged.json")
+    }
+    pub(crate) fn worker_override(&self, worker: &str) -> PathBuf {
+        self.state.join(format!("capacity-override.worker-{worker}"))
+    }
+    pub(crate) fn worker_states(&self) -> PathBuf {
+        self.state.join("workers")
+    }
+    pub(crate) fn worker_state(&self, worker: &str) -> PathBuf {
+        self.worker_states().join(format!("{worker}.json"))
+    }
+    pub(crate) fn worker_synced(&self, worker: &str) -> PathBuf {
+        self.data.join("workers").join(format!("{worker}.synced"))
+    }
+    pub(crate) fn mirrors(&self) -> PathBuf {
+        self.data.join("mirrors.json")
     }
     pub(crate) fn config(&self) -> PathBuf {
         self.data.join("config.json")

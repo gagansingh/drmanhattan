@@ -33,6 +33,7 @@ use crate::runner;
 use crate::settings::{load_config, standing_capacity, Settings};
 use crate::sysinfo;
 use crate::time::{count, human, Timestamp};
+use crate::workers;
 use pass::Scheduler;
 
 const PRUNE_EVERY: Duration = Duration::from_secs(3600);
@@ -75,7 +76,12 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     let live = queue.prune_memory();
     prune_files(&paths, &inbox, &live, &settings);
     sysinfo::start_sampler();
+    let reattached = queue.reattach();
     let shared: Shared = Arc::new(Mutex::new(queue));
+    for admitted in reattached {
+        start_runner(&shared, admitted);
+    }
+    workers::start_poller(paths.clone(), settings.worker_poll);
 
     let mut info = DaemonInfo {
         pid: std::process::id(),
@@ -155,7 +161,8 @@ fn run_loop(shared: &Shared, mut scheduler: Scheduler, settings: &Settings, wake
             start_runner(shared, admitted);
         }
         if let Some(since) = stopping {
-            let running = queue::lock(shared).count(State::Running);
+            // Runs on workers carry on there; the next start follows them again.
+            let running = queue::lock(shared).records(State::Running).filter(|r| r.machine.is_none()).count();
             if running == 0 {
                 return;
             }

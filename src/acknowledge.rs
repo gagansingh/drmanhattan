@@ -29,6 +29,11 @@ struct Acknowledgement {
     how: String,
 }
 
+/// Whether a person (or a service's `--yes`) has confirmed drmanhattan may run jobs here.
+pub(crate) fn is_acknowledged(paths: &Paths) -> bool {
+    fsutil::read_json::<Acknowledgement>(&paths.acknowledgement()).is_some()
+}
+
 /// Whether to go on starting the daemon: true once confirmed (now or before), false when
 /// the person declined. Without a terminal to ask in and no confirmation, an error that
 /// says how to give one.

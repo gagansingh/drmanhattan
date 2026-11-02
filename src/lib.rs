@@ -10,7 +10,8 @@
 //! - `job` is the job file format and a run's record; `history` and `estimate` turn past
 //!   runs into expected durations; `activity` follows a running job's log.
 //! - `dashboard` serves the web page; `sources` links a run back to the tool that sent it;
-//!   `sysinfo` reads the machine's CPU, memory and temperature.
+//!   `sysinfo` reads the machine's CPU, memory and temperature; `workers` hands jobs to other
+//!   machines over SSH.
 //! - `settings`, `paths`, `fsutil`, `process`, `time`, `naming`, `error`, `log`, `signals` and
 //!   `sync`
 //!   are the plumbing.
@@ -38,5 +39,6 @@ mod sources;
 mod sync;
 mod sysinfo;
 mod time;
+mod workers;
 
 pub use cli::run_cli;
