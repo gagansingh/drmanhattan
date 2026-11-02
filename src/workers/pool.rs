@@ -28,6 +28,10 @@ pub(crate) struct Live {
     /// Why it is not taking work, while `unavailable_until` lasts.
     pub(crate) reason: Option<String>,
     pub(crate) unavailable_until: Option<Timestamp>,
+    /// The poller set the reason (it did not answer, or its drmanhattan cannot take
+    /// work), so the next good answer clears it; a failed dispatch's reason lasts its window.
+    #[serde(default)]
+    pub(crate) from_poll: bool,
 }
 
 impl Live {
@@ -72,11 +76,14 @@ impl Pool {
         }
     }
 
-    /// It answered, with these readings.
+    /// It answered, with these readings: a reason the poller gave before no longer holds.
     pub(crate) fn seen(&self, paths: &Paths, worker: &str, stats: serde_json::Value) {
         self.update(paths, worker, |l| {
             let now = Timestamp::now();
             (l.online, l.last_seen, l.checked_at, l.stats) = (Some(true), Some(now), Some(now), Some(stats));
+            if l.from_poll {
+                (l.reason, l.unavailable_until, l.from_poll) = (None, None, false);
+            }
         });
     }
 
@@ -85,7 +92,13 @@ impl Pool {
         self.update(paths, worker, |l| {
             (l.online, l.checked_at) = (Some(false), Some(Timestamp::now()));
         });
+        self.polled_unavailable(paths, worker, reason);
+    }
+
+    /// The poller found it cannot take work: until a later poll finds it can.
+    pub(crate) fn polled_unavailable(&self, paths: &Paths, worker: &str, reason: &str) {
         self.unavailable(paths, worker, reason);
+        self.update(paths, worker, |l| l.from_poll = true);
     }
 
     /// Keeps it out of admission for the retry window, saying why.
@@ -93,6 +106,7 @@ impl Pool {
         self.update(paths, worker, |l| {
             l.reason = Some(reason.to_string());
             l.unavailable_until = Some(Timestamp::now().plus(RETRY_AFTER));
+            l.from_poll = false;
         });
     }
 

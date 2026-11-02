@@ -38,6 +38,6 @@ fn poll_one(paths: &Paths, worker: &crate::workers::WorkerConfig) {
     let unusable = dispatch::unusable(&stats);
     pool().seen(paths, &worker.name, serde_json::to_value(&stats).unwrap_or_default());
     if let Some(why) = unusable {
-        pool().unavailable(paths, &worker.name, &why);
+        pool().polled_unavailable(paths, &worker.name, &why);
     }
 }

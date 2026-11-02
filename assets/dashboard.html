@@ -153,7 +153,7 @@ thead th { height: 0; padding: 0; border: 0; }
 .state { width: 128px; }
 .time { width: 136px; text-align: right; }
 .when { width: 128px; text-align: right; }
-.source { width: 152px; }
+.source { width: 200px; }
 tr.run { cursor: pointer; }
 tr.run:hover td { background: var(--hover); }
 tr.selected td { background: var(--selected); }
@@ -203,9 +203,14 @@ td.none { padding: 12px 16px; color: var(--faint); font-size: 12px; line-height:
 .doing .cmd .num { font-family: var(--sans); color: var(--faint); }
 .doing .cmd.over .num { color: var(--amber); }
 
-.who { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.who a, .who span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.who { display: flex; align-items: flex-start; gap: 4px; min-width: 0; }
+/* A session's name is what tells runs apart: up to two lines of it, then an ellipsis. */
+.who a, .who span {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2;
+  overflow: hidden; overflow-wrap: anywhere; min-width: 0;
+}
 .who span { color: var(--dim); }
+.who .ended { margin-top: 6px; }
 .who .ended { flex: none; width: 8px; height: 8px; border: 1px solid var(--faint); border-radius: 50%; }
 
 /* ---------------------------------------------------------------- reordering the queue */
@@ -579,7 +584,8 @@ function runCell(run, extraNotes, detail = '') {
 /** Who sent the run: the tool, its session, and a link back when there is one. */
 function sourceCell(source) {
   if (!source) return `<td class="source">${nothing('no source')}</td>`;
-  const label = esc([source.tool, source.name || source.short].filter(Boolean).join(' · ') || 'source');
+  // The session's name, else its short id; the tool, the same on most rows, is in the tooltip.
+  const label = esc(source.name || (source.short ? `session ${source.short}` : source.tool || 'source'));
   const title = esc([source.tool, source.name, [source.id, source.status].filter(Boolean).join(' · '),
     source.live === false ? 'the session has ended' : ''].filter(Boolean).join('\n'));
   const name = source.url ? `<a href="${esc(source.url)}" title="${title}">${label}</a>` : `<span title="${title}">${label}</span>`;

@@ -136,6 +136,10 @@ fn an_unreachable_worker_sends_the_job_back_here_and_says_why() {
     let m = &state["machines"];
     assert_eq!(m[1]["name"], "w1", "{m}");
     assert!(m[1]["reason"].as_str().is_some(), "the dashboard says why it takes no work: {m}");
+    // Back online, the next poll clears what the poller found, without waiting out the window.
+    fs::remove_file(p.fake.join("down-w1")).unwrap();
+    wait_for(T, || (p.here.status_json()["workers"][0]["state"] == "free").then_some(()))
+        .expect("an answer clears the poller's reason");
 }
 
 #[test]
