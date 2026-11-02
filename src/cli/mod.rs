@@ -2,6 +2,7 @@
 
 mod args;
 mod commands;
+mod runs;
 mod source;
 mod status;
 mod submit;
@@ -15,7 +16,12 @@ usage:
   drmanhattan [serve] [options]           watch the inbox, run jobs, serve the dashboard (the default)
   drmanhattan submit [options] -- <command> [args...]
                                           queue a command (--wait: run it through the queue and wait)
-  drmanhattan status [--json]             slots, running jobs, and waiters in admission order
+  drmanhattan status [<run>] [--json]     slots, running jobs, and waiters in admission order;
+                                          with a run, that run's state and record
+  drmanhattan wait <run> [--until started|finished]
+                                          wait for a run to start or finish
+  drmanhattan follow <run> [--from BYTES] print a run's log as it grows, until it finishes
+  drmanhattan cancel <run>                cancel a queued or running run
   drmanhattan stop                        stop the daemon (running jobs get a grace period)
   drmanhattan slots [N]                   show or set how many jobs may run at once
   drmanhattan paths                       where the inbox, state and data live
@@ -67,6 +73,9 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         crate::runner::GUARD_SUBCOMMAND => Ok(crate::runner::run_guard(rest)),
         "submit" => submit::submit(rest),
         "status" => status::status(rest),
+        "wait" => runs::wait(rest),
+        "follow" => runs::follow(rest),
+        "cancel" => runs::cancel(rest),
         "stop" => commands::stop(rest),
         "slots" => commands::slots(rest),
         "paths" => commands::paths(rest),

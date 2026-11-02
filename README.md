@@ -132,6 +132,25 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
+## Following one run
+
+A run can be named by its run id, its short id (the `#094a70` in the queue's terminal), or
+its job's name:
+
+```
+drmanhattan status tests --json          # its record, as tests.status.json has it, plus state and exit
+drmanhattan wait tests --until started   # 0 once it has started (or its exit code if it never will)
+drmanhattan wait tests                   # until it finishes; exits with its exit code
+drmanhattan follow tests                 # its log as it grows; exits with its exit code
+drmanhattan follow tests --from 18734    # carry on from 18734 bytes of output in
+drmanhattan cancel '#094a70'             # as tests.cancel does
+```
+
+`wait --timeout SECS` gives up with exit 124. `follow` prints the log's bytes unchanged, so
+a reader that loses its place (a dropped connection) resumes with `--from` set to the bytes
+it has. These read the files, so they work while the queue is stopped too, and `wait` and
+`status` know a job file that has not been picked up yet (`submitted`).
+
 ## Results
 
 When the queue picks up `tests.json`, it renames it `tests.json.claimed` and writes:
@@ -251,8 +270,8 @@ and + buttons change the number of slots for four hours; drag a waiting job to r
 
 ## Configuration
 
-Commands: `drmanhattan [serve]`, `submit`, `status [--json]`, `stop`, `slots [N]` and
-`paths`. Each has `--help`.
+Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
+`cancel`, `stop`, `slots [N]` and `paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |
