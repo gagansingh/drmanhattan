@@ -119,6 +119,24 @@ tr.machine:first-child td { border-top: 0; }
 .machine-bar .slots b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 .machine-bar .figures { display: inline-flex; flex-wrap: wrap; align-items: center; row-gap: 4px; }
 .machine-bar .reason { color: var(--amber); }
+/* The machines as a tree: each machine's slots hang off it, joined by lines. */
+.twist {
+  width: 16px; height: 16px; margin: 0 -2px 0 -4px; padding: 0; border: 0; background: none;
+  color: var(--faint); font-size: 10px; line-height: 16px; cursor: pointer; transition: transform 0.15s;
+}
+.twist:hover { color: var(--fg); }
+.twist[aria-expanded="false"] { transform: rotate(-90deg); }
+tr.child td.state { position: relative; padding-left: 40px; }
+tr.child td.state::before {
+  content: ""; position: absolute; left: 24px; top: 0; bottom: 0; border-left: 1px solid var(--faint); opacity: 0.6;
+}
+tr.child.last td.state::before { bottom: auto; height: 18px; }
+tr.child td.state::after {
+  content: ""; position: absolute; left: 24px; top: 18px; width: 10px; border-top: 1px solid var(--faint); opacity: 0.6;
+}
+tr.child.idle td { color: var(--faint); font-size: 12px; }
+tr.child.idle .slot-name { font-variant-numeric: tabular-nums; }
+.collapsed-summary { color: var(--dim); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
 
 /* ---------------------------------------------------------------- run tables
@@ -569,9 +587,9 @@ function sourceCell(source) {
   return `<td class="source"><div class="who">${ended}${name}</div></td>`;
 }
 
-function rowStart(run, extra = '') {
+function rowStart(run, extra = '', cls = '') {
   const selected = view?.id === run.run_id ? ' selected' : '';
-  return `<tr class="run${selected}" data-id="${esc(run.run_id)}"${extra}>`;
+  return `<tr class="run${selected}${cls}" data-id="${esc(run.run_id)}"${extra}>`;
 }
 
 const emptyRow = (text) => `<tr data-id="none"><td class="none" colspan="5">${text}</td></tr>`;
@@ -602,7 +620,7 @@ function doing(activity) {
   return lines.length ? `<div class="doing">${lines.join('')}</div>` : '';
 }
 
-function runningRow(run, now) {
+function runningRow(run, now, cls = '') {
   const usual = run.typical_seconds;
   const over = run.over_p90 || (!run.typical_p90 && usual && run.elapsed > usual);
   const range = usualRange(run, run.load_factor ? `, scaled ×${run.load_factor} for the current load` : '');
@@ -617,7 +635,7 @@ function runningRow(run, now) {
   const when = !over && run.remaining_estimate != null
     ? `<span class="num">done ~${clock(now + run.remaining_estimate)}</span>${under(`in ~${duration(run.remaining_estimate)}`)}`
     : nothing('unknown');
-  return rowStart(run)
+  return rowStart(run, '', cls)
     + `<td class="state" title="Started ${esc(clock(run.started_at))}, after waiting ${esc(duration(run.wait_seconds))}">${stateMark('running', `slot ${run.slot}`)}</td>`
     + runCell(run, run.machine && !run.remote_job ? `<span class="note warn" title="Its files are being mirrored to ${esc(run.machine)}">sending to ${esc(run.machine)}</span>` : '', doing(run.activity))
     + `<td class="time"><span class="num">${duration(run.elapsed)}</span>${under(against, range)}${progress}</td>`
@@ -639,7 +657,7 @@ function plainTemperature(t) {
 
 /** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
  *  worker), its CPU, memory and temperature, and why it is not taking work. */
-function machineBar(m, d) {
+function machineBar(m, d, open) {
   const s = m.local ? { load: d.load, ncpu: d.ncpu, cpu_pct: d.cpu_pct, memory: d.memory, thermals: d.thermals } : (m.stats || {});
   const online = m.local || m.online === true ? 'online' : m.online === false ? 'offline' : 'not asked yet';
   const dot = online === 'online' ? '' : online === 'offline' ? ' off' : ' unknown';
@@ -660,9 +678,13 @@ function machineBar(m, d) {
     ? `<span class="reason" title="${m.reason_until ? `Tried again after ${esc(clock(m.reason_until))}` : ''}">not taking work: ${esc(m.reason)}</span>`
     : '';
   const name = m.local ? 'this machine' : m.name;
+  const here = d.running.filter((run) => (run.machine || 'local') === m.name);
+  const summary = !open && here.length
+    ? `<span class="collapsed-summary">${here.map((run) => esc(run.label)).join(', ')}</span>` : '';
   return `<tr class="machine" data-id="machine-${esc(m.name)}"><td colspan="5"><div class="machine-bar">`
-    + `<span class="name" title="${esc([online, m.ssh ? `ssh ${m.ssh}` : '', seen].filter(Boolean).join(' · '))}"><i class="dot${dot}" aria-hidden="true"></i>${esc(name)}<span class="sr">, ${online}</span></span>`
-    + `${slots}<span class="figures">${figures}</span>${reason}</div></td></tr>`;
+    + `<span class="name" title="${esc([online, m.ssh ? `ssh ${m.ssh}` : '', seen].filter(Boolean).join(' · '))}">`
+    + `<button class="twist" data-action="toggle-machine" data-value="${esc(m.name)}" aria-expanded="${open}" aria-label="${open ? 'Hide' : 'Show'} the slots of ${esc(name)}">▼</button><i class="dot${dot}" aria-hidden="true"></i>${esc(name)}<span class="sr">, ${online}</span></span>`
+    + `${slots}<span class="figures">${figures}</span>${reason}${summary}</div></td></tr>`;
 }
 
 function renderRunning(d) {
@@ -680,13 +702,47 @@ function renderRunning(d) {
   put($('#running'), busy ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
 }
 
-/** With workers: each machine's bar, then the runs in its slots. */
+/** Machines whose slots are folded away, remembered in this browser. */
+const collapsed = new Set((recall('collapsed-machines') || '').split('\n').filter(Boolean));
+
+function toggleMachine(name) {
+  if (collapsed.has(name)) collapsed.delete(name); else collapsed.add(name);
+  remember('collapsed-machines', [...collapsed].join('\n'));
+  render(last);
+}
+
+/** A slot with nothing in it, as a leaf of its machine. */
+function idleSlotRow(m, slot, cls, text) {
+  return `<tr class="child idle${cls}" data-id="idle-${esc(m.name)}-${slot}"><td class="state"><span class="slot-name">${slot ? `slot ${slot}` : '–'}</span></td>`
+    + `<td colspan="4">${text}</td></tr>`;
+}
+
+/** With workers: a tree. Each machine is a node with its bar; its slots hang off it, a run
+ *  or a free slot each; a paused or silent machine says so instead. */
 function renderMachines(d) {
   put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
     + `<span><b>${d.running.length}</b> running on <b>${d.machines.length}</b> machines</span>`);
   put($('#running'), d.machines.map((m) => {
-    const here = d.running.filter((run) => (run.machine || 'local') === m.name).sort((a, b) => (a.slot || 0) - (b.slot || 0));
-    return machineBar(m, d) + here.map((run) => runningRow(run, d.now)).join('');
+    const open = !collapsed.has(m.name);
+    const here = d.running.filter((run) => (run.machine || 'local') === m.name);
+    if (!open) return machineBar(m, d, false);
+    const top = Math.max(m.capacity, ...here.map((run) => run.slot || 0));
+    const leaves = [];
+    for (let slot = 1; slot <= top; slot++) {
+      const run = here.find((r) => r.slot === slot);
+      leaves.push(run ? { run } : { slot });
+    }
+    if (!leaves.length) {
+      const why = m.paused ? 'paused: what runs there finishes, nothing new is sent'
+        : m.online === false ? 'not answering' : 'no slots';
+      leaves.push({ text: why });
+    }
+    return machineBar(m, d, true) + leaves.map((leaf, i) => {
+      const cls = ' child' + (i === leaves.length - 1 ? ' last' : '');
+      if (leaf.run) return runningRow(leaf.run, d.now, cls);
+      if (leaf.slot) return idleSlotRow(m, leaf.slot, cls.replace(' child', ''), m.reason ? `free, but ${esc(m.reason)}` : 'free');
+      return idleSlotRow(m, 0, cls.replace(' child', ''), esc(leaf.text));
+    }).join('');
   }).join(''));
 }
 
@@ -1316,6 +1372,7 @@ document.addEventListener('click', (e) => {
     else if (action === 'down') moveBy(id, 1, 'down');
     else if (action === 'filter') { filter = value; remember('filter', value); render(last); }
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
+    else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
     else if (action === 'unit') { unit = unit === 'C' ? 'F' : 'C'; remember('unit', unit); render(last); }
     return;
