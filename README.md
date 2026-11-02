@@ -49,7 +49,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.2.0 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.2.1 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70
@@ -211,10 +211,10 @@ What happens:
   removes the mirrors this machine no longer has and those unused for `mirror_days`, never
   one a job there is using, and never a path it had before any mirror arrived.
 
-The dashboard then shows a bar for each machine: whether it answers, its slots with −
-and + (down to 0, which pauses a worker), its CPU, load, memory and temperature, its
-running jobs, and why it is not taking work while that is so. `DRMANHATTAN_SSH` and
-`DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+The dashboard then shows the machines as a tree. Each machine is a node that folds away,
+with whether it answers, its slots with − and + (down to 0, which pauses a worker), its CPU,
+load, memory and temperature, and why it is not taking work while that is so; under it, one
+leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
 ## Following one run
