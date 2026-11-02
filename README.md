@@ -127,6 +127,7 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `source` | who submitted it, shown on the dashboard: a name, or `{"tool", "session", "url"}` |
 | `activity` | patterns for this job's progress lines (see below) |
 | `prepare` | a command run while the job waits, outside any slot (see below) |
+| `group` | a concurrency group: one of its jobs runs at a time, and only the newest waits (see below) |
 | `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
@@ -169,6 +170,22 @@ runs as soon as the job is queued, in the job's `cwd` with its `env`, while the 
   short by the queue stopping runs again on the next start.
 - `.status.json` has `prepare_status` (`pending`, `running`, `succeeded` or `failed`), and
   the dashboard marks the job while it prepares. `submit --prepare CMD` sets it.
+
+## One at a time: groups
+
+Jobs that must never overlap, and where only the latest request matters, such as deploys
+of one service, share a `group`:
+
+```json
+{"command": ["./deploy.sh", "staging"], "group": "deploy-staging"}
+```
+
+- At most one job of a group runs at a time, whatever the free slots. Jobs outside the
+  group use the slots meanwhile.
+- At most one waits. A newer job in the group replaces the one waiting, which is
+  `cancelled` (exit 130) with `superseded_by` set to the newer run's id in its
+  `.status.json`. The running job is never touched.
+- `submit --group NAME` sets it; `status` and the dashboard show a waiter held by its group.
 
 ## Failing on output
 

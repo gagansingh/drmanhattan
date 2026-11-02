@@ -158,6 +158,8 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         .collect();
     running.sort_by(|a, b| a.timing.elapsed.cmp(&b.timing.elapsed).reverse());
 
+    let busy_groups: std::collections::HashSet<&str> =
+        snap.running.iter().filter_map(|(r, _, _)| r.job.group.as_deref()).collect();
     let manual = read_manual_order(&ctx.paths);
     let by_id: std::collections::HashMap<_, _> = snap.queued.iter().map(|(r, e)| (&r.run_id, (r, e))).collect();
     let mut queued: Vec<RunView> = rank(snap.queued.iter().map(|(r, _)| r), &manual, now)
@@ -166,6 +168,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
             let (rec, est) = by_id.get(&ranked.run_id)?;
             let mut view = ahead(rec, est);
             (view.overdue, view.manual) = (Some(ranked.overdue), Some(ranked.manual));
+            view.group_busy = rec.job.group.as_deref().map(|g| busy_groups.contains(g));
             Some(view)
         })
         .collect();

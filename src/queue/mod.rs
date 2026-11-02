@@ -143,10 +143,32 @@ impl Queue {
             format!("run {run_id}"),
         ];
         log::event(Tone::Quiet, "queued", &job.label, Some(&run_id), &details);
+        let group = job.group.clone();
         let rec = Record::new(run_id.clone(), job, expected, skip_after);
         self.runs.insert(run_id.clone(), Entry { rec, live: None });
         self.persist(&run_id);
+        if let Some(group) = group {
+            self.supersede_in_group(&group, &run_id);
+        }
         run_id
+    }
+
+    /// Cancels the runs of `group` still waiting other than `newer`, which replaces them:
+    /// a group has at most one waiter, and it is the newest.
+    fn supersede_in_group(&mut self, group: &str, newer: &RunId) {
+        let older: Vec<RunId> = self
+            .records(State::Queued)
+            .filter(|r| r.run_id != *newer && r.job.group.as_deref() == Some(group))
+            .map(|r| r.run_id.clone())
+            .collect();
+        for run_id in older {
+            let Some(e) = self.runs.get_mut(&run_id) else { continue };
+            e.rec.superseded_by = Some(newer.clone());
+            e.rec.failure_reason = Some(format!("replaced by a newer job in group {group} (run {newer})"));
+            let label = e.rec.job.label.clone();
+            log::event(Tone::Quiet, "replaced", &label, Some(&run_id), &[format!("by run {newer} in group {group}")]);
+            self.cancel(&run_id);
+        }
     }
 
     /// Cancels the queued or running job named `name` (from `<name>.cancel`). Returns false

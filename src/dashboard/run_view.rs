@@ -41,6 +41,11 @@ pub(super) struct RunView {
     pub(super) notes: Vec<String>,
     /// Where its `prepare` command is, for a job that has one.
     prepare: Option<PrepareState>,
+    group: Option<String>,
+    superseded_by: Option<RunId>,
+    /// Waiting: another job of its group is running, so it cannot start yet.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) group_busy: Option<bool>,
     timeout: Option<u64>,
     typical_seconds: Option<u64>,
     typical_p90: Option<u64>,
@@ -129,6 +134,9 @@ impl RunView {
             load_max: rec.load.map(|l| l.peak),
             notes: rec.notes.clone(),
             prepare: rec.prepare_status.as_ref().map(|p| p.state),
+            group: job.group.clone(),
+            superseded_by: rec.superseded_by.clone(),
+            group_busy: None,
             timeout: job.timeout,
             typical_seconds: est.p50,
             typical_p90: est.p90,

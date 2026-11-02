@@ -31,12 +31,21 @@ impl Queue {
         let now = Timestamp::now();
         let order = rank(self.records(State::Queued), manual, now);
         let mut admitted = Vec::new();
+        // A group runs one job at a time.
+        let mut busy_groups: HashSet<String> =
+            self.records(State::Running).filter_map(|r| r.job.group.clone()).collect();
         for next in order {
             if self.count(State::Running) >= capacity as usize {
                 break;
             }
-            if !self.runs.get(&next.run_id).is_some_and(|e| e.rec.is_ready()) {
+            let Some(waiter) = self.runs.get(&next.run_id).map(|e| &e.rec) else { continue };
+            if !waiter.is_ready() {
                 continue; // still preparing
+            }
+            if let Some(group) = &waiter.job.group {
+                if !busy_groups.insert(group.clone()) {
+                    continue; // another of its group is running
+                }
             }
             let slot = self.free_slot();
             let default_patterns = self.default_patterns.clone();

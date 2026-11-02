@@ -39,6 +39,9 @@ A free slot goes to:
 3. a job that has waited longer than its limit, oldest first;
 4. the job with the shortest expected duration, with jobs that have no estimate last.
 
+A waiter whose `group` already has a run in a slot is passed over, and a newer waiter in a
+group cancels the older one when it is queued (`superseded_by`).
+
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting
 forever behind a stream of short ones.
