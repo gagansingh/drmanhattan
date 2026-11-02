@@ -211,11 +211,10 @@ What happens:
   removes the mirrors this machine no longer has and those unused for `mirror_days`, never
   one a job there is using, and never a path it had before any mirror arrived.
 
-The dashboard then shows the machines as a tree: a node for each machine, which folds away,
-with whether it answers, its slots with −
-and + (down to 0, which pauses a worker), its CPU, load, memory and temperature, and why
-it is not taking work while that is so; under it, one leaf per slot, its running job or free. `DRMANHATTAN_SSH` and
-`DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+The dashboard then shows the machines as a tree. Each machine is a node that folds away,
+with whether it answers, its slots with − and + (down to 0, which pauses a worker), its CPU,
+load, memory and temperature, and why it is not taking work while that is so; under it, one
+leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
 ## Following one run
