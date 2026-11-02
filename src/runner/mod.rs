@@ -185,6 +185,7 @@ impl Completion<'_> {
             if let Some(e) = q.runs.get_mut(self.run_id) {
                 e.rec.load = load;
                 e.rec.error_line = error_line;
+                e.rec.notes = outcome.notes.clone();
             }
             q.record_history(HistoryRow {
                 finished_at: Timestamp::now(),

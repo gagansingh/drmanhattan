@@ -176,9 +176,18 @@ each command in flight, with its usual time once it has run before:
 
 When the number of steps is not known, leave it out: `::step 4 Running`.
 
+A job can also put a short badge on its run, which stays on the dashboard and in
+`.status.json` (`notes`) after the run ends:
+
+```
+::note built on the spare machine
+```
+
+Each distinct note is shown once, up to eight per run and 60 characters each.
+
 A tool that prints its own progress can be matched instead: give the job an `activity`
 object of regular expressions with named groups (`n`, and optionally `of` and `text`, for the step, `label`
-for start and done).
+for start and done, `text` for a note).
 
 ```json
 "activity": {"step": "^\\[(?P<n>\\d+)/(?P<of>\\d+)\\] (?P<text>.*)$"}

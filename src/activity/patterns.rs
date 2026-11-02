@@ -10,6 +10,8 @@ use crate::error::{invalid, Result};
 const DEFAULT_STEP: &str = r"^\s*::step\s+(?P<n>\d+)(?:\s*/\s*(?P<of>\d+))?\s*(?P<text>.*)";
 const DEFAULT_START: &str = r"^\s*::start\s+(?P<label>\S.*?)\s*$";
 const DEFAULT_DONE: &str = r"^\s*::done\s+(?P<label>\S.*?)(?:\s+exit=\d+)?\s*$";
+/// `::note built on the spare machine`: a badge on the run.
+const DEFAULT_NOTE: &str = r"^\s*::note\s+(?P<text>\S.*?)\s*$";
 
 /// Patterns as a job file or `config.json` gives them. A pattern left out keeps its
 /// default; an empty string turns it off.
@@ -22,6 +24,8 @@ pub(crate) struct PatternConfig {
     pub(crate) start: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) done: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) note: Option<String>,
 }
 
 /// Compiled patterns; `None` for a pattern that is off.
@@ -30,6 +34,7 @@ pub(crate) struct Patterns {
     pub(crate) step: Option<Regex>,
     pub(crate) start: Option<Regex>,
     pub(crate) done: Option<Regex>,
+    pub(crate) note: Option<Regex>,
 }
 
 fn compile_one(name: &str, given: Option<&str>, default: &str, groups: &[&str]) -> Result<Option<Regex>> {
@@ -52,6 +57,7 @@ impl Patterns {
             step: compile_one("step", config.step.as_deref(), DEFAULT_STEP, &["n"])?,
             start: compile_one("start", config.start.as_deref(), DEFAULT_START, &["label"])?,
             done: compile_one("done", config.done.as_deref(), DEFAULT_DONE, &["label"])?,
+            note: compile_one("note", config.note.as_deref(), DEFAULT_NOTE, &["text"])?,
         })
     }
 
@@ -73,6 +79,7 @@ mod tests {
             step: step.map(String::from),
             start: start.map(String::from),
             done: None,
+            note: None,
         };
         assert!(Patterns::compile(&cfg(Some("("), None)).is_err());
         let missing = Patterns::compile(&cfg(None, Some("go (.*)"))).unwrap_err();

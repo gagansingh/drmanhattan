@@ -80,3 +80,22 @@ fn custom_activity_patterns_match_a_tools_own_output() {
     assert_eq!(d.wait_exit("nogroup", T), 2);
     assert!(d.status_of("nogroup").unwrap()["failure_reason"].as_str().unwrap().contains("(?P<label>"));
 }
+
+#[test]
+fn notes_are_badges_on_the_run_and_stay_after_it_ends() {
+    let d = Daemon::start(&[]);
+    let script = "echo '::note built on the spare'; echo '::note warm cache'; echo '::note warm cache'; sleep 1";
+    d.submit("noted", json!({"command": script, "cwd": d.work}));
+    d.wait_state("noted", "running", T);
+    let notes = wait_for(T, || {
+        let st = d.api_state();
+        let n = st["running"][0]["notes"].clone();
+        (n.as_array().map(Vec::len) == Some(2)).then_some(n)
+    })
+    .expect("the running card shows the notes");
+    assert_eq!(notes, json!(["built on the spare", "warm cache"]));
+    assert_eq!(d.wait_exit("noted", T), 0);
+    assert_eq!(d.status_of("noted").unwrap()["notes"], json!(["built on the spare", "warm cache"]));
+    assert_eq!(d.api_state()["done"][0]["notes"], json!(["built on the spare", "warm cache"]));
+    assert!(d.api_state()["done"][0]["activity"].is_null());
+}
