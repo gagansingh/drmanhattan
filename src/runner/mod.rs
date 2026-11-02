@@ -31,16 +31,39 @@ use supervise::{supervise, Outcome, Watch};
 use crate::activity::{Patterns, OWN_LINE_PREFIX};
 use crate::fsutil;
 use crate::history::HistoryRow;
-use crate::job::{LoadStats, Record, RunId, State};
+use crate::job::{LoadStats, PrepareState, Record, RunId, State};
 use crate::log::{self, Tone};
 use crate::naming::{shell_words, tilde_path};
 use crate::process;
 use crate::queue::{self, Admitted, RunEvent, Shared};
 use crate::time::{human, Timestamp};
 
+/// Which of a job's commands a runner runs.
+#[derive(Clone, Copy, PartialEq)]
+enum Phase {
+    /// Its `prepare` command, while it is queued.
+    Prepare,
+    /// The job itself, in a slot.
+    Run,
+}
+
 /// Runs `admitted` to completion on the calling thread.
 pub(crate) fn run_job(shared: &Shared, admitted: Admitted) {
+    execute(shared, admitted, Phase::Run);
+}
+
+/// Runs the `prepare` command of the queued run `admitted`. When it succeeds the run waits
+/// for a slot as before; otherwise the run ends with it.
+pub(crate) fn run_prepare(shared: &Shared, admitted: Admitted) {
+    execute(shared, admitted, Phase::Prepare);
+}
+
+fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
     let Admitted { record: rec, events, exit_sender, activity, default_patterns } = admitted;
+    let argv = match phase {
+        Phase::Run => rec.job.command.clone(),
+        Phase::Prepare => rec.job.prepare.clone().unwrap_or_else(|| vec!["true".into()]),
+    };
     // Compiled here rather than under the queue lock; they were validated when the job was
     // queued, so this falls back to the defaults only for a record from an older version.
     let patterns = match &rec.job.activity {
@@ -48,31 +71,33 @@ pub(crate) fn run_job(shared: &Shared, admitted: Admitted) {
         None => default_patterns,
     };
     let mut completion =
-        Completion { shared, run_id: &rec.run_id, process_group: None, group_guard: None, finished: false };
+        Completion { shared, run_id: &rec.run_id, phase, process_group: None, group_guard: None, finished: false };
     let (paths, settings) = {
         let q = queue::lock(shared);
         (q.paths.clone(), q.settings.clone())
     };
-    let log = match open_log(&rec) {
+    // After a prepare command, the run's output follows its output in the same log.
+    let after_prepare = phase == Phase::Run && rec.prepare_status.is_some();
+    let log = match open_log(&rec, after_prepare) {
         Ok(log) => log,
         Err(e) => return completion.finish(State::Failed, 126, Some(e.to_string()), Duration::ZERO),
     };
+    let log_from = if after_prepare { crate::joblog::output_len(&rec.job.log) } else { 0 };
     let say = |text: &str| {
         let _ = (&log).write_all(format!("{OWN_LINE_PREFIX}{text}\n").as_bytes());
     };
-    say(&format!(
-        "{} started in slot {} at {} · run {}",
-        rec.job.label,
-        rec.slot.unwrap_or(0),
-        Timestamp::now().local_time(),
-        rec.run_id
-    ));
-    say(&format!("in {}: {}", tilde_path(&rec.job.cwd), shell_words(&rec.job.command)));
-    let mut child = match spawn(&rec, &log) {
+    let (now, run_id) = (Timestamp::now().local_time(), &rec.run_id);
+    say(&match phase {
+        Phase::Run => format!("{} started in slot {} at {now} · run {run_id}", rec.job.label, rec.slot.unwrap_or(0)),
+        Phase::Prepare => format!("preparing {} at {now} · run {run_id}", rec.job.label),
+    });
+    say(&format!("in {}: {}", tilde_path(&rec.job.cwd), shell_words(&argv)));
+    let mut child = match spawn(&rec, &argv, &log, phase) {
         Ok(child) => child,
         Err(e) => {
             let code = if e.kind() == std::io::ErrorKind::NotFound { 127 } else { 126 };
-            let reason = format!("could not start {}: {e}", rec.job.command[0]);
+            let what = if phase == Phase::Prepare { "its prepare command " } else { "" };
+            let reason = format!("could not start {what}{}: {e}", argv[0]);
             say(&reason);
             say(&format!("failed, exit {code}"));
             return completion.finish(State::Failed, code, Some(reason), Duration::ZERO);
@@ -101,24 +126,28 @@ pub(crate) fn run_job(shared: &Shared, admitted: Admitted) {
         typicals: &typicals,
         paths: &paths,
         settings: &settings,
+        log_from,
     };
     let mut outcome = supervise(&watch, pgid, &say);
     completion.process_group = None; // supervise ended the group
     if let Some(group_guard) = completion.group_guard.take() {
         group_guard.stand_down();
     }
-    if outcome.state == State::Succeeded {
+    if outcome.state == State::Succeeded && phase == Phase::Run {
         apply_fail_patterns(&rec, &mut outcome, &say);
     }
     let took = if matches!(outcome.state, State::Succeeded | State::Failed) { "in" } else { "after" };
-    say(&format!(
-        "{} {took} {}, exit {}",
-        outcome.state.as_str().replace('_', " "),
-        human(outcome.duration),
-        outcome.exit
-    ));
+    let (word, duration) = (outcome.state.as_str().replace('_', " "), human(outcome.duration));
+    say(&match (phase, outcome.state) {
+        (Phase::Prepare, State::Succeeded) => format!("prepared in {duration}; waiting for a slot"),
+        (Phase::Prepare, _) => format!("prepare {word} {took} {duration}, exit {}", outcome.exit),
+        (Phase::Run, _) => format!("{word} {took} {duration}, exit {}", outcome.exit),
+    });
     drop(log);
-    completion.complete(&rec, &outcome);
+    match phase {
+        Phase::Run => completion.complete(&rec, &outcome),
+        Phase::Prepare => completion.prepared(&rec, &outcome),
+    }
 }
 
 /// Fails a run that exited 0 when its log matches one of the job's `fail_patterns`: exit
@@ -135,20 +164,28 @@ fn apply_fail_patterns(rec: &Record, outcome: &mut Outcome, say: &dyn Fn(&str)) 
 }
 
 /// The log, created fresh: the claim removed any earlier one, and refusing to open an
-/// existing path means a symlink planted there cannot redirect the output.
-fn open_log(rec: &Record) -> crate::error::Result<File> {
+/// existing path means a symlink planted there cannot redirect the output. A run after its
+/// `prepare` command appends to the log that command wrote, still never through a symlink.
+fn open_log(rec: &Record, append: bool) -> crate::error::Result<File> {
     use crate::error::IoContext;
     let path = &rec.job.log;
-    fsutil::remove_if_present(path)?;
     let mut options = OpenOptions::new();
-    options.append(true).create_new(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
-    options.open(path).context("create the log", path)
+    options.append(true).mode(0o600).custom_flags(libc::O_NOFOLLOW);
+    if append && fsutil::is_own_file(path) {
+        return options.open(path).context("open the log", path);
+    }
+    fsutil::remove_if_present(path)?;
+    options.create_new(true).open(path).context("create the log", path)
 }
 
-fn spawn(rec: &Record, log: &File) -> std::io::Result<std::process::Child> {
+fn spawn(rec: &Record, argv: &[String], log: &File, phase: Phase) -> std::io::Result<std::process::Child> {
     let job = &rec.job;
-    Command::new(&job.command[0])
-        .args(&job.command[1..])
+    let mut command = Command::new(&argv[0]);
+    if phase == Phase::Prepare {
+        command.env("DRMANHATTAN_PREPARE", "1");
+    }
+    command
+        .args(&argv[1..])
         .current_dir(&job.cwd)
         .envs(&job.env)
         .env("DRMANHATTAN_RUN_ID", rec.run_id.as_str())
@@ -164,6 +201,7 @@ fn spawn(rec: &Record, log: &File) -> std::io::Result<std::process::Child> {
 struct Completion<'a> {
     shared: &'a Shared,
     run_id: &'a RunId,
+    phase: Phase,
     /// While the command may still be running: its process group, to end on a panic, and
     /// the guard that ends it if the daemon dies.
     process_group: Option<i32>,
@@ -185,7 +223,11 @@ impl Completion<'_> {
             if let Some(e) = q.runs.get_mut(self.run_id) {
                 e.rec.load = load;
                 e.rec.error_line = error_line;
-                e.rec.notes = outcome.notes.clone();
+                for note in &outcome.notes {
+                    if !e.rec.notes.contains(note) && e.rec.notes.len() < crate::activity::MAX_NOTES {
+                        e.rec.notes.push(note.clone());
+                    }
+                }
             }
             q.record_history(HistoryRow {
                 finished_at: Timestamp::now(),
@@ -201,10 +243,53 @@ impl Completion<'_> {
         self.finish(outcome.state, outcome.exit, outcome.failure_reason.clone(), outcome.duration);
     }
 
+    /// Records a prepare command that ran: the run goes on waiting for a slot, or, when the
+    /// command did not succeed, ends with it.
+    fn prepared(&mut self, rec: &Record, outcome: &Outcome) {
+        if outcome.state != State::Succeeded {
+            let reason = match outcome.state {
+                State::TimedOut => "its prepare command timed out".to_string(),
+                State::Cancelled => "cancelled while its prepare command ran".to_string(),
+                _ => format!("its prepare command failed, exit {}", outcome.exit),
+            };
+            let error_line = if outcome.state.is_failure() { last_error_line(&rec.job.log) } else { None };
+            // Cancelled before it started, as far as the job is concerned.
+            let exit = if outcome.state == State::Cancelled { 130 } else { outcome.exit };
+            {
+                let mut q = queue::lock(self.shared);
+                if let Some(e) = q.runs.get_mut(self.run_id) {
+                    e.rec.error_line = error_line;
+                    e.rec.notes = outcome.notes.clone();
+                }
+            }
+            return self.finish(outcome.state, exit, Some(reason), outcome.duration);
+        }
+        self.finished = true;
+        let mut q = queue::lock(self.shared);
+        let Some(e) = q.runs.get_mut(self.run_id) else { return };
+        if let Some(p) = e.rec.prepare_status.as_mut() {
+            p.state = PrepareState::Succeeded;
+            p.finished_at = Some(Timestamp::now());
+            p.exit_status = Some(0);
+        }
+        e.rec.notes = outcome.notes.clone();
+        e.rec.process_group = None;
+        e.live = None;
+        q.persist(self.run_id);
+        log::event(Tone::Quiet, "prepared", &rec.job.label, Some(self.run_id), &[human(outcome.duration)]);
+    }
+
     fn finish(&mut self, state: State, exit: i32, reason: Option<String>, duration: Duration) {
         self.finished = true;
         let mut q = queue::lock(self.shared);
         let Some(e) = q.runs.get_mut(self.run_id) else { return };
+        if self.phase == Phase::Prepare {
+            if let Some(p) = e.rec.prepare_status.as_mut() {
+                p.state = PrepareState::Failed;
+                p.finished_at = Some(Timestamp::now());
+                p.exit_status = Some(exit);
+            }
+        }
         e.rec.state = state;
         e.rec.exit_status = Some(exit);
         if reason.is_some() {

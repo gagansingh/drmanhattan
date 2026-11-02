@@ -126,6 +126,7 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `env` | extra environment variables, as an object of strings |
 | `source` | who submitted it, shown on the dashboard: a name, or `{"tool", "session", "url"}` |
 | `activity` | patterns for this job's progress lines (see below) |
+| `prepare` | a command run while the job waits, outside any slot (see below) |
 | `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
@@ -147,6 +148,27 @@ started; 128 + the signal when cancelled while running; 1 abandoned (the queue s
 it ran); 2 rejected (not a valid job; the reason is in `.status.json`).
 
 Results are removed seven days after the job finishes.
+
+## Preparing while waiting
+
+Some work a job needs can happen before it gets a slot: fetching dependencies, copying
+inputs into place. `prepare` is a command (a list, or a string run with `/bin/sh -c`) that
+runs as soon as the job is queued, in the job's `cwd` with its `env`, while the job waits:
+
+```json
+{"command": ["cargo", "test"], "prepare": "cargo fetch"}
+```
+
+- The job takes a slot only once `prepare` has succeeded. A free slot is not held for it:
+  jobs behind it start meanwhile.
+- If `prepare` fails or times out (it has the job's `timeout` too), the job fails without
+  taking a slot, with `prepare`'s exit code. Cancelling the job stops it.
+- Its output starts the job's log; the run's output follows. It runs with
+  `DRMANHATTAN_PREPARE=1` set.
+- At most four run at once (`DRMANHATTAN_MAX_PREPARES`), best-placed jobs first. One cut
+  short by the queue stopping runs again on the next start.
+- `.status.json` has `prepare_status` (`pending`, `running`, `succeeded` or `failed`), and
+  the dashboard marks the job while it prepares. `submit --prepare CMD` sets it.
 
 ## Failing on output
 
@@ -225,6 +247,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [--json]`, `stop`, `slots [N]
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_MAX_PREPARES` | 4 | `prepare` commands that may run at once |
 | `DRMANHATTAN_SHUTDOWN_GRACE_SECONDS` | 30 | how long `stop` lets running jobs finish |
 | `DRMANHATTAN_TERM_GRACE_SECONDS` | 5 | between asking a job to stop (TERM) and forcing it (KILL) |
 | `DRMANHATTAN_MAX_SKIP_SECONDS` | 600 | the longest a job can be passed over by shorter ones |

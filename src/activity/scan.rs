@@ -151,6 +151,11 @@ impl Activity {
         None
     }
 
+    /// Follows a log from `offset` bytes of output on: what came before is someone else's.
+    pub(crate) fn from_offset(offset: u64) -> Activity {
+        Activity { offset, ..Activity::default() }
+    }
+
     /// The `::note` badges so far.
     pub(crate) fn notes(&self) -> &[String] {
         &self.notes

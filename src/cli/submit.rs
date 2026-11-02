@@ -52,6 +52,8 @@ options:
   --source TOOL       who is submitting, as the dashboard shows it; detected when omitted
   --session ID        the submitting session or thread, for the dashboard's link
   --source-url URL    a link to open instead
+  --prepare CMD       a shell command run while the job waits, outside any slot; the job
+                      runs once it succeeds, and fails if it fails
   --fail-pattern RE   fail the job when a line of its output matches RE, even if the
                       command exits 0 (repeatable)
 ",
@@ -68,6 +70,7 @@ options:
         "source-url",
         "session",
         "fail-pattern",
+        "prepare",
     ],
     switches: &["priority", "wait"],
     positional: 0,
@@ -136,6 +139,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         session: None,
         activity: None,
         fail_patterns: a.all("fail-pattern").to_vec(),
+        prepare: a.get("prepare").map(|p| CommandSpec::Shell(p.to_string())),
     };
     let files = JobFiles::new(&inbox, &name);
     write_job(&files, &spec)?;

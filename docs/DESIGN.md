@@ -21,6 +21,9 @@ the inbox, following logs and reading settings happen outside it.
    rename is the claim: it is atomic, and a restart never runs the file twice. An invalid
    file becomes `<name>.json.rejected`, with the reason in `.status.json` and `2` in `.exit`.
 2. **Queue.** The job gets a run id, an expected duration and a waiting limit.
+   A job with a `prepare` command runs it now, on a thread of its own and outside any
+   slot, at most `DRMANHATTAN_MAX_PREPARES` at once. Admission passes over the job until it
+   has succeeded; if it fails, the job ends there.
 3. **Run.** The command runs in its own process group, with its output going straight into
    `<name>.log`. Cancel and timeout end the whole group. A slot is freed only once every
    process in the group has gone.

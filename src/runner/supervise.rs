@@ -45,6 +45,8 @@ pub(super) struct Watch<'a> {
     pub(super) typicals: &'a Mutex<Typicals>,
     pub(super) paths: &'a Paths,
     pub(super) settings: &'a Settings,
+    /// Where in the log the command's output starts: after its `prepare` command's.
+    pub(super) log_from: u64,
 }
 
 /// Why the command is being stopped, once it is.
@@ -69,7 +71,7 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     let mut stopping = Stopping::No;
     let mut kill_at: Option<Instant> = None;
     let mut killed = false;
-    let mut activity = Activity::default();
+    let mut activity = Activity::from_offset(w.log_from);
     let status = loop {
         let now = Instant::now();
         if now >= next_scan {

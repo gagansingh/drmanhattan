@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::cli::args::{self, Spec};
 use crate::daemon;
 use crate::error::Result;
-use crate::job::{Record, RunId, State};
+use crate::job::{PrepareState, Record, RunId, State};
 use crate::paths::Paths;
 use crate::queue::{rank, read_records};
 use crate::settings::{effective_capacity, read_manual_order, read_override, Override};
@@ -75,6 +75,10 @@ struct WaiterDoc<'a> {
     priority: bool,
     overdue: bool,
     manual: bool,
+    /// For a job with a `prepare` command: `pending`, `running` or `succeeded`. Only a waiter
+    /// without one, or whose prepare has succeeded, can take a slot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prepare: Option<PrepareState>,
     job_file: &'a PathBuf,
 }
 
@@ -120,6 +124,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             priority: r.job.priority,
             overdue: w.overdue,
             manual: w.manual,
+            prepare: r.prepare_status.as_ref().map(|p| p.state),
             job_file: &r.job.job_file,
         })
         .collect();
@@ -195,6 +200,8 @@ fn print_text(doc: &StatusDoc) {
             kv("overdue", yes(w.overdue)),
             kv("manual", yes(w.manual)),
         ];
+        let mut line = line.to_vec();
+        line.extend(w.prepare.map(|p| kv("prepare", p.as_str())));
         println!("{}", line.join(" "));
     }
 }

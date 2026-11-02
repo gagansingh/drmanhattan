@@ -27,7 +27,8 @@ impl Scheduler {
 
     /// Reading the inbox, claiming and validating new job files, and reading the capacity
     /// and manual order all happen without the queue lock; the lock is held only to add
-    /// the new runs, apply cancels and admit. Returns the runs to start.
+    /// the new runs, apply cancels, admit and start prepare commands. Returns what to start:
+    /// admitted runs, and runs whose `prepare` is to run.
     pub(super) fn pass(&mut self, shared: &Shared, admitting: bool) -> Vec<Admitted> {
         let scan = scan_inbox(&self.inbox);
         for (path, why) in scan.refused {
@@ -68,11 +69,13 @@ impl Scheduler {
                 );
             }
         }
-        if admitting {
-            q.admit(capacity, &manual)
-        } else {
-            Vec::new()
+        if !admitting {
+            return Vec::new();
         }
+        let max_prepares = q.settings.max_prepares;
+        let mut started = q.admit(capacity, &manual);
+        started.extend(q.start_prepares(max_prepares, &manual));
+        started
     }
 
     /// The capacity to admit up to; a bad setting is reported once and counts as 1.
