@@ -130,8 +130,7 @@ fn startup_prints_a_recovery_summary_and_cleans_temp_files() {
     }
     fs::write(d.inbox.join(".tmp.fresh"), "{}").unwrap();
     d.launch();
-    let log = d.daemon_log();
-    assert!(log.contains("recovered: 2 stray temp files removed"), "{log}");
+    d.wait_daemon_log("recovered: 2 stray temp files removed");
     assert!(!d.state.join("runs").join(".tmp.123.456").exists());
     assert!(!d.inbox.join(".tmp.789.0").exists());
     assert!(d.inbox.join(".tmp.fresh").exists(), "a fresh temp file may be a submit in progress");
