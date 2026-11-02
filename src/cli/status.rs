@@ -79,6 +79,8 @@ struct WaiterDoc<'a> {
     /// without one, or whose prepare has succeeded, can take a slot.
     #[serde(skip_serializing_if = "Option::is_none")]
     prepare: Option<PrepareState>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group: Option<&'a str>,
     job_file: &'a PathBuf,
 }
 
@@ -125,6 +127,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             overdue: w.overdue,
             manual: w.manual,
             prepare: r.prepare_status.as_ref().map(|p| p.state),
+            group: r.job.group.as_deref(),
             job_file: &r.job.job_file,
         })
         .collect();
@@ -202,6 +205,7 @@ fn print_text(doc: &StatusDoc) {
         ];
         let mut line = line.to_vec();
         line.extend(w.prepare.map(|p| kv("prepare", p.as_str())));
+        line.extend(w.group.map(|g| kv("group", g)));
         println!("{}", line.join(" "));
     }
 }

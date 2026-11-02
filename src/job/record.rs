@@ -143,6 +143,9 @@ pub(crate) struct Record {
     /// `process_group` is the prepare command's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) prepare_status: Option<Prepare>,
+    /// Replaced while it waited by this newer run of its `group`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) superseded_by: Option<RunId>,
 }
 
 impl Record {
@@ -170,6 +173,7 @@ impl Record {
                 finished_at: None,
                 exit_status: None,
             }),
+            superseded_by: None,
             job,
         }
     }

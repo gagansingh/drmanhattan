@@ -648,6 +648,7 @@ function queuedRow(run, i, d) {
     running: ['preparing', 'Its prepare command is running; it can take a slot once that succeeds'],
     succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
   const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
+    + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (d.manual_order && !run.manual && !run.priority ? '<span class="note" title="Queued after you reordered: follows the jobs you placed, shortest first">new</span>' : '');
   const range = usualRange(run);

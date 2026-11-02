@@ -51,6 +51,10 @@ pub(crate) struct JobSpec {
     /// succeeded.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) prepare: Option<CommandSpec>,
+    /// A concurrency group: at most one of its jobs runs and one waits; a newer waiting job
+    /// replaces an older one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) group: Option<String>,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -110,6 +114,8 @@ pub(crate) struct Job {
     pub(crate) fail_patterns: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) prepare: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) group: Option<String>,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -177,6 +183,7 @@ impl JobSpec {
             env: self.env,
             fail_patterns: self.fail_patterns,
             prepare,
+            group: text_field("group", self.group)?,
             claim: None,
         })
     }
@@ -303,6 +310,7 @@ mod tests {
             (r#"{"command": ["true"], "fail_patterns": "x"}"#, "invalid type"),
             (r#"{"command": ["true"], "prepare": []}"#, "prepare must not be empty"),
             (r#"{"command": ["true"], "prepare": 3}"#, "command must be a string"),
+            (r#"{"command": ["true"], "group": "a\nb"}"#, "line breaks"),
         ] {
             let e = resolve(job).unwrap_err().to_string();
             assert!(e.contains(message), "{job}: {e}");
@@ -325,6 +333,7 @@ mod tests {
             activity: None,
             fail_patterns: Vec::new(),
             prepare: None,
+            group: None,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

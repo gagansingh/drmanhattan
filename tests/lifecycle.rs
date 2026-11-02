@@ -28,7 +28,7 @@ fn restart_requeues_waiting_jobs_and_abandons_the_running_one() {
     assert_eq!(d.wait_exit("orphan", T), 1);
     assert_eq!(d.wait_exit("waiting", T), 0);
     assert!(d.log_of("waiting").contains("later"));
-    assert!(d.daemon_log().contains("1 waiting job queued again · 1 running job abandoned"), "{}", d.daemon_log());
+    d.wait_daemon_log("1 waiting job queued again · 1 running job abandoned");
 }
 
 #[test]
@@ -80,7 +80,7 @@ fn first_ctrl_c_lets_running_jobs_finish_and_keeps_the_queue() {
     assert!(!d.state.join("dashboard.json").exists());
     d.launch();
     assert_eq!(d.wait_exit("queued", T), 0);
-    assert!(d.daemon_log().contains("1 waiting job queued again"), "{}", d.daemon_log());
+    d.wait_daemon_log("1 waiting job queued again");
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn ctrl_c_grace_period_then_cancels_and_a_second_ctrl_c_forces() {
     let s = d.status_of("long").unwrap();
     assert_eq!(s["state"], "cancelled");
     assert!(d.inbox.join("long.exit").exists(), "no job is left half-recorded");
-    assert!(d.daemon_log().contains("1 job still running after 2s; cancelling"), "{}", d.daemon_log());
+    d.wait_daemon_log("1 job still running after 2s; cancelling");
     // a second Ctrl-C does not wait for the grace period, however long it is
     d.env.push(("DRMANHATTAN_SHUTDOWN_GRACE_SECONDS".into(), "60".into()));
     d.launch();
@@ -113,7 +113,7 @@ fn ctrl_c_grace_period_then_cancels_and_a_second_ctrl_c_forces() {
     );
     assert_eq!(d.status_of("long2").unwrap()["state"], "cancelled");
     assert!(!group_exists(pgid), "the process group is gone");
-    assert!(d.daemon_log().contains("now: cancelling the running jobs"), "{}", d.daemon_log());
+    d.wait_daemon_log("now: cancelling the running jobs");
 }
 
 #[test]
@@ -220,7 +220,7 @@ fn a_claimed_job_with_no_record_is_queued_again() {
     assert!(d.log_of("lost").contains("again"));
     assert_eq!(d.wait_exit("begun", T), 1);
     assert_eq!(d.status_of("begun").unwrap()["state"], "abandoned");
-    assert!(d.daemon_log().contains("2 lost job files recovered"), "{}", d.daemon_log());
+    d.wait_daemon_log("2 lost job files recovered");
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn a_missing_exit_file_is_written_again_at_start_up() {
     fs::remove_file(d.inbox.join("done.exit")).unwrap();
     d.launch();
     assert_eq!(d.wait_exit("done", T), 3);
-    assert!(d.daemon_log().contains("1 missing .exit written"), "{}", d.daemon_log());
+    d.wait_daemon_log("1 missing .exit written");
 }
 
 #[test]

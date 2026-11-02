@@ -54,6 +54,8 @@ options:
   --source-url URL    a link to open instead
   --prepare CMD       a shell command run while the job waits, outside any slot; the job
                       runs once it succeeds, and fails if it fails
+  --group NAME        at most one job of the group runs and one waits; a newer waiting
+                      job replaces an older one
   --fail-pattern RE   fail the job when a line of its output matches RE, even if the
                       command exits 0 (repeatable)
 ",
@@ -71,6 +73,7 @@ options:
         "session",
         "fail-pattern",
         "prepare",
+        "group",
     ],
     switches: &["priority", "wait"],
     positional: 0,
@@ -140,6 +143,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         activity: None,
         fail_patterns: a.all("fail-pattern").to_vec(),
         prepare: a.get("prepare").map(|p| CommandSpec::Shell(p.to_string())),
+        group: a.get("group").map(String::from),
     };
     let files = JobFiles::new(&inbox, &name);
     write_job(&files, &spec)?;

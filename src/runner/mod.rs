@@ -255,14 +255,18 @@ impl Completion<'_> {
             let error_line = if outcome.state.is_failure() { last_error_line(&rec.job.log) } else { None };
             // Cancelled before it started, as far as the job is concerned.
             let exit = if outcome.state == State::Cancelled { 130 } else { outcome.exit };
-            {
+            let replaced = {
                 let mut q = queue::lock(self.shared);
-                if let Some(e) = q.runs.get_mut(self.run_id) {
+                let e = q.runs.get_mut(self.run_id);
+                e.is_some_and(|e| {
                     e.rec.error_line = error_line;
                     e.rec.notes = outcome.notes.clone();
-                }
-            }
-            return self.finish(outcome.state, exit, Some(reason), outcome.duration);
+                    e.rec.superseded_by.is_some()
+                })
+            };
+            // A run replaced in its group already says so.
+            let reason = (!replaced).then_some(reason);
+            return self.finish(outcome.state, exit, reason, outcome.duration);
         }
         self.finished = true;
         let mut q = queue::lock(self.shared);

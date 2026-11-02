@@ -170,6 +170,13 @@ impl Daemon {
         -1
     }
 
+    /// Waits for the daemon's own output to say `text`: it writes its start-up summary just
+    /// after it publishes dashboard.json, which is what `launch` waits for.
+    pub fn wait_daemon_log(&self, text: &str) {
+        wait_for(Duration::from_secs(15), || self.daemon_log().contains(text).then_some(()))
+            .unwrap_or_else(|| panic!("the daemon never said {text:?}\n{}", self.daemon_log()));
+    }
+
     pub fn daemon_log(&self) -> String {
         let mut out = String::new();
         for e in fs::read_dir(&self.root).unwrap().flatten() {
