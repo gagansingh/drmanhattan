@@ -170,8 +170,11 @@ fn other_hosts_are_refused_and_the_page_cannot_be_framed() {
 fn commands_are_formatted_by_the_page_from_their_argv() {
     let d = Daemon::start(&[]);
     let (_, page) = d.get("/");
-    for needed in ["function commandHtml(", "const cmdJoin = ", "// <command-format>", "// </command-format>"] {
-        assert!(page.contains(needed), "the page lacks {needed}");
+    assert!(page.contains(r#"<script src="command-format.js"></script>"#), "the page loads the formatter");
+    let (code, format) = d.get("/command-format.js");
+    assert_eq!(code, 200);
+    for needed in ["function commandHtml(", "const cmdJoin = "] {
+        assert!(format.contains(needed), "the formatter lacks {needed}");
     }
     // A run whose command has quotes, `&&` and a `--` wrapper still renders: the page gets its
     // argv untouched, and the log line it colours is the runner's quoting of that argv.
@@ -195,10 +198,8 @@ fn commands_are_formatted_by_the_page_from_their_argv() {
         return;
     }
     let esc = page.lines().skip_while(|l| !l.starts_with("const esc =")).take(2).collect::<Vec<_>>().join("\n");
-    let start = page.find("// <command-format>").unwrap();
-    let end = page.find("// </command-format>").unwrap();
     let cases = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/command_format.js")).unwrap();
-    let program = format!("{esc}\n{}\n{cases}", &page[start..end]);
+    let program = format!("{esc}\n{format}\n{cases}");
     let out = std::process::Command::new("node").arg("-e").arg(program).output().unwrap();
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success() && said.starts_with("ok "), "{said}");

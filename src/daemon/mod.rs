@@ -82,6 +82,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         start_runner(&shared, admitted);
     }
     workers::start_poller(paths.clone(), settings.worker_poll);
+    crate::update::start_checker(paths.clone());
 
     let mut info = DaemonInfo {
         pid: std::process::id(),

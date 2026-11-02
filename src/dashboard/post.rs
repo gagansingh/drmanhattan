@@ -53,6 +53,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
     match path {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
+        "/api/update" => start_update(req, ctx),
         _ => set_order(req, body, ctx),
     }
 }
@@ -127,6 +128,20 @@ fn service_action(req: Request, body: &str, ctx: &Ctx) {
     }
     drop(q);
     http::json(req, 200, &json!({ "run_id": run_id, "action": action }));
+}
+
+/// The footer's Update button: only while nothing runs or waits, and only to a newer release.
+fn start_update(req: Request, ctx: &Ctx) {
+    if !crate::update::idle(&ctx.paths) {
+        return http::respond(req, 409, "jobs are running or waiting; update once the queue is idle", "text/plain");
+    }
+    if crate::update::available(&ctx.paths).is_none() {
+        return http::error(req, "no newer release is known");
+    }
+    match crate::update::start_detached() {
+        Ok(()) => http::json(req, 202, &json!({ "updating": true })),
+        Err(e) => http::error(req, e),
+    }
 }
 
 /// Keeps only ids of runs still queued and not priority (the manual order cannot move a

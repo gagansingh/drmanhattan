@@ -203,7 +203,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
     if service && live(&files) {
         if !a.has("restart") {
             // The same service, already running or starting: use it rather than start another.
-            return wait_ready(&files, true);
+            return super::service::wait_ready(&files, true);
         }
         fsutil::write_atomic(&files.cancel(), "")?;
         log::note(format_args!("stopping the running {name} to start it again"));
@@ -223,7 +223,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         log::warn("drmanhattan isn't running; the job waits in the inbox until it starts (`drmanhattan`)");
     }
     if service {
-        wait_ready(&files, false)
+        super::service::wait_ready(&files, false)
     } else if a.has("wait") {
         wait(&files)
     } else {
@@ -234,56 +234,6 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
 /// A job by this name is queued or running.
 fn live(files: &JobFiles) -> bool {
     files.job().exists() || (files.claimed().exists() && !files.exit().exists())
-}
-
-/// The parts of a service's `.status.json` that `submit --service` reports.
-#[derive(Deserialize)]
-struct ServiceStatus {
-    state: String,
-    ready_at: Option<String>,
-    process_group: Option<i32>,
-    ready: Option<Ready>,
-    failure_reason: Option<String>,
-    log: Option<PathBuf>,
-}
-
-/// Waits for a service to be ready, then says where it is and returns 0; if it ends first,
-/// shows the end of its log and returns its exit code. `existing`: it was already running.
-fn wait_ready(files: &JobFiles, existing: bool) -> Result<i32> {
-    loop {
-        let status: Option<ServiceStatus> = fsutil::read_json(&files.status());
-        if let Some(s) = status.as_ref().filter(|s| s.ready_at.is_some() && s.state == "running") {
-            let port = match &s.ready {
-                Some(Ready::Port(p)) => format!(" · port {p}"),
-                _ => String::new(),
-            };
-            let pid = s.process_group.map(|p| format!(" · pid {p}")).unwrap_or_default();
-            let log = s.log.as_ref().map_or_else(|| files.log(), Clone::clone);
-            let how = if existing { "already running" } else { "ready" };
-            let line = format!(
-                "{}{} {how}{pid}{port} · log {} · stop it with `manhattan stop {}`",
-                log::NOTE_PREFIX,
-                files.name(),
-                log.display(),
-                files.name()
-            );
-            println!("{}", log::mark_own_line(&line, log::stdout_colour()));
-            return Ok(0);
-        }
-        if files.exit().exists() && !files.job().exists() {
-            let code = std::fs::read_to_string(files.exit()).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(1);
-            if let Some(text) = fsutil::read_tail(&files.log(), 16 * 1024) {
-                let lines: Vec<&str> = text.lines().collect();
-                for line in &lines[lines.len().saturating_sub(20)..] {
-                    eprintln!("{line}");
-                }
-            }
-            let reason = status.and_then(|s| s.failure_reason).unwrap_or_else(|| "it stopped".into());
-            log::error(format_args!("{} did not become ready: {reason}", files.name()));
-            return Ok(if code == 0 { 1 } else { code });
-        }
-        std::thread::sleep(POLL);
-    }
 }
 
 /// `path` as an absolute path, from the current directory.
