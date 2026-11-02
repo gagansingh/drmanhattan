@@ -132,6 +132,9 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
+A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
+`DRMANHATTAN_SLOT` (the slot it holds, from 1) set, besides its `env`.
+
 ## Workers: running jobs on other machines
 
 drmanhattan can hand jobs to other machines over SSH. A worker is just another

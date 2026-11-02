@@ -186,9 +186,10 @@ fn open_log(rec: &Record, append: bool) -> crate::error::Result<File> {
 fn spawn(rec: &Record, argv: &[String], log: &File, phase: Phase) -> std::io::Result<std::process::Child> {
     let job = &rec.job;
     let mut command = Command::new(&argv[0]);
-    if phase == Phase::Prepare {
-        command.env("DRMANHATTAN_PREPARE", "1");
-    }
+    match phase {
+        Phase::Prepare => command.env("DRMANHATTAN_PREPARE", "1"),
+        Phase::Run => command.env("DRMANHATTAN_SLOT", rec.slot.unwrap_or(0).to_string()),
+    };
     command
         .args(&argv[1..])
         .current_dir(&job.cwd)

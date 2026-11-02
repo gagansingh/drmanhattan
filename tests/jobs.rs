@@ -13,7 +13,7 @@ const T: Duration = Duration::from_secs(30);
 #[test]
 fn job_runs_and_reports_beside_its_file() {
     let d = Daemon::start(&[]);
-    d.submit("hello", json!({"command": "echo out; echo err >&2; echo cwd=$(pwd) FOO=$FOO; exit 3", "cwd": d.work, "env": {"FOO": "bar"}, "timeout": 60}));
+    d.submit("hello", json!({"command": "echo out; echo err >&2; echo cwd=$(pwd) FOO=$FOO slot=$DRMANHATTAN_SLOT; exit 3", "cwd": d.work, "env": {"FOO": "bar"}, "timeout": 60}));
     assert_eq!(d.wait_exit("hello", T), 3);
     let status = d.status_of("hello").unwrap();
     assert_eq!(status["state"], "failed");
@@ -26,7 +26,7 @@ fn job_runs_and_reports_beside_its_file() {
     assert!(status.get("env").is_none(), "env values stay out of the status file");
     let log = d.log_of("hello");
     assert!(log.contains("out\nerr\n"), "{log}");
-    assert!(log.contains(&format!("cwd={} FOO=bar", d.work.display())), "{log}");
+    assert!(log.contains(&format!("cwd={} FOO=bar slot=1", d.work.display())), "{log}");
     assert!(log.contains("drmanhattan · failed in") && log.contains(", exit 3"), "{log}");
     assert!(d.inbox.join("hello.json.claimed").exists() && !d.inbox.join("hello.json").exists());
     let history = fs::read_to_string(d.data.join("history.jsonl")).unwrap();
