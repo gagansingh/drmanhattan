@@ -9,4 +9,4 @@ mod spec;
 pub(crate) use files::{classify, is_job_name, InboxFile, JobFiles, MAX_NAME};
 pub(crate) use record::{FileStatus, LoadStats, Record, State};
 pub(crate) use run_id::RunId;
-pub(crate) use spec::{CommandSpec, Job, JobSpec, Source, SourceSpec};
+pub(crate) use spec::{compile_fail_patterns, CommandSpec, Job, JobSpec, Source, SourceSpec};

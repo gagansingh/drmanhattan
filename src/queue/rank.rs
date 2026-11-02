@@ -84,6 +84,7 @@ mod tests {
             timeout: None,
             activity: None,
             env: Default::default(),
+            fail_patterns: Vec::new(),
             claim: None,
         };
         let mut r = Record::new(id.parse().unwrap(), job, expected, 600);

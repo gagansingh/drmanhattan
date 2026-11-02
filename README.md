@@ -126,6 +126,7 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `env` | extra environment variables, as an object of strings |
 | `source` | who submitted it, shown on the dashboard: a name, or `{"tool", "session", "url"}` |
 | `activity` | patterns for this job's progress lines (see below) |
+| `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
@@ -146,6 +147,21 @@ started; 128 + the signal when cancelled while running; 1 abandoned (the queue s
 it ran); 2 rejected (not a valid job; the reason is in `.status.json`).
 
 Results are removed seven days after the job finishes.
+
+## Failing on output
+
+Some commands report a problem in their output but still exit 0: a test suite that skips
+itself when a service is missing, a linter that only warns. `fail_patterns` turns such a run
+into a failure:
+
+```json
+"fail_patterns": ["^Skipped \\d+ suites?", "WARNING: deprecated"]
+```
+
+When the command exits 0 and a line of its output matches one of the patterns, the job is
+`failed` with exit code 1. The first matching line is its `error_line` in `.status.json`,
+and `failure_reason` names the pattern. A run that failed anyway keeps its own exit code.
+`submit --fail-pattern RE` (repeatable) sets them from the command line.
 
 ## Progress markers
 

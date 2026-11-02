@@ -11,6 +11,7 @@
 //! which ends the process group and records the run failed.
 
 mod error_line;
+mod fail_patterns;
 mod guard;
 mod supervise;
 
@@ -101,10 +102,13 @@ pub(crate) fn run_job(shared: &Shared, admitted: Admitted) {
         paths: &paths,
         settings: &settings,
     };
-    let outcome = supervise(&watch, pgid, &say);
+    let mut outcome = supervise(&watch, pgid, &say);
     completion.process_group = None; // supervise ended the group
     if let Some(group_guard) = completion.group_guard.take() {
         group_guard.stand_down();
+    }
+    if outcome.state == State::Succeeded {
+        apply_fail_patterns(&rec, &mut outcome, &say);
     }
     let took = if matches!(outcome.state, State::Succeeded | State::Failed) { "in" } else { "after" };
     say(&format!(
@@ -115,6 +119,19 @@ pub(crate) fn run_job(shared: &Shared, admitted: Admitted) {
     ));
     drop(log);
     completion.complete(&rec, &outcome);
+}
+
+/// Fails a run that exited 0 when its log matches one of the job's `fail_patterns`: exit
+/// 1, the matching line as its error line.
+fn apply_fail_patterns(rec: &Record, outcome: &mut Outcome, say: &dyn Fn(&str)) {
+    // Checked when the job was queued, so this only fails for a record from an older version.
+    let Ok(patterns) = crate::job::compile_fail_patterns(&rec.job.fail_patterns) else { return };
+    let Some((line, pattern)) = fail_patterns::first_match(&rec.job.log, &patterns) else { return };
+    say(&format!("the command exited 0, but its output matched the fail pattern {pattern:?}: {line}"));
+    outcome.state = State::Failed;
+    outcome.exit = 1;
+    outcome.failure_reason = Some(format!("its output matched the fail pattern {pattern:?}"));
+    outcome.error_line = Some(line);
 }
 
 /// The log, created fresh: the claim removed any earlier one, and refusing to open an
@@ -157,7 +174,11 @@ struct Completion<'a> {
 impl Completion<'_> {
     /// Records a run that ran: its load, its error line, its timing history.
     fn complete(&mut self, rec: &Record, outcome: &Outcome) {
-        let error_line = if outcome.state.is_failure() { last_error_line(&rec.job.log) } else { None };
+        let error_line = match &outcome.error_line {
+            Some(line) => Some(line.clone()),
+            None if outcome.state.is_failure() => last_error_line(&rec.job.log),
+            None => None,
+        };
         let load = LoadStats::of(&outcome.load_samples);
         {
             let mut q = queue::lock(self.shared);
@@ -176,7 +197,7 @@ impl Completion<'_> {
                 load: load.map(|l| l.average),
             });
         }
-        self.finish(outcome.state, outcome.exit, None, outcome.duration);
+        self.finish(outcome.state, outcome.exit, outcome.failure_reason.clone(), outcome.duration);
     }
 
     fn finish(&mut self, state: State, exit: i32, reason: Option<String>, duration: Duration) {

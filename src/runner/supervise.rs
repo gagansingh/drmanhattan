@@ -26,6 +26,10 @@ pub(super) struct Outcome {
     pub(super) exit: i32,
     pub(super) duration: Duration,
     pub(super) load_samples: Vec<f64>,
+    /// Set when something other than the exit status failed the run.
+    pub(super) failure_reason: Option<String>,
+    /// The line to read first, when it is known without searching the log.
+    pub(super) error_line: Option<String>,
 }
 
 /// Everything `supervise` reads.
@@ -115,7 +119,7 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
         Stopping::No if code == 0 => (State::Succeeded, 0),
         Stopping::No => (State::Failed, code),
     };
-    Outcome { state, exit, duration: started.elapsed(), load_samples: samples }
+    Outcome { state, exit, duration: started.elapsed(), load_samples: samples, failure_reason: None, error_line: None }
 }
 
 /// Reads what the log gained, publishes the run's activity, and learns the durations of
