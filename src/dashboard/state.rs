@@ -50,6 +50,8 @@ pub(super) struct StateDoc {
     load: Option<[f64; 3]>,
     ncpu: usize,
     inbox: PathBuf,
+    /// The home directory, which the page writes as `~` in commands.
+    home: PathBuf,
     state_dir: PathBuf,
     history_count: usize,
     metrics_24h: Metrics,
@@ -230,6 +232,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         load: process::load_averages().map(|l| l.map(|x| (x * 10.0).round() / 10.0)),
         ncpu: cpus,
         inbox: ctx.inbox.clone(),
+        home: crate::paths::home(),
         state_dir: ctx.paths.state.clone(),
         history_count: snap.history_count,
         metrics_24h: metrics(&snap.last_day, now),

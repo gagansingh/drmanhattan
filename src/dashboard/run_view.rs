@@ -21,6 +21,8 @@ pub(super) struct RunView {
     cwd: PathBuf,
     cwd_short: String,
     command: Vec<String>,
+    /// Its `prepare` command, so the log's line for it can be shown as a command too.
+    prepare_command: Option<Vec<String>>,
     process_group: Option<i32>,
     slot: Option<u32>,
     priority: bool,
@@ -121,6 +123,7 @@ impl RunView {
             cwd: job.cwd.clone(),
             cwd_short: short_path(&job.cwd.to_string_lossy()),
             command: job.command.clone(),
+            prepare_command: job.prepare.clone(),
             process_group: rec.process_group,
             slot: rec.slot,
             priority: job.priority,
