@@ -101,6 +101,9 @@ pub(crate) struct Record {
     pub(crate) load_at_start: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) load: Option<LoadStats>,
+    /// The `::note` badges its log printed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) notes: Vec<String>,
 }
 
 impl Record {
@@ -122,6 +125,7 @@ impl Record {
             error_line: None,
             load_at_start: None,
             load: None,
+            notes: Vec::new(),
         }
     }
 

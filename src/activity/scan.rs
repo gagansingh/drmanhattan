@@ -21,6 +21,9 @@ const MAX_PARTIAL: usize = 4096;
 /// The most commands followed in flight at once; past this, new `::start`s are ignored
 /// until some finish, so a job printing endless unique markers costs nothing.
 const MAX_ACTIVE: usize = 32;
+/// The most notes a run keeps, and the longest each may be; later ones are ignored.
+pub(crate) const MAX_NOTES: usize = 8;
+const MAX_NOTE_CHARS: usize = 60;
 /// Lines the daemon writes into a job's log itself.
 pub(crate) const OWN_LINE_PREFIX: &str = crate::log::NOTE_PREFIX;
 
@@ -41,6 +44,8 @@ pub(crate) struct Activity {
     /// Commands started and not yet done, in the order they started.
     active: Vec<(String, Timestamp)>,
     last: Option<String>,
+    /// `::note` badges, each once, in the order printed.
+    notes: Vec<String>,
 }
 
 /// One command in flight, as the dashboard shows it.
@@ -124,7 +129,12 @@ impl Activity {
 
     fn take_line(&mut self, line: &str, patterns: &Patterns, now: Timestamp) -> Option<StepRow> {
         self.last = Some(shorten(line));
-        if let Some(c) = patterns.step.as_ref().and_then(|re| re.captures(line)) {
+        if let Some(c) = patterns.note.as_ref().and_then(|re| re.captures(line)) {
+            let text: String = group(&c, "text").chars().take(MAX_NOTE_CHARS).collect();
+            if !text.is_empty() && self.notes.len() < MAX_NOTES && !self.notes.contains(&text) {
+                self.notes.push(text);
+            }
+        } else if let Some(c) = patterns.step.as_ref().and_then(|re| re.captures(line)) {
             let number = |name| group(&c, name).parse().unwrap_or(0);
             self.step = Some(Step { n: number("n"), of: number("of"), text: group(&c, "text").to_string() });
         } else if let Some(c) = patterns.done.as_ref().and_then(|re| re.captures(line)) {
@@ -139,6 +149,11 @@ impl Activity {
             }
         }
         None
+    }
+
+    /// The `::note` badges so far.
+    pub(crate) fn notes(&self) -> &[String] {
+        &self.notes
     }
 
     pub(crate) fn view(&self, typicals: &Typicals) -> Option<ActivityView> {
@@ -187,13 +202,16 @@ mod tests {
 
     #[test]
     fn markers_set_the_step_and_the_commands_in_flight() {
-        let log =
-            log_with("markers", "::step 2/5 Build\n::start cc\n::start ld\n::done cc\n\x1b[1mwarming up\x1b[0m\n");
+        let log = log_with(
+            "markers",
+            "::step 2/5 Build\n::note on the spare\n::start cc\n::start ld\n::done cc\n::note on the spare\n\x1b[1mwarming up\x1b[0m\n",
+        );
         let mut a = Activity::default();
         let finished = a.scan(&log, Patterns::defaults(), Timestamp::now());
         assert_eq!(a.step, Some(Step { n: 2, of: 5, text: "Build".into() }));
         assert_eq!(a.active.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["ld"]);
         assert_eq!(a.last.as_deref(), Some("warming up"), "colour codes are stripped");
+        assert_eq!(a.notes(), ["on the spare"], "a note is kept once");
         assert_eq!(finished.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["cc"]);
         std::io::Write::write_all(
             &mut std::fs::OpenOptions::new().append(true).open(&log).unwrap(),

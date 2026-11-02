@@ -143,6 +143,7 @@ td.none { padding: 12px 16px; color: var(--faint); font-size: 12px; line-height:
 .where .sep { color: var(--faint); padding: 0 4px; }
 .note { margin-left: 8px; color: var(--dim); font-size: 12px; font-weight: 500; white-space: nowrap; }
 .note.priority { color: var(--purple); font-weight: 600; }
+.note.badge { padding: 0 5px; border: 1px solid var(--line-strong); border-radius: 4px; color: var(--fg); line-height: 16px; }
 
 /* A run's state: one mark whose shape and colour both say it, then the word. Lines under
    it start where the word does. */
@@ -530,6 +531,7 @@ const nothing = (spoken = 'none', title = '') =>
 function notes(run, extra = '') {
   return (run.priority ? '<span class="note priority" title="Runs ahead of every job without priority">priority</span>' : '')
     + (run.variant ? `<span class="note" title="Estimate variant">${esc(run.variant)}</span>` : '')
+    + (run.notes || []).map((n) => `<span class="note badge" title="A note the job printed (::note)">${esc(n)}</span>`).join('')
     + extra;
 }
 

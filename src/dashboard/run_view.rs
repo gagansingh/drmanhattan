@@ -37,6 +37,8 @@ pub(super) struct RunView {
     load_at_start: Option<f64>,
     load_avg: Option<f64>,
     load_max: Option<f64>,
+    /// `::note` badges: the record's once it has finished, else what its log says so far.
+    pub(super) notes: Vec<String>,
     timeout: Option<u64>,
     typical_seconds: Option<u64>,
     typical_p90: Option<u64>,
@@ -123,6 +125,7 @@ impl RunView {
             load_at_start: rec.load_at_start,
             load_avg: rec.load.map(|l| l.average),
             load_max: rec.load.map(|l| l.peak),
+            notes: rec.notes.clone(),
             timeout: job.timeout,
             typical_seconds: est.p50,
             typical_p90: est.p90,
