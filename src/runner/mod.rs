@@ -253,6 +253,16 @@ impl Completion<'_> {
     /// Records a prepare command that ran: the run goes on waiting for a slot, or, when the
     /// command did not succeed, ends with it.
     fn prepared(&mut self, rec: &Record, outcome: &Outcome) {
+        // A cancel that arrived as the command ended was not seen by supervise.
+        let cancelled_late = outcome.state == State::Succeeded
+            && queue::lock(self.shared)
+                .runs
+                .get(self.run_id)
+                .and_then(|e| e.live.as_ref())
+                .is_some_and(|l| l.cancel_requested);
+        if cancelled_late {
+            return self.finish(State::Cancelled, 130, None, outcome.duration);
+        }
         if outcome.state != State::Succeeded {
             let reason = match outcome.state {
                 State::TimedOut => "its prepare command timed out".to_string(),
