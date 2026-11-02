@@ -49,7 +49,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.1.0 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.2.0 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70
