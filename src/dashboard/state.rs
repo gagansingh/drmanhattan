@@ -43,6 +43,8 @@ pub(super) struct StateDoc {
     manual_order: bool,
     slots: Vec<SlotView>,
     running: Vec<RunView>,
+    /// Services running or starting: they take no slot, so they are listed apart.
+    services: Vec<RunView>,
     queued: Vec<RunView>,
     done: Vec<RunView>,
     #[serde(flatten)]
@@ -188,6 +190,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         })
         .collect();
     running.sort_by(|a, b| a.timing.elapsed.cmp(&b.timing.elapsed).reverse());
+    let (services, running): (Vec<RunView>, Vec<RunView>) = running.into_iter().partition(RunView::is_service);
 
     let busy_groups: std::collections::HashSet<&str> =
         snap.running.iter().filter_map(|(r, _, _)| r.job.group.as_deref()).collect();
@@ -226,6 +229,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         manual_order: queued.iter().any(|v| v.manual == Some(true)),
         slots,
         running,
+        services,
         queued,
         done,
         machine: sysinfo::snapshot(),
@@ -247,7 +251,8 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
     if workers.is_empty() {
         return Vec::new();
     }
-    let running_on = |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m).count();
+    let running_on =
+        |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && !r.job.service).count();
     let override_view = |o: crate::settings::Override| OverrideView { slots: o.slots, until: o.until.epoch_seconds() };
     let mut out = vec![MachineView {
         name: "local".into(),

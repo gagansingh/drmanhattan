@@ -78,7 +78,33 @@ pub(crate) struct JobSpec {
     pub(crate) dispatch_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slots_hint: Option<u32>,
+    /// A long-running server rather than a job that finishes: it is ready, not done, and
+    /// does not take a build slot.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) service: bool,
+    /// When a service is ready: a port answers, or a line of its log matches.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ready: Option<Ready>,
+    /// Seconds a service may take to be ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ready_timeout: Option<f64>,
+    /// Seconds a service may run before it is stopped.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ttl: Option<f64>,
 }
+
+/// How a service shows it is ready: `{"port": 3000}` (something accepts connections on
+/// 127.0.0.1:3000) or `{"log": "Listening on"}` (a line of its output matches).
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub(crate) enum Ready {
+    Port(u16),
+    Log(String),
+}
+
+/// How long a service may take to be ready, and to run, unless the job says.
+pub(crate) const DEFAULT_READY_TIMEOUT: u64 = 120;
+pub(crate) const DEFAULT_TTL: u64 = 8 * 3600;
 
 /// Where a job may run: here only (the default), on a worker when every slot here is busy,
 /// or on a worker first.
@@ -184,6 +210,15 @@ pub(crate) struct Job {
     pub(crate) dispatch_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slots_hint: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) service: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ready: Option<Ready>,
+    /// Seconds; set for every service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ready_timeout: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ttl: Option<u64>,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -236,6 +271,16 @@ impl JobSpec {
             Patterns::compile(cfg)?; // a bad regex is reported now, not when the job runs
         }
         compile_fail_patterns(&self.fail_patterns)?;
+        if !self.service && (self.ready.is_some() || self.ready_timeout.is_some() || self.ttl.is_some()) {
+            return invalid("ready, ready_timeout and ttl are for services: add \"service\": true");
+        }
+        match &self.ready {
+            Some(Ready::Port(0)) => return invalid("ready.port must be a port number from 1 to 65535"),
+            Some(Ready::Log(re)) => {
+                regex::Regex::new(re).or_else(|e| invalid(format!("ready.log is not a valid regex: {e}")))?;
+            }
+            _ => {}
+        }
         Ok(Job {
             label: text_field("label", self.label)?.unwrap_or_else(|| files.name().to_string()),
             category: text_field("category", self.category)?.unwrap_or_else(|| naming::derive_category(&command)),
@@ -260,6 +305,13 @@ impl JobSpec {
             dispatched_from: text_field("dispatched_from", self.dispatched_from)?,
             dispatch_id: text_field("dispatch_id", self.dispatch_id)?,
             slots_hint: self.slots_hint.filter(|n| *n > 0).map(|n| n.min(crate::settings::MAX_SLOTS)),
+            ready_timeout: self
+                .service
+                .then(|| seconds("ready_timeout", self.ready_timeout, DEFAULT_READY_TIMEOUT))
+                .transpose()?,
+            ttl: self.service.then(|| seconds("ttl", self.ttl, DEFAULT_TTL)).transpose()?,
+            ready: self.ready,
+            service: self.service,
             claim: None,
         })
     }
@@ -286,6 +338,15 @@ fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
             Ok(sync)
         })
         .collect()
+}
+
+/// A positive number of seconds from a job file, rounded up, or the default.
+fn seconds(field: &str, given: Option<f64>, default: u64) -> Result<u64> {
+    match given {
+        None => Ok(default),
+        Some(t) if t > 0.0 && t <= MAX_TIMEOUT_SECONDS as f64 => Ok(t.ceil() as u64),
+        Some(_) => invalid(format!("{field} must be a positive number of seconds, at most {MAX_TIMEOUT_SECONDS}")),
+    }
 }
 
 /// A command as the argv it runs: a string runs with `/bin/sh -c`.
@@ -411,6 +472,11 @@ mod tests {
             (r#"{"command": ["true"], "prepare": 3}"#, "command must be a string"),
             (r#"{"command": ["true"], "group": "a\nb"}"#, "line breaks"),
             (r#"{"command": ["true"], "remote": "sometimes"}"#, "unknown variant"),
+            (r#"{"command": ["true"], "ready": {"port": 3000}}"#, "are for services"),
+            (r#"{"command": ["true"], "service": true, "ready": {"port": 0}}"#, "ready.port"),
+            (r#"{"command": ["true"], "service": true, "ready": {"log": "("}}"#, "ready.log"),
+            (r#"{"command": ["true"], "service": true, "ready": {"pid": 1}}"#, "unknown variant"),
+            (r#"{"command": ["true"], "service": true, "ttl": -1}"#, "ttl must be"),
             (r#"{"command": ["true"], "sync": ["relative/path"]}"#, "sync paths must be absolute"),
             (r#"{"command": ["true"], "sync": [{"path": "/a", "exclud": []}]}"#, "each sync entry"),
         ] {
@@ -444,6 +510,10 @@ mod tests {
             dispatched_from: None,
             dispatch_id: None,
             slots_hint: None,
+            service: false,
+            ready: None,
+            ready_timeout: None,
+            ttl: None,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

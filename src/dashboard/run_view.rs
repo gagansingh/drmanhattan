@@ -50,6 +50,11 @@ pub(super) struct RunView {
     /// Its job's name on the worker, once it has been handed over.
     remote_job: Option<String>,
     remote_fallback: Option<String>,
+    service: bool,
+    /// A service's port, when it is ready by its port.
+    port: Option<u16>,
+    ready_at: Option<f64>,
+    ttl: Option<u64>,
     /// Waiting: another job of its group is running, so it cannot start yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) group_busy: Option<bool>,
@@ -108,6 +113,10 @@ fn epoch(t: Option<Timestamp>) -> Option<f64> {
 }
 
 impl RunView {
+    pub(super) fn is_service(&self) -> bool {
+        self.service
+    }
+
     /// The (load-scaled) typical duration the view shows.
     pub(super) fn typical_seconds(&self) -> Option<u64> {
         self.typical_seconds
@@ -147,6 +156,13 @@ impl RunView {
             machine: rec.machine.clone(),
             remote_job: rec.remote_run.as_ref().map(|r| r.job.clone()),
             remote_fallback: rec.remote_fallback.clone(),
+            service: job.service,
+            port: match &job.ready {
+                Some(crate::job::Ready::Port(p)) => Some(*p),
+                _ => None,
+            },
+            ready_at: epoch(rec.ready_at),
+            ttl: job.ttl,
             group_busy: None,
             timeout: job.timeout,
             typical_seconds: est.p50,

@@ -49,7 +49,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.2.4 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.3.0 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70
@@ -69,6 +69,8 @@ Run builds, tests and other long or heavy commands through drmanhattan:
     manhattan submit --wait -- <command>
 
 It waits for a free slot, prints the output and exits with the command's exit code.
+Start servers with `manhattan submit --service --ready-port <port> -- <command>` (or
+`--ready-log <regex>`), never with `--wait`: it returns once the server is ready.
 Use it too for any command you can't run directly in this environment.
 If it reports that drmanhattan isn't running, ask the user to start it; don't start it yourself.
 ```
@@ -100,6 +102,31 @@ the job stops the agent and anything it started. The agent is `claude -p --conti
 rounds share one conversation of their own, or each starts afresh with `--fresh`. The agent
 must be able to run headless on this machine: signed in, and allowed to edit files and run
 commands without asking. `agent-runner.sh --help` lists the options.
+
+## Services: servers that keep running
+
+A dev server or a database never exits, so it cannot wait for a slot or be waited for. Submit it
+as a service instead:
+
+```
+manhattan submit --service --ready-port 3000 -- npm run dev
+manhattan submit --service --ready-log "Listening on" -- ./bin/api
+```
+
+- `submit` returns once the service is ready: `--ready-port N` when 127.0.0.1:N accepts a
+  connection, `--ready-log RE` when a line of its output matches, at once with neither. It
+  prints its name, pid, port and log, and exits 0. Not ready within `--ready-timeout` (120 s),
+  or ended first, it is stopped, the end of its log is printed, and `submit` exits non-zero.
+- Services take none of the build slots; up to `DRMANHATTAN_SERVICES` (4) run at once, and
+  more wait for one to stop.
+- A service's name is its label's. Submitting one that is already running returns the running
+  one; `--restart` replaces it.
+- `manhattan stop <name>` stops it (its whole process group). It is stopped anyway after
+  `--ttl` (8 hours), and when the queue stops; a restart of the queue never leaves one behind.
+- The dashboard lists services apart, with their port, uptime, time left, and stop and restart
+  buttons; their logs open in the same pane.
+- In a job file: `"service": true`, `"ready": {"port": 3000}` or `{"log": "…"}`,
+  `"ready_timeout"` and `"ttl"` in seconds.
 
 ## Job files
 
@@ -361,7 +388,7 @@ shell operators each have a colour; hover a job's name to see its command.
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `stop`, `slots [N]` and `paths`. Each has `--help`.
+`cancel`, `workers`, `machine-stats`, `stop [<name>]`, `slots [N]` and `paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |
@@ -373,6 +400,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |
 | `DRMANHATTAN_MAX_PREPARES` | 4 | `prepare` commands that may run at once |
 | `DRMANHATTAN_SHUTDOWN_GRACE_SECONDS` | 30 | how long `stop` lets running jobs finish |
 | `DRMANHATTAN_TERM_GRACE_SECONDS` | 5 | between asking a job to stop (TERM) and forcing it (KILL) |

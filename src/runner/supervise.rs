@@ -47,6 +47,8 @@ pub(super) struct Watch<'a> {
     pub(super) settings: &'a Settings,
     /// Where in the log the command's output starts: after its `prepare` command's.
     pub(super) log_from: u64,
+    /// Called once when a service becomes ready.
+    pub(super) on_ready: &'a dyn Fn(),
 }
 
 /// Why the command is being stopped, once it is.
@@ -55,7 +57,14 @@ enum Stopping {
     No,
     Cancelled,
     TimedOut,
+    /// A service that was not ready in time.
+    NotReady,
+    /// A service that ran its ttl.
+    Expired,
 }
+
+/// How often a starting service is checked.
+const READY_EVERY: Duration = Duration::from_millis(250);
 
 /// Waits for the command to exit, stopping it on a cancel or at its timeout (TERM, then
 /// KILL after the grace period), sampling the load every heartbeat and following its log.
@@ -72,8 +81,33 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     let mut kill_at: Option<Instant> = None;
     let mut killed = false;
     let mut activity = Activity::from_offset(w.log_from);
+    let service = rec.job.service;
+    let ready_timeout = rec.job.ready_timeout.unwrap_or(crate::job::DEFAULT_READY_TIMEOUT);
+    let ready_by = started + Duration::from_secs(ready_timeout);
+    let expires_at = rec.job.ttl.filter(|_| service).and_then(|t| started.checked_add(Duration::from_secs(t)));
+    let mut readiness = super::ready::Readiness::new(rec.job.ready.as_ref(), w.log_from);
+    let mut ready = !service;
+    let mut next_ready_check = started;
     let status = loop {
         let now = Instant::now();
+        if !ready && stopping == Stopping::No && now >= next_ready_check {
+            next_ready_check = now + READY_EVERY;
+            if readiness.check(&rec.job.log) {
+                ready = true;
+                say(&format!("ready after {}", human(started.elapsed())));
+                (w.on_ready)();
+            } else if now >= ready_by {
+                stopping = Stopping::NotReady;
+                say(&format!("not ready within {}; stopping it", human(Duration::from_secs(ready_timeout))));
+            }
+        }
+        if stopping == Stopping::No && expires_at.is_some_and(|t| now >= t) {
+            stopping = Stopping::Expired;
+            say(&format!(
+                "its ttl of {} has passed; stopping it",
+                human(Duration::from_secs(rec.job.ttl.unwrap_or(0)))
+            ));
+        }
         if now >= next_scan {
             next_scan = now + ACTIVITY_EVERY;
             crate::joblog::keep_bounded(&rec.job.log, settings.max_log_bytes);
@@ -99,7 +133,16 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
             killed = true;
         }
         let pending_kill = kill_at.filter(|_| !killed);
-        let wake = [Some(next_scan), Some(next_sample), timeout_at.filter(|_| stopping == Stopping::No), pending_kill];
+        let checking = (!ready && stopping == Stopping::No).then_some(next_ready_check);
+        let expiry = expires_at.filter(|_| stopping == Stopping::No);
+        let wake = [
+            Some(next_scan),
+            Some(next_sample),
+            timeout_at.filter(|_| stopping == Stopping::No),
+            pending_kill,
+            checking,
+            expiry,
+        ];
         let next = wake.into_iter().flatten().min().unwrap_or(now + ACTIVITY_EVERY);
         match w.events.recv_timeout(next.saturating_duration_since(Instant::now())) {
             Ok(RunEvent::Exited(status)) => break status,
@@ -116,8 +159,21 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     samples.extend(process::load_now());
     // A command killed by a signal has no exit code; report it the shell's way, 128 + signal.
     let code = status.map_or(1, |s| s.code().unwrap_or_else(|| 128 + s.signal().unwrap_or(1)));
+    let mut failure_reason = None;
     let (state, exit) = match stopping {
         Stopping::TimedOut => (State::TimedOut, 124),
+        Stopping::NotReady => {
+            failure_reason = Some(format!("not ready within {}", human(Duration::from_secs(ready_timeout))));
+            (State::Failed, if code == 0 { 1 } else { code })
+        }
+        Stopping::Expired => {
+            failure_reason = Some("stopped: its ttl passed".to_string());
+            (State::Cancelled, if code == 0 { 128 + libc::SIGTERM } else { code })
+        }
+        Stopping::No if service && !ready => {
+            failure_reason = Some("it exited before it was ready".to_string());
+            (State::Failed, if code == 0 { 1 } else { code })
+        }
         // A command that traps TERM and exits 0 was still cancelled: never report success.
         Stopping::Cancelled => (State::Cancelled, if code == 0 { 128 + libc::SIGTERM } else { code }),
         Stopping::No if code == 0 => (State::Succeeded, 0),
@@ -128,7 +184,7 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
         exit,
         duration: started.elapsed(),
         load_samples: samples,
-        failure_reason: None,
+        failure_reason,
         error_line: None,
         notes: activity.notes().to_vec(),
     }

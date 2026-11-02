@@ -223,6 +223,10 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         dispatched_from: Some(me.to_string()),
         dispatch_id: Some(rec.run_id.to_string()),
         slots_hint: Some(granted.max(1)),
+        service: false,
+        ready: None,
+        ready_timeout: None,
+        ttl: None,
     }
 }
 

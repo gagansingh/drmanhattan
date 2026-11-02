@@ -13,6 +13,7 @@
 mod error_line;
 mod fail_patterns;
 mod guard;
+mod ready;
 mod remote;
 mod supervise;
 
@@ -93,6 +94,7 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
     };
     let (now, run_id) = (Timestamp::now().local_time(), &rec.run_id);
     say(&match phase {
+        Phase::Run if rec.job.service => format!("{} started as a service at {now} · run {run_id}", rec.job.label),
         Phase::Run => format!("{} started in slot {} at {now} · run {run_id}", rec.job.label, rec.slot.unwrap_or(0)),
         Phase::Prepare => format!("preparing {} at {now} · run {run_id}", rec.job.label),
     });
@@ -132,6 +134,7 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         paths: &paths,
         settings: &settings,
         log_from,
+        on_ready: &|| mark_ready(shared, &rec),
     };
     let mut outcome = supervise(&watch, pgid, &say);
     completion.process_group = None; // supervise ended the group
@@ -153,6 +156,16 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         Phase::Run => completion.complete(&rec, &outcome),
         Phase::Prepare => completion.prepared(&rec, &outcome),
     }
+}
+
+/// Records that a service is ready.
+fn mark_ready(shared: &Shared, rec: &Record) {
+    let mut q = queue::lock(shared);
+    if let Some(e) = q.runs.get_mut(&rec.run_id) {
+        e.rec.ready_at = Some(Timestamp::now());
+    }
+    q.persist(&rec.run_id);
+    log::event(Tone::Good, "ready", &rec.job.label, Some(&rec.run_id), &[]);
 }
 
 /// Fails a run that exited 0 when its log matches one of the job's `fail_patterns`: exit
@@ -331,6 +344,7 @@ impl Completion<'_> {
         let exit = if exit == 0 { String::new() } else { format!("exit {exit}") };
         let word = state.as_str().replace('_', " ");
         log::event(tone, &word, &label, Some(self.run_id), &[human(duration), exit, why.unwrap_or_default()]);
+        q.restart_if_asked(self.run_id);
     }
 }
 

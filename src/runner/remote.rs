@@ -147,6 +147,7 @@ pub(super) fn run(shared: &Shared, admitted: Admitted) {
         paths: &paths,
         settings: &settings,
         log_from: remote.log_base,
+        on_ready: &|| {},
     };
     let outcome = follow(&worker, &rec, &remote, &watch, &exit_sender);
     if outcome.state == State::Failed && outcome.failure_reason.as_deref().is_some_and(|r| r.starts_with("worker lost"))

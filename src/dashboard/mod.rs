@@ -79,7 +79,7 @@ fn handle(req: Request, ctx: &Ctx) {
         (Method::Get, "/") => http::respond(req, 200, PAGE, "text/html; charset=utf-8"),
         (Method::Get, "/api/state") => http::json(req, 200, &state::build(ctx)),
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
-        (Method::Post, "/api/queue-order" | "/api/capacity") => {
+        (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service") => {
             let path = path.to_string();
             post::handle(req, &path, ctx);
         }

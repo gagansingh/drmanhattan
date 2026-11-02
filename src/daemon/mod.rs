@@ -156,6 +156,7 @@ fn run_loop(shared: &Shared, mut scheduler: Scheduler, settings: &Settings, wake
         if signals == 1 && stopping.is_none() {
             stopping = Some(Instant::now());
             shutdown::announce(shared, settings);
+            shutdown::stop_services(shared);
         }
         for admitted in scheduler.pass(shared, stopping.is_none()) {
             start_runner(shared, admitted);

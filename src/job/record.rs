@@ -152,6 +152,9 @@ pub(crate) struct Record {
     /// Once handed to a worker: where it is there.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) remote_run: Option<RemoteRun>,
+    /// A service: when it became ready.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) ready_at: Option<Timestamp>,
     /// Why a worker could not take it: it runs here from then on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) remote_fallback: Option<String>,
@@ -200,6 +203,7 @@ impl Record {
             machine: None,
             remote_run: None,
             remote_fallback: None,
+            ready_at: None,
             job,
         }
     }

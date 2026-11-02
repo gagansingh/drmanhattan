@@ -27,8 +27,11 @@ pub(super) fn signals() -> usize {
 pub(super) fn announce(shared: &Shared, settings: &Settings) {
     let (running, queued) = {
         let q = queue::lock(shared);
-        let running: Vec<String> =
-            q.records(State::Running).filter(|r| r.machine.is_none()).map(|r| r.job.label.clone()).collect();
+        let running: Vec<String> = q
+            .records(State::Running)
+            .filter(|r| r.machine.is_none() && !r.job.service)
+            .map(|r| r.job.label.clone())
+            .collect();
         (running, q.count(State::Queued))
     };
     let waiting = if running.is_empty() {
@@ -50,6 +53,21 @@ pub(super) fn announce(shared: &Shared, settings: &Settings) {
     let parts: Vec<String> =
         ["no new jobs will start".into(), waiting, staying, again].into_iter().filter(|p| !p.is_empty()).collect();
     log::notice(Tone::Warning, "stopping", parts.join(" · "));
+}
+
+/// Stops every service at once: a service never finishes, so it is not waited for. Queued
+/// ones go too; nothing would start them.
+pub(super) fn stop_services(shared: &Shared) {
+    let mut q = queue::lock(shared);
+    let ids: Vec<RunId> = q
+        .runs
+        .values()
+        .filter(|e| e.rec.job.service && !e.rec.state.is_terminal())
+        .map(|e| e.rec.run_id.clone())
+        .collect();
+    for run_id in &ids {
+        q.cancel(run_id);
+    }
 }
 
 /// Cancels every running job and waits until each has recorded how it ended.

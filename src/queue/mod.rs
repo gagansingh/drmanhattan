@@ -68,6 +68,8 @@ pub(crate) struct Entry {
     pub(crate) rec: Record,
     /// Some while it runs.
     pub(crate) live: Option<Live>,
+    /// Queue the same job again once this run has ended (a service's restart).
+    pub(crate) restart: bool,
 }
 
 pub(crate) struct Queue {
@@ -155,7 +157,7 @@ impl Queue {
         log::event(Tone::Quiet, "queued", &job.label, Some(&run_id), &details);
         let group = job.group.clone();
         let rec = Record::new(run_id.clone(), job, expected, skip_after);
-        self.runs.insert(run_id.clone(), Entry { rec, live: None });
+        self.runs.insert(run_id.clone(), Entry { rec, live: None, restart: false });
         self.persist(&run_id);
         if let Some(group) = group {
             self.supersede_in_group(&group, &run_id);
@@ -226,6 +228,31 @@ impl Queue {
             }
             _ => {}
         }
+    }
+
+    /// Stops a run and queues its job again once it has ended: a service's restart.
+    pub(crate) fn restart(&mut self, run_id: &RunId) {
+        let Some(e) = self.runs.get_mut(run_id) else { return };
+        if e.rec.state.is_terminal() {
+            return;
+        }
+        e.restart = true;
+        self.cancel(run_id);
+        // A run cancelled before it started has ended already.
+        self.restart_if_asked(run_id);
+    }
+
+    /// Queues an ended run's job again if a restart was asked for.
+    pub(crate) fn restart_if_asked(&mut self, run_id: &RunId) {
+        let Some(e) = self.runs.get_mut(run_id) else { return };
+        if !e.restart || !e.rec.state.is_terminal() {
+            return;
+        }
+        e.restart = false;
+        let job = e.rec.job.clone();
+        // The new run's results replace these; its .exit must not read as already written.
+        let _ = crate::fsutil::remove_if_present(&job.files().exit());
+        self.enqueue(job);
     }
 
     /// Records a run that was admitted but whose runner could not be started.

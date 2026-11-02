@@ -123,7 +123,7 @@ impl Queue {
                 }
                 _ => done.finished += 1,
             }
-            self.runs.insert(rec.run_id.clone(), Entry { rec, live: None });
+            self.runs.insert(rec.run_id.clone(), Entry { rec, live: None, restart: false });
         }
         done.exits_rewritten = self.rewrite_missing_exits();
         done.reclaimed = self.reclaim_orphaned_job_files();
