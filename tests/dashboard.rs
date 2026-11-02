@@ -165,3 +165,41 @@ fn other_hosts_are_refused_and_the_page_cannot_be_framed() {
     assert_eq!(code, 200);
     assert!(head.contains("X-Frame-Options: DENY") && head.contains("frame-ancestors 'none'"), "{head}");
 }
+
+#[test]
+fn commands_are_formatted_by_the_page_from_their_argv() {
+    let d = Daemon::start(&[]);
+    let (_, page) = d.get("/");
+    for needed in ["function commandHtml(", "const cmdJoin = ", "// <command-format>", "// </command-format>"] {
+        assert!(page.contains(needed), "the page lacks {needed}");
+    }
+    // A run whose command has quotes, `&&` and a `--` wrapper still renders: the page gets its
+    // argv untouched, and the log line it colours is the runner's quoting of that argv.
+    let script = "echo 'a b' && true";
+    let argv = json!(["bash", d.work.join("wrap.sh"), "--phase", "run", "--", "sh", "-c", script]);
+    fs::write(d.work.join("wrap.sh"), "while [ \"$1\" != -- ]; do shift; done; shift; exec \"$@\"\n").unwrap();
+    d.submit("wrapped", json!({"command": argv, "cwd": d.work, "prepare": ["true"]}));
+    assert_eq!(d.wait_exit("wrapped", T), 0);
+    let state = d.api_state();
+    let run = &state["done"][0];
+    assert_eq!(run["command"], argv);
+    assert_eq!(run["prepare_command"], json!(["true"]));
+    assert!(state["home"].as_str().is_some_and(|h| !h.is_empty()));
+    let log = d.log_of("wrapped");
+    assert!(log.contains("drmanhattan · in ") && log.contains("-- sh -c 'echo '\\''a b'\\'' && true'"), "{log}");
+    assert!(log.contains("a b\n"), "{log}");
+
+    // The formatter's own cases, run with node where there is one.
+    let Ok(node) = std::process::Command::new("node").arg("--version").output() else { return };
+    if !node.status.success() {
+        return;
+    }
+    let esc = page.lines().skip_while(|l| !l.starts_with("const esc =")).take(2).collect::<Vec<_>>().join("\n");
+    let start = page.find("// <command-format>").unwrap();
+    let end = page.find("// </command-format>").unwrap();
+    let cases = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/command_format.js")).unwrap();
+    let program = format!("{esc}\n{}\n{cases}", &page[start..end]);
+    let out = std::process::Command::new("node").arg("-e").arg(program).output().unwrap();
+    let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+    assert!(out.status.success() && said.starts_with("ok "), "{said}");
+}

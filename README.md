@@ -49,7 +49,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.2.3 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.2.4 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70
@@ -342,6 +342,11 @@ for start and done, `text` for a note).
 slot's job with a progress bar against its usual time, the waiting jobs with estimated start
 times, recent results with their logs, and the machine's CPU, memory and temperature. The −
 and + buttons change the number of slots for four hours; drag a waiting job to reorder it.
+
+Commands are shown as a person reads them: the program and its subcommand stand out, wrappers
+(`env`, `xcrun`, `nice`, `time`, a script that runs `-- <command>`) are dimmed or folded into a
+`via` tag, the job's folder is `.` and the home folder `~`, and flags, settings, quoted strings and
+shell operators each have a colour; hover a job's name to see its command.
 
 ## Uses
 
