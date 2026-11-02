@@ -51,7 +51,7 @@ impl Queue {
             let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
             let (control, events) = mpsc::channel();
             let activity = Arc::new(Mutex::new(Activity::default()));
-            entry.live = Some(Live { control: control.clone(), activity: activity.clone() });
+            entry.live = Some(Live { control: control.clone(), activity: activity.clone(), cancel_requested: false });
             let rec = &mut entry.rec;
             rec.state = State::Running;
             rec.slot = Some(slot);
@@ -96,7 +96,7 @@ impl Queue {
             prepare.started_at = Some(Timestamp::now());
             let (control, events) = mpsc::channel();
             let activity = Arc::new(Mutex::new(Activity::default()));
-            entry.live = Some(Live { control: control.clone(), activity: activity.clone() });
+            entry.live = Some(Live { control: control.clone(), activity: activity.clone(), cancel_requested: false });
             let record = entry.rec.clone();
             log::event(Tone::Quiet, "preparing", &record.job.label, Some(&record.run_id), &[]);
             self.persist(&next.run_id);
@@ -150,7 +150,7 @@ impl Queue {
             let Some(entry) = self.runs.get_mut(&run_id) else { continue };
             let (control, events) = mpsc::channel();
             let activity = Arc::new(Mutex::new(Activity::default()));
-            entry.live = Some(Live { control: control.clone(), activity: activity.clone() });
+            entry.live = Some(Live { control: control.clone(), activity: activity.clone(), cancel_requested: false });
             started.push(Admitted {
                 record: entry.rec.clone(),
                 events,

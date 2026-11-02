@@ -108,3 +108,24 @@ fn a_prepare_cut_short_by_the_daemon_dying_runs_again() {
     assert_eq!(d.wait_exit("job", T), 0);
     assert_eq!(fs::read_to_string(&count).unwrap().lines().count(), 2, "it prepared again");
 }
+
+#[test]
+fn a_cancel_as_the_prepare_command_ends_still_cancels_the_run() {
+    let d = Daemon::start(&[]);
+    // Many tries at the moment between the prepare command's exit and its record. A run
+    // may only succeed if it had finished before its cancel was asked for.
+    for i in 0..30 {
+        let name = format!("race{i}");
+        d.submit(&name, json!({"command": "true", "cwd": d.work, "prepare": "true"}));
+        std::thread::sleep(Duration::from_millis(100 + (i % 10) * 3));
+        let asked = chrono::Utc::now().timestamp_millis() as f64 / 1000.0;
+        fs::write(d.inbox.join(format!("{name}.cancel")), "").unwrap();
+        let code = d.wait_exit(&name, T);
+        let s = d.status_of(&name).unwrap();
+        if code == 0 {
+            assert!(common::epoch(&s["finished_at"]) <= asked + 0.05, "{name} ran after its cancel: {s}");
+        } else {
+            assert_eq!((code, s["state"].as_str()), (130, Some("cancelled")), "{name}: {s}");
+        }
+    }
+}

@@ -58,6 +58,9 @@ pub(crate) enum RunEvent {
 pub(crate) struct Live {
     pub(crate) control: Sender<RunEvent>,
     pub(crate) activity: Arc<Mutex<Activity>>,
+    /// A cancel was asked for. Its runner may have stopped listening (a prepare command
+    /// that just ended), so it also checks this before going on.
+    pub(crate) cancel_requested: bool,
 }
 
 /// One run as the daemon holds it.
@@ -202,7 +205,8 @@ impl Queue {
         match e.rec.state {
             // Preparing: its prepare thread stops the command and records the cancel.
             State::Queued if e.live.is_some() => {
-                if let Some(live) = &e.live {
+                if let Some(live) = e.live.as_mut() {
+                    live.cancel_requested = true;
                     let _ = live.control.send(RunEvent::Cancel);
                 }
                 log::event(Tone::Warning, "cancel", &e.rec.job.label, Some(run_id), &["stopping its prepare".into()]);
