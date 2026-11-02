@@ -5,7 +5,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 
 use crate::activity::{Activity, Patterns};
-use crate::job::{Record, State};
+use crate::job::{PrepareState, Record, State};
 use crate::log::{self, Tone};
 use crate::process;
 use crate::queue::{rank, Live, Queue, RunEvent};
@@ -35,6 +35,9 @@ impl Queue {
             if self.count(State::Running) >= capacity as usize {
                 break;
             }
+            if !self.runs.get(&next.run_id).is_some_and(|e| e.rec.is_ready()) {
+                continue; // still preparing
+            }
             let slot = self.free_slot();
             let default_patterns = self.default_patterns.clone();
             let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
@@ -53,6 +56,37 @@ impl Queue {
             admitted.push(Admitted { record, events, exit_sender: control, activity, default_patterns });
         }
         admitted
+    }
+
+    /// Starts the `prepare` commands of waiting runs, best-ranked first, while fewer than
+    /// `limit` prepare at once. The caller starts a thread for each (`runner::run_prepare`).
+    pub(crate) fn start_prepares(&mut self, limit: usize, manual: &ManualOrder) -> Vec<Admitted> {
+        let preparing = |q: &Queue| {
+            q.records(State::Queued)
+                .filter(|r| r.prepare_status.as_ref().is_some_and(|p| p.state == PrepareState::Running))
+                .count()
+        };
+        let mut started = Vec::new();
+        for next in rank(self.records(State::Queued), manual, Timestamp::now()) {
+            if preparing(self) >= limit {
+                break;
+            }
+            let default_patterns = self.default_patterns.clone();
+            let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
+            let Some(prepare) = entry.rec.prepare_status.as_mut().filter(|p| p.state == PrepareState::Pending) else {
+                continue;
+            };
+            prepare.state = PrepareState::Running;
+            prepare.started_at = Some(Timestamp::now());
+            let (control, events) = mpsc::channel();
+            let activity = Arc::new(Mutex::new(Activity::default()));
+            entry.live = Some(Live { control: control.clone(), activity: activity.clone() });
+            let record = entry.rec.clone();
+            log::event(Tone::Quiet, "preparing", &record.job.label, Some(&record.run_id), &[]);
+            self.persist(&next.run_id);
+            started.push(Admitted { record, events, exit_sender: control, activity, default_patterns });
+        }
+        started
     }
 
     /// The lowest slot number no running run holds.

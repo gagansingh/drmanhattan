@@ -22,5 +22,5 @@ mod scan;
 mod typicals;
 
 pub(crate) use patterns::{PatternConfig, Patterns};
-pub(crate) use scan::{Activity, ActivityView, OWN_LINE_PREFIX};
+pub(crate) use scan::{Activity, ActivityView, MAX_NOTES, OWN_LINE_PREFIX};
 pub(crate) use typicals::{append as append_steps, StepRow, Typicals};

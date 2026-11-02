@@ -48,6 +48,41 @@ impl std::fmt::Display for State {
     }
 }
 
+/// Where a job's `prepare` command is.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PrepareState {
+    /// Waiting for a turn to start.
+    Pending,
+    Running,
+    Succeeded,
+    /// It failed, timed out or was cancelled, and so did the run.
+    Failed,
+}
+
+impl PrepareState {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            PrepareState::Pending => "pending",
+            PrepareState::Running => "running",
+            PrepareState::Succeeded => "succeeded",
+            PrepareState::Failed => "failed",
+        }
+    }
+}
+
+/// The run's `prepare` command, which runs while the run is queued.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct Prepare {
+    pub(crate) state: PrepareState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) finished_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) exit_status: Option<i32>,
+}
+
 /// The machine's load average while a run ran: sampled at its start, every heartbeat, and
 /// at its end.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq)]
@@ -104,6 +139,10 @@ pub(crate) struct Record {
     /// The `::note` badges its log printed.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) notes: Vec<String>,
+    /// For a job with a `prepare` command: how that is going. While it runs, the record's
+    /// `process_group` is the prepare command's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prepare_status: Option<Prepare>,
 }
 
 impl Record {
@@ -111,7 +150,6 @@ impl Record {
         Record {
             run_id,
             state: State::Queued,
-            job,
             daemon_pid: std::process::id(),
             queued_at: Timestamp::now(),
             expected_seconds,
@@ -126,6 +164,13 @@ impl Record {
             load_at_start: None,
             load: None,
             notes: Vec::new(),
+            prepare_status: job.prepare.is_some().then_some(Prepare {
+                state: PrepareState::Pending,
+                started_at: None,
+                finished_at: None,
+                exit_status: None,
+            }),
+            job,
         }
     }
 
@@ -145,6 +190,11 @@ impl Record {
             State::Cancelled => 130,
             _ => 1,
         })
+    }
+
+    /// Queued, and its `prepare` (if it has one) has succeeded: it may take a slot.
+    pub(crate) fn is_ready(&self) -> bool {
+        self.state == State::Queued && self.prepare_status.as_ref().map_or(true, |p| p.state == PrepareState::Succeeded)
     }
 
     /// When the run finished, or the latest thing that happened to it.
@@ -182,8 +232,10 @@ mod tests {
     fn a_record_round_trips_through_its_file() {
         let inbox = std::env::temp_dir();
         let files = JobFiles::new(&inbox, "round-trip");
-        let job =
-            JobSpec::parse(r#"{"command": ["true"], "env": {"A": "1"}}"#).unwrap().resolve(&files, &inbox).unwrap();
+        let job = JobSpec::parse(r#"{"command": ["true"], "env": {"A": "1"}, "prepare": "make deps"}"#)
+            .unwrap()
+            .resolve(&files, &inbox)
+            .unwrap();
         std::fs::write(files.claimed(), "{}").unwrap();
         let job = Job { claim: crate::fsutil::file_id(&files.claimed()), ..job };
         let mut rec = Record::new(RunId::new(), job, Some(5), 600);
@@ -192,6 +244,7 @@ mod tests {
         let back: Record = serde_json::from_str(&text).unwrap();
         assert_eq!(back.job, rec.job);
         assert_eq!((&back.run_id, back.load), (&rec.run_id, rec.load));
+        assert_eq!(back.prepare_status, rec.prepare_status, "the job's prepare and the run's status do not collide");
         assert!(serde_json::to_string(&rec.public()).unwrap().find("\"env\"").is_none());
         let _ = std::fs::remove_file(files.claimed());
     }

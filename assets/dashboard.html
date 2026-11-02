@@ -644,7 +644,11 @@ function queuedRow(run, i, d) {
       + `<button class="move" data-action="up" data-id="${id}" ${first ? 'disabled' : ''} title="Move up" aria-label="Move ${label} up">↑</button>`
       + `<button class="move" data-action="down" data-id="${id}" ${last ? 'disabled' : ''} title="Move down" aria-label="Move ${label} down">↓</button>`
     : `<span class="grip fixed" aria-hidden="true">⠿</span><span class="n">${i + 1}</span>`;
-  const extra = (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
+  const preparing = { pending: ['prepare waits', 'Its prepare command runs before it can take a slot'],
+    running: ['preparing', 'Its prepare command is running; it can take a slot once that succeeds'],
+    succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
+  const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
+    + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (d.manual_order && !run.manual && !run.priority ? '<span class="note" title="Queued after you reordered: follows the jobs you placed, shortest first">new</span>' : '');
   const range = usualRange(run);
   const expected = run.typical_seconds ? `<span class="num" title="${esc(range)}">~${duration(run.typical_seconds)}</span>` : nothing('no estimate', range);

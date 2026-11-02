@@ -147,7 +147,11 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         .map(|(rec, est, activity)| {
             let mut view = ahead(rec, est);
             let activity = crate::sync::lock(activity).clone();
-            view.notes = activity.notes().to_vec();
+            for note in activity.notes() {
+                if !view.notes.contains(note) {
+                    view.notes.push(note.clone());
+                }
+            }
             view.activity = activity.view(&crate::sync::lock(&snap.typicals));
             view
         })

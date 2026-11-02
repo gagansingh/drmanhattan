@@ -1,6 +1,7 @@
 //! Start-up: picking up what the previous daemon left.
 //!
-//! - Queued runs go back in the queue.
+//! - Queued runs go back in the queue; one that was running its `prepare` command runs it
+//!   again.
 //! - Runs that were running are recorded abandoned (nothing is watching them any more). Their
 //!   processes were normally ended when the daemon died, by the guard beside each run
 //!   (`runner::guard`); if a guard died too, what is left is terminated here.
@@ -18,7 +19,7 @@ use std::fs;
 use std::time::Duration;
 
 use crate::fsutil;
-use crate::job::{FileStatus, JobFiles, Record, State};
+use crate::job::{FileStatus, JobFiles, PrepareState, Record, State};
 use crate::log;
 use crate::process;
 use crate::queue::persist::{read_records, write_results};
@@ -96,6 +97,7 @@ impl Queue {
                     done.requeued += 1;
                     rec.daemon_pid = std::process::id();
                     rec.slot = None;
+                    self.restart_prepare(&mut rec, died_by);
                     write_results(&self.paths, &rec);
                 }
                 State::Running => {
@@ -110,6 +112,18 @@ impl Queue {
         done.exits_rewritten = self.rewrite_missing_exits();
         done.reclaimed = self.reclaim_orphaned_job_files();
         done
+    }
+
+    /// A run that was preparing when the daemon stopped prepares again: what its command
+    /// left behind is ended, as for a running run.
+    fn restart_prepare(&self, rec: &mut Record, died_by: Option<Timestamp>) {
+        let Some(prepare) = rec.prepare_status.as_mut().filter(|p| p.state == PrepareState::Running) else { return };
+        if let (Some(pgid), Some(started)) = (rec.process_group, prepare.started_at) {
+            self.end_leftovers(pgid, started, died_by, &rec.job.label);
+        }
+        prepare.state = PrepareState::Pending;
+        prepare.started_at = None;
+        rec.process_group = None;
     }
 
     /// The latest the previous daemon can have died: its last heartbeat, plus the interval.

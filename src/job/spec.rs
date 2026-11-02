@@ -47,6 +47,10 @@ pub(crate) struct JobSpec {
     /// matches one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) fail_patterns: Vec<String>,
+    /// A command run while the job waits, outside any slot; the job runs only once it has
+    /// succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prepare: Option<CommandSpec>,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -104,6 +108,8 @@ pub(crate) struct Job {
     pub(crate) env: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) fail_patterns: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) prepare: Option<Vec<String>>,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -138,11 +144,8 @@ impl JobSpec {
     /// Checks the spec and applies defaults. `files` are the claimed job's files; a relative
     /// `cwd` (and a missing one) resolves against `inbox`.
     pub(crate) fn resolve(self, files: &JobFiles, inbox: &Path) -> Result<Job> {
-        let command = match self.command {
-            CommandSpec::Shell(s) if !s.trim().is_empty() => vec!["/bin/sh".into(), "-c".into(), s],
-            CommandSpec::Argv(argv) if !argv.is_empty() && !argv[0].is_empty() => argv,
-            _ => return invalid("command must not be empty"),
-        };
+        let command = argv("command", self.command)?;
+        let prepare = self.prepare.map(|p| argv("prepare", p)).transpose()?;
         let cwd = resolve_cwd(self.cwd.as_deref(), inbox)?;
         let timeout = match self.timeout {
             // A fraction rounds up, so 0.5 allows one second rather than none.
@@ -173,8 +176,18 @@ impl JobSpec {
             activity: self.activity,
             env: self.env,
             fail_patterns: self.fail_patterns,
+            prepare,
             claim: None,
         })
+    }
+}
+
+/// A command as the argv it runs: a string runs with `/bin/sh -c`.
+fn argv(field: &str, command: CommandSpec) -> Result<Vec<String>> {
+    match command {
+        CommandSpec::Shell(s) if !s.trim().is_empty() => Ok(vec!["/bin/sh".into(), "-c".into(), s]),
+        CommandSpec::Argv(argv) if !argv.is_empty() && !argv[0].is_empty() => Ok(argv),
+        _ => invalid(format!("{field} must not be empty")),
     }
 }
 
@@ -249,6 +262,8 @@ mod tests {
         assert_eq!(shell.command, ["/bin/sh", "-c", "make"]);
         assert_eq!(shell.timeout, Some(1), "a fraction of a second rounds up, never to 0");
         assert!(shell.priority);
+        let prep = resolve(r#"{"command": ["make"], "prepare": "make deps"}"#).unwrap();
+        assert_eq!(prep.prepare.unwrap(), ["/bin/sh", "-c", "make deps"]);
         let rel = resolve(r#"{"command": ["true"], "cwd": "."}"#).unwrap();
         assert_eq!(rel.cwd, std::env::temp_dir().canonicalize().unwrap(), "a relative cwd is the inbox's");
     }
@@ -286,6 +301,8 @@ mod tests {
             (r#"{"command": ["true"], "fail_patterns": ["ok", "("]}"#, "fail_patterns[1] is not a valid regex"),
             (r#"{"command": ["true"], "fail_patterns": [""]}"#, "fail_patterns[0] is empty"),
             (r#"{"command": ["true"], "fail_patterns": "x"}"#, "invalid type"),
+            (r#"{"command": ["true"], "prepare": []}"#, "prepare must not be empty"),
+            (r#"{"command": ["true"], "prepare": 3}"#, "command must be a string"),
         ] {
             let e = resolve(job).unwrap_err().to_string();
             assert!(e.contains(message), "{job}: {e}");
@@ -307,6 +324,7 @@ mod tests {
             session: None,
             activity: None,
             fail_patterns: Vec::new(),
+            prepare: None,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

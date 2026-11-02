@@ -86,6 +86,15 @@ fn cut(log: &Path, size: u64, limit: u64) {
     });
 }
 
+/// How many bytes of output the log holds now, counting any a cut dropped: where a reader
+/// that wants only what comes next starts.
+pub(crate) fn output_len(log: &Path) -> u64 {
+    let Ok(mut f) = File::open(log) else { return 0 };
+    let size = f.metadata().map_or(0, |m| m.len());
+    let cut = Cut::of(&mut f).unwrap_or_default();
+    cut.dropped + size.saturating_sub(cut.note)
+}
+
 /// What a read of the log gained.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Gained {

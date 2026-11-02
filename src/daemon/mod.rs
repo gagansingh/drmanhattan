@@ -189,9 +189,14 @@ fn run_loop(shared: &Shared, mut scheduler: Scheduler, settings: &Settings, wake
 fn start_runner(shared: &Shared, admitted: queue::Admitted) {
     let run_id = admitted.record.run_id.clone();
     let thread_shared = shared.clone();
-    let spawned = std::thread::Builder::new()
-        .name(format!("run-{run_id}"))
-        .spawn(move || runner::run_job(&thread_shared, admitted));
+    let preparing = admitted.record.state == State::Queued;
+    let spawned = std::thread::Builder::new().name(format!("run-{run_id}")).spawn(move || {
+        if preparing {
+            runner::run_prepare(&thread_shared, admitted)
+        } else {
+            runner::run_job(&thread_shared, admitted)
+        }
+    });
     if let Err(e) = spawned {
         queue::lock(shared).fail_to_start(&run_id, &format!("could not start a thread to run it: {e}"));
     }

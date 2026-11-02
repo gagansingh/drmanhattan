@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use crate::activity::ActivityView;
 use crate::estimate::Estimate;
-use crate::job::{Record, RunId, State};
+use crate::job::{PrepareState, Record, RunId, State};
 use crate::naming::short_path;
 use crate::sources::{self, Sessions, SourceView};
 use crate::time::Timestamp;
@@ -39,6 +39,8 @@ pub(super) struct RunView {
     load_max: Option<f64>,
     /// `::note` badges: the record's once it has finished, else what its log says so far.
     pub(super) notes: Vec<String>,
+    /// Where its `prepare` command is, for a job that has one.
+    prepare: Option<PrepareState>,
     timeout: Option<u64>,
     typical_seconds: Option<u64>,
     typical_p90: Option<u64>,
@@ -126,6 +128,7 @@ impl RunView {
             load_avg: rec.load.map(|l| l.average),
             load_max: rec.load.map(|l| l.peak),
             notes: rec.notes.clone(),
+            prepare: rec.prepare_status.as_ref().map(|p| p.state),
             timeout: job.timeout,
             typical_seconds: est.p50,
             typical_p90: est.p90,

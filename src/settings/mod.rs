@@ -40,6 +40,8 @@ pub(crate) struct Settings {
     /// daemon publishes its own in `dashboard.json`, so that other commands report the
     /// capacity the daemon uses rather than their own environment's.
     pub(crate) slots_env: Option<String>,
+    /// The most `prepare` commands run at once.
+    pub(crate) max_prepares: usize,
 }
 
 const DAY: u64 = 86_400;
@@ -66,6 +68,12 @@ impl Settings {
                 &format!("an integer from 1 to {MAX_SLOTS}"),
             )?,
             slots_env: std::env::var("DRMANHATTAN_SLOTS").ok(),
+            max_prepares: env_or(
+                "DRMANHATTAN_MAX_PREPARES",
+                4,
+                |v| (1..=64).contains(v),
+                "a whole number from 1 to 64",
+            )?,
             max_log_bytes: env_or(
                 "DRMANHATTAN_MAX_LOG_MB",
                 1024,

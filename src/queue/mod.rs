@@ -171,6 +171,13 @@ impl Queue {
     pub(crate) fn cancel(&mut self, run_id: &RunId) {
         let Some(e) = self.runs.get_mut(run_id) else { return };
         match e.rec.state {
+            // Preparing: its prepare thread stops the command and records the cancel.
+            State::Queued if e.live.is_some() => {
+                if let Some(live) = &e.live {
+                    let _ = live.control.send(RunEvent::Cancel);
+                }
+                log::event(Tone::Warning, "cancel", &e.rec.job.label, Some(run_id), &["stopping its prepare".into()]);
+            }
             State::Queued => {
                 e.rec.state = State::Cancelled;
                 e.rec.finished_at = Some(Timestamp::now());
