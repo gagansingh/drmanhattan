@@ -19,15 +19,19 @@ use crate::time::{format_elapsed, Timestamp};
 
 const STATUS: Spec = Spec {
     usage: "\
-usage: drmanhattan status [--json]
+usage: drmanhattan status [<run>] [--json] [--inbox DIR]
 
 Shows the queue: whether the daemon is running, the slots in use, and the waiting jobs in
 the order they will start. Text output is one `key=value` line per item (values with
 spaces are quoted); --json prints the same as one JSON document.
+
+With <run> (a run id, its short id, or a job's name), shows that run instead: one line
+run_id=… state=… job=… exit=…, or with --json its whole record as .status.json has it,
+plus `state` (also `submitted` for a job file not yet picked up) and `exit` once it is over.
 ",
-    values: &[],
+    values: &["inbox"],
     switches: &["json"],
-    positional: 0,
+    positional: 1,
 };
 
 #[derive(Serialize)]
@@ -86,6 +90,9 @@ struct WaiterDoc<'a> {
 
 pub(super) fn status(rest: &[String]) -> Result<i32> {
     let Some(a) = args::parse(&STATUS, rest)? else { return Ok(0) };
+    if let Some(run) = a.positional.first() {
+        return super::runs::status_of(&a, run);
+    }
     let paths = Paths::from_env();
     let records = read_records(&paths);
     let doc = build(&paths, &records)?;
