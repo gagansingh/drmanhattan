@@ -43,6 +43,10 @@ pub(crate) struct JobSpec {
     pub(crate) session: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) activity: Option<PatternConfig>,
+    /// Regular expressions that fail a run whose command exited 0, when a line of its log
+    /// matches one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fail_patterns: Vec<String>,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -98,6 +102,8 @@ pub(crate) struct Job {
     pub(crate) activity: Option<PatternConfig>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) fail_patterns: Vec<String>,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -152,6 +158,7 @@ impl JobSpec {
         if let Some(cfg) = &self.activity {
             Patterns::compile(cfg)?; // a bad regex is reported now, not when the job runs
         }
+        compile_fail_patterns(&self.fail_patterns)?;
         Ok(Job {
             label: text_field("label", self.label)?.unwrap_or_else(|| files.name().to_string()),
             category: text_field("category", self.category)?.unwrap_or_else(|| naming::derive_category(&command)),
@@ -165,9 +172,28 @@ impl JobSpec {
             timeout,
             activity: self.activity,
             env: self.env,
+            fail_patterns: self.fail_patterns,
             claim: None,
         })
     }
+}
+
+/// The most `fail_patterns` a job may give.
+const MAX_FAIL_PATTERNS: usize = 32;
+
+/// Compiles a job's `fail_patterns`; a pattern that does not compile is an error naming it.
+pub(crate) fn compile_fail_patterns(patterns: &[String]) -> Result<Vec<regex::Regex>> {
+    if patterns.len() > MAX_FAIL_PATTERNS {
+        return invalid(format!("fail_patterns may hold at most {MAX_FAIL_PATTERNS} patterns"));
+    }
+    patterns
+        .iter()
+        .enumerate()
+        .map(|(i, p)| match p.as_str() {
+            "" => invalid(format!("fail_patterns[{i}] is empty")),
+            p => regex::Regex::new(p).or_else(|e| invalid(format!("fail_patterns[{i}] is not a valid regex: {e}"))),
+        })
+        .collect()
 }
 
 /// The working directory: absolute, `~/…`, or relative to the inbox; it must exist.
@@ -257,6 +283,9 @@ mod tests {
             (r#"{"command": ["true"], "source": 5}"#, "source must be"),
             (r#"{"command": ["true"], "cwd": "/no/such/dir"}"#, "cwd does not exist"),
             (r#"{"command": ["true"], "activity": {"step": "("}}"#, "activity.step"),
+            (r#"{"command": ["true"], "fail_patterns": ["ok", "("]}"#, "fail_patterns[1] is not a valid regex"),
+            (r#"{"command": ["true"], "fail_patterns": [""]}"#, "fail_patterns[0] is empty"),
+            (r#"{"command": ["true"], "fail_patterns": "x"}"#, "invalid type"),
         ] {
             let e = resolve(job).unwrap_err().to_string();
             assert!(e.contains(message), "{job}: {e}");
@@ -277,6 +306,7 @@ mod tests {
             source: Some(SourceSpec::Tool("Codex".into())),
             session: None,
             activity: None,
+            fail_patterns: Vec::new(),
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

@@ -332,3 +332,22 @@ fn a_runaway_log_is_cut_back_and_the_daemon_keeps_its_own_log() {
     let own = fs::read_to_string(d.data.join("drmanhattan.log")).unwrap();
     assert!(own.contains("succeeded") && own.contains("noisy") && !own.contains('\x1b'), "{own}");
 }
+
+#[test]
+fn fail_patterns_fail_a_run_that_exited_0() {
+    let d = Daemon::start(&[]);
+    let patterns = json!([r"^Skipped \d+ suites?", "^never$"]);
+    d.submit("skips", json!({"command": "echo building; echo 'Skipped 2 suites: no database'; exit 0", "cwd": d.work, "fail_patterns": patterns}));
+    d.submit("clean", json!({"command": "echo all ran", "cwd": d.work, "fail_patterns": patterns}));
+    d.submit("broken", json!({"command": "echo 'Skipped 1 suite'; exit 4", "cwd": d.work, "fail_patterns": patterns}));
+    assert_eq!(d.wait_exit("skips", T), 1);
+    let s = d.status_of("skips").unwrap();
+    assert_eq!((&s["state"], &s["exit_status"]), (&json!("failed"), &json!(1)));
+    assert_eq!(s["error_line"], "Skipped 2 suites: no database");
+    assert!(s["failure_reason"].as_str().unwrap().contains(r"fail pattern"), "{s}");
+    assert!(d.log_of("skips").contains("drmanhattan · the command exited 0, but its output matched"));
+    let history = fs::read_to_string(d.data.join("history.jsonl")).unwrap();
+    assert!(history.lines().any(|l| l.contains("\"label\":\"skips\"") && l.contains("\"outcome\":\"failed\"")));
+    assert_eq!(d.wait_exit("clean", T), 0, "no line matched");
+    assert_eq!(d.wait_exit("broken", T), 4, "a run that failed anyway keeps its own exit status");
+}
