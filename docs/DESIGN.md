@@ -111,6 +111,28 @@ bytes of output rather than file positions. `submit --wait` and the activity sca
 their place across a cut, and a reader that fell behind what was kept starts again at the note
 (`src/joblog.rs`).
 
+## Workers
+
+A worker is another machine running its own drmanhattan. The job-file contract is the
+protocol: the dispatcher writes a job into the worker's inbox over SSH
+(`__dispatch-submit`) and reads its results the way any tool does (`wait`, `follow`,
+`status`, `cancel`, run there over SSH). So the worker's own capacity, recovery and
+process-group handling apply unchanged.
+
+- Admission places a run on a worker (`queue::admit::place`); the run's record says which
+  (`machine`), and its slot number is that worker's.
+- Its runner (`runner::remote`) dispatches (`workers::dispatch`), holding the worker's
+  dispatch lock: probe and housekeeping (`__dispatch-probe`), `check`, mirror, submit, wait
+  for the start. Just before the submit it records `remote_run`, so a restart knows where
+  the job went. A failure puts the run back in the queue with `remote_fallback` set.
+- Then it follows the worker's log into the local one, counting bytes so a reconnect
+  resumes with `follow --from`, until the worker's status says the job is over.
+- Recovery leaves a running run with `remote_run` running and starts a runner for it that
+  follows it again; one still being handed over (no `remote_run`) is queued again.
+- A poller thread asks each worker for `machine-stats` every 15 s (`workers::poll`) and
+  keeps the answer, or the reason it is unavailable and until when, in `workers::pool`,
+  mirrored to `state/workers/<name>.json`.
+
 ## Dashboard
 
 A small HTTP server bound to 127.0.0.1 serves the page and `GET /api/state`, which the page

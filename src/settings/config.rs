@@ -9,6 +9,7 @@ use crate::activity::PatternConfig;
 use crate::error::{invalid, IoContext, Result};
 use crate::fsutil;
 use crate::paths::Paths;
+use crate::workers::WorkerConfig;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
 pub(crate) struct Config {
@@ -16,6 +17,9 @@ pub(crate) struct Config {
     pub(crate) slots: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) activity: Option<PatternConfig>,
+    /// Other machines that run jobs for this one, over SSH.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) workers: Vec<WorkerConfig>,
     #[serde(flatten)]
     pub(crate) other: BTreeMap<String, serde_json::Value>,
 }
@@ -31,7 +35,11 @@ pub(crate) fn load_config(paths: &Paths) -> Result<Config> {
         return invalid(format!("{} is not a regular file of yours", path.display()));
     }
     let text = std::fs::read_to_string(&path).context("read", &path)?;
-    serde_json::from_str(&text).or_else(|e| invalid(format!("{} is not valid: {e}", path.display())))
+    let mut config: Config =
+        serde_json::from_str(&text).or_else(|e| invalid(format!("{} is not valid: {e}", path.display())))?;
+    crate::workers::validate(&mut config.workers)
+        .or_else(|e| invalid(format!("{} is not valid: {e}", path.display())))?;
+    Ok(config)
 }
 
 pub(crate) fn save_config(paths: &Paths, config: &Config) -> Result<()> {

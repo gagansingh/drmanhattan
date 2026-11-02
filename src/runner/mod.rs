@@ -13,6 +13,7 @@
 mod error_line;
 mod fail_patterns;
 mod guard;
+mod remote;
 mod supervise;
 
 use std::fs::{File, OpenOptions};
@@ -59,6 +60,9 @@ pub(crate) fn run_prepare(shared: &Shared, admitted: Admitted) {
 }
 
 fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
+    if phase == Phase::Run && admitted.record.machine.is_some() {
+        return remote::run(shared, admitted);
+    }
     let Admitted { record: rec, events, exit_sender, activity, default_patterns } = admitted;
     let argv = match phase {
         Phase::Run => rec.job.command.clone(),
@@ -76,8 +80,9 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         let q = queue::lock(shared);
         (q.paths.clone(), q.settings.clone())
     };
-    // After a prepare command, the run's output follows its output in the same log.
-    let after_prepare = phase == Phase::Run && rec.prepare_status.is_some();
+    // After a prepare command, or a worker that could not take it, the run's output follows
+    // what is already in the log.
+    let after_prepare = phase == Phase::Run && (rec.prepare_status.is_some() || rec.remote_fallback.is_some());
     let log = match open_log(&rec, after_prepare) {
         Ok(log) => log,
         Err(e) => return completion.finish(State::Failed, 126, Some(e.to_string()), Duration::ZERO),
@@ -238,6 +243,7 @@ impl Completion<'_> {
                 exit_status: outcome.exit,
                 outcome: outcome.state,
                 load: load.map(|l| l.average),
+                machine: rec.machine.clone(),
             });
         }
         self.finish(outcome.state, outcome.exit, outcome.failure_reason.clone(), outcome.duration);

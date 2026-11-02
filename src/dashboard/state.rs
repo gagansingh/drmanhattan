@@ -16,10 +16,14 @@ use crate::estimate::{Estimate, LoadModel};
 use crate::job::{Record, State};
 use crate::process;
 use crate::queue::{self, rank};
-use crate::settings::{effective_capacity, read_manual_order, read_override, standing_capacity};
+use crate::settings::{
+    effective_capacity, load_config, read_manual_order, read_override, read_worker_override, standing_capacity,
+    worker_capacity,
+};
 use crate::sources::Sessions;
 use crate::sysinfo;
 use crate::time::Timestamp;
+use crate::workers;
 
 /// Finished runs listed under "recent".
 const RECENT_SHOWN: usize = 40;
@@ -50,6 +54,31 @@ pub(super) struct StateDoc {
     history_count: usize,
     metrics_24h: Metrics,
     load_model: ModelView,
+    /// With workers configured: this machine, then each worker, with its slots and
+    /// readings. Empty without workers, when the page shows one machine.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    machines: Vec<MachineView>,
+}
+
+/// One machine's bar on the dashboard.
+#[derive(Serialize)]
+struct MachineView {
+    name: String,
+    local: bool,
+    ssh: Option<String>,
+    online: Option<bool>,
+    capacity: u32,
+    capacity_default: u32,
+    capacity_override: Option<OverrideView>,
+    paused: bool,
+    /// Runs on it now.
+    running: usize,
+    /// Its readings, while fresh: `machine-stats` for a worker.
+    stats: Option<serde_json::Value>,
+    last_seen: Option<f64>,
+    /// Why it is not taking work, while that lasts.
+    reason: Option<String>,
+    reason_until: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -184,6 +213,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         .map(|n| SlotView { slot: n, run_id: used.iter().find(|(slot, _)| *slot == n).map(|(_, id)| (*id).clone()) })
         .collect();
     let done = snap.recent.iter().map(|(r, e)| RunView::new(r, e, &sessions, now)).collect();
+    let machines = machines(ctx, &snap, capacity, standing);
     StateDoc {
         now: now.epoch_seconds(),
         capacity,
@@ -204,7 +234,53 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         history_count: snap.history_count,
         metrics_24h: metrics(&snap.last_day, now),
         load_model: ModelView { model: snap.model, factor: (factor * 100.0).round() / 100.0 },
+        machines,
     }
+}
+
+/// This machine and each worker, when there are workers.
+fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<MachineView> {
+    let workers = load_config(&ctx.paths).map(|c| c.workers).unwrap_or_default();
+    if workers.is_empty() {
+        return Vec::new();
+    }
+    let running_on = |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m).count();
+    let override_view = |o: crate::settings::Override| OverrideView { slots: o.slots, until: o.until.epoch_seconds() };
+    let mut out = vec![MachineView {
+        name: "local".into(),
+        local: true,
+        ssh: None,
+        online: Some(true),
+        capacity,
+        capacity_default: standing,
+        capacity_override: read_override(&ctx.paths).map(override_view),
+        paused: false,
+        running: running_on(None),
+        stats: None,
+        last_seen: None,
+        reason: None,
+        reason_until: None,
+    }];
+    for w in workers {
+        let live = workers::pool().get(&w.name);
+        let capacity = worker_capacity(&ctx.paths, &w);
+        out.push(MachineView {
+            local: false,
+            ssh: Some(w.ssh.clone()),
+            online: live.online,
+            capacity,
+            capacity_default: w.slots,
+            capacity_override: read_worker_override(&ctx.paths, &w.name).map(override_view),
+            paused: capacity == 0,
+            running: running_on(Some(&w.name)),
+            stats: live.fresh_stats().cloned(),
+            last_seen: live.last_seen.map(Timestamp::epoch_seconds),
+            reason: live.unavailable().map(String::from),
+            reason_until: live.unavailable().and(live.unavailable_until).map(Timestamp::epoch_seconds),
+            name: w.name,
+        });
+    }
+    out
 }
 
 /// When each waiter should start, shown as its estimated start.

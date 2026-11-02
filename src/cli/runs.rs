@@ -254,6 +254,7 @@ pub(super) fn status_of(a: &Args, what: &str) -> Result<i32> {
         doc.insert("state".into(), Value::from(seen.state.as_str()));
         doc.entry("job").or_insert_with(|| Value::from(target.files.name()));
         doc.insert("exit".into(), seen.exit.map_or(Value::Null, Value::from));
+        doc.insert("log_bytes".into(), Value::from(joblog::output_len(&target.files.log())));
         let text = serde_json::to_string_pretty(&doc).map_err(|e| crate::error::Error::Invalid(e.to_string()))?;
         println!("{text}");
     } else {

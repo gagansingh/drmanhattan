@@ -56,10 +56,18 @@ pub(crate) struct Estimate {
     pub(crate) samples: Vec<u64>,
 }
 
-/// The estimate for a run with this category, label and variant (see the module comment).
-pub(crate) fn estimate(history: &[HistoryRow], category: &str, label: &str, variant: &str) -> Estimate {
+/// The estimate for a run with this category, label and variant (see the module comment),
+/// on `machine` (a worker's name; None for this machine), from that machine's runs only.
+pub(crate) fn estimate(
+    history: &[HistoryRow],
+    category: &str,
+    label: &str,
+    variant: &str,
+    machine: Option<&str>,
+) -> Estimate {
     let recent = &history[history.len().saturating_sub(RECENT_ROWS)..];
-    let ok: Vec<&HistoryRow> = recent.iter().filter(|r| r.outcome == State::Succeeded).collect();
+    let ok: Vec<&HistoryRow> =
+        recent.iter().filter(|r| r.outcome == State::Succeeded && r.machine.as_deref() == machine).collect();
     let pick = |matches: &dyn Fn(&HistoryRow) -> bool, take: usize, min: usize| -> Option<Vec<u64>> {
         let durations: Vec<u64> = ok.iter().filter(|r| matches(r)).map(|r| r.seconds).collect();
         (durations.len() >= min).then(|| durations[durations.len().saturating_sub(take)..].to_vec())
@@ -123,7 +131,8 @@ pub(crate) struct LoadModel {
 impl LoadModel {
     pub(crate) fn fit(history: &[HistoryRow], cpus: usize) -> LoadModel {
         let mut groups: HashMap<(&str, &str), Vec<(u64, f64)>> = HashMap::new();
-        for r in history.iter().filter(|r| r.outcome == State::Succeeded) {
+        // This machine's load says nothing about a worker's runs.
+        for r in history.iter().filter(|r| r.outcome == State::Succeeded && r.machine.is_none()) {
             if let Some(load) = r.load {
                 groups.entry((&r.category, &r.label)).or_default().push((r.seconds, load));
             }
@@ -187,6 +196,7 @@ mod tests {
             exit_status: i32::from(outcome != State::Succeeded),
             outcome,
             load: None,
+            machine: None,
         }
     }
 
@@ -197,21 +207,26 @@ mod tests {
         h.extend(vec![row("make", "a", "cold", 30, ok); 3]);
         h.push(row("make", "b", "", 100, ok));
         h.push(row("make", "c", "", 50, State::Failed)); // failures never count
-        let e = estimate(&h, "make", "a", "cold");
+        let e = estimate(&h, "make", "a", "cold", None);
         assert_eq!((e.p50, e.basis), (Some(30), Some("label+variant")));
-        let e = estimate(&h, "make", "a", "warm");
+        let e = estimate(&h, "make", "a", "warm", None);
         assert_eq!((e.p50, e.basis), (Some(10), Some("label")));
-        let e = estimate(&h, "make", "zzz", "");
+        let e = estimate(&h, "make", "zzz", "", None);
         assert_eq!((e.p50, e.basis), (Some(10), Some("category")));
-        assert_eq!(estimate(&h, "other", "zzz", ""), Estimate::default(), "unrelated runs say nothing");
-        assert_eq!(estimate(&[], "make", "a", ""), Estimate::default());
+        assert_eq!(estimate(&h, "other", "zzz", "", None), Estimate::default(), "unrelated runs say nothing");
+        assert_eq!(
+            estimate(&h, "make", "a", "", Some("air")),
+            Estimate::default(),
+            "another machine's runs say nothing"
+        );
+        assert_eq!(estimate(&[], "make", "a", "", None), Estimate::default());
     }
 
     #[test]
     fn a_label_uses_its_last_ten_runs() {
         let mut h: Vec<HistoryRow> = (0..10).map(|_| row("t", "x", "", 1000, State::Succeeded)).collect();
         h.extend((0..10).map(|_| row("t", "x", "", 5, State::Succeeded)));
-        assert_eq!(estimate(&h, "t", "x", "").p50, Some(5));
+        assert_eq!(estimate(&h, "t", "x", "", None).p50, Some(5));
     }
 
     #[test]

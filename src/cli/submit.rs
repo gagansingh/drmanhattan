@@ -16,7 +16,7 @@ use crate::cli::source;
 use crate::daemon;
 use crate::error::{invalid, IoContext, Result};
 use crate::fsutil;
-use crate::job::{is_job_name, CommandSpec, JobFiles, JobSpec, RunId, SourceSpec, MAX_NAME};
+use crate::job::{is_job_name, CommandSpec, JobFiles, JobSpec, RemoteMode, RunId, SourceSpec, SyncSpec, MAX_NAME};
 use crate::joblog;
 use crate::log;
 use crate::naming;
@@ -56,6 +56,11 @@ options:
                       runs once it succeeds, and fails if it fails
   --group NAME        at most one job of the group runs and one waits; a newer waiting
                       job replaces an older one
+  --remote MODE       never (the default), allowed (on a worker when every slot here is
+                      busy) or prefer (on a free worker first)
+  --requires TAG      a tag the worker must have (repeatable)
+  --sync PATH         a path to mirror to the worker (repeatable; default: --cwd)
+  --sync-git          mirror the git metadata of synced checkouts too
   --fail-pattern RE   fail the job when a line of its output matches RE, even if the
                       command exits 0 (repeatable)
 ",
@@ -74,8 +79,11 @@ options:
         "fail-pattern",
         "prepare",
         "group",
+        "remote",
+        "requires",
+        "sync",
     ],
-    switches: &["priority", "wait"],
+    switches: &["priority", "wait", "sync-git"],
     positional: 0,
 };
 
@@ -144,6 +152,19 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         fail_patterns: a.all("fail-pattern").to_vec(),
         prepare: a.get("prepare").map(|p| CommandSpec::Shell(p.to_string())),
         group: a.get("group").map(String::from),
+        remote: match a.get("remote") {
+            None | Some("never") => None,
+            Some("allowed") => Some(RemoteMode::Allowed),
+            Some("prefer") => Some(RemoteMode::Prefer),
+            Some(other) => return invalid(format!("--remote must be never, allowed or prefer, not {other:?}")),
+        },
+        requires: a.all("requires").to_vec(),
+        sync: a.all("sync").iter().map(|p| SyncSpec::Path(absolute(p))).collect(),
+        sync_git: a.has("sync-git"),
+        env_forward: Vec::new(),
+        dispatched_from: None,
+        dispatch_id: None,
+        slots_hint: None,
     };
     let files = JobFiles::new(&inbox, &name);
     write_job(&files, &spec)?;
@@ -162,6 +183,15 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
     } else {
         Ok(0)
     }
+}
+
+/// `path` as an absolute path, from the current directory.
+fn absolute(path: &str) -> String {
+    let p = Path::new(path);
+    if p.is_absolute() || path.starts_with("~/") {
+        return path.to_string();
+    }
+    std::env::current_dir().map_or_else(|_| path.to_string(), |d| d.join(p).to_string_lossy().into_owned())
 }
 
 /// Writes the job file, refusing a name that is already queued or running. A finished

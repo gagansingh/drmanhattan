@@ -146,6 +146,29 @@ pub(crate) struct Record {
     /// Replaced while it waited by this newer run of its `group`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) superseded_by: Option<RunId>,
+    /// The worker it runs or ran on (its slot is that worker's); none for this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) machine: Option<String>,
+    /// Once handed to a worker: where it is there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_run: Option<RemoteRun>,
+    /// Why a worker could not take it: it runs here from then on.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) remote_fallback: Option<String>,
+}
+
+/// A run handed to a worker: its job there, and how much of its log came back.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub(crate) struct RemoteRun {
+    pub(crate) worker: String,
+    /// The job's name in the worker's inbox.
+    pub(crate) job: String,
+    /// The worker's run id, once it has queued it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) run_id: Option<String>,
+    /// Bytes of output in the local log before the worker's: what the worker sent so far is
+    /// the local log's output less this.
+    pub(crate) log_base: u64,
 }
 
 impl Record {
@@ -174,6 +197,9 @@ impl Record {
                 exit_status: None,
             }),
             superseded_by: None,
+            machine: None,
+            remote_run: None,
+            remote_fallback: None,
             job,
         }
     }
@@ -236,19 +262,39 @@ mod tests {
     fn a_record_round_trips_through_its_file() {
         let inbox = std::env::temp_dir();
         let files = JobFiles::new(&inbox, "round-trip");
-        let job = JobSpec::parse(r#"{"command": ["true"], "env": {"A": "1"}, "prepare": "make deps"}"#)
-            .unwrap()
-            .resolve(&files, &inbox)
-            .unwrap();
+        let job =
+            JobSpec::parse(r#"{"command": ["true"], "env": {"A": "1"}, "prepare": "make deps", "remote": "allowed"}"#)
+                .unwrap()
+                .resolve(&files, &inbox)
+                .unwrap();
         std::fs::write(files.claimed(), "{}").unwrap();
         let job = Job { claim: crate::fsutil::file_id(&files.claimed()), ..job };
         let mut rec = Record::new(RunId::new(), job, Some(5), 600);
+        rec.remote_run = Some(RemoteRun { worker: "w".into(), job: "j".into(), run_id: None, log_base: 3 });
         rec.load = LoadStats::of(&[1.0, 2.0]);
         let text = serde_json::to_string(&rec).unwrap();
         let back: Record = serde_json::from_str(&text).unwrap();
         assert_eq!(back.job, rec.job);
         assert_eq!((&back.run_id, back.load), (&rec.run_id, rec.load));
         assert_eq!(back.prepare_status, rec.prepare_status, "the job's prepare and the run's status do not collide");
+        assert_eq!(back.remote_run, rec.remote_run, "nor the job's remote and where the run went");
+        let fields = serde_json::to_value(&rec).unwrap();
+        let job_fields = serde_json::to_value(&rec.job).unwrap();
+        let record_only = [
+            "run_id",
+            "state",
+            "daemon_pid",
+            "queued_at",
+            "skip_after_seconds",
+            "expected_seconds",
+            "notes",
+            "prepare_status",
+            "remote_run",
+        ];
+        for key in record_only {
+            assert!(job_fields.get(key).is_none(), "a job field is named {key}, which the record uses too");
+        }
+        assert!(fields.get("remote_run").is_some());
         assert!(serde_json::to_string(&rec.public()).unwrap().find("\"env\"").is_none());
         let _ = std::fs::remove_file(files.claimed());
     }

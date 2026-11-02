@@ -400,3 +400,44 @@ pub fn exists(p: &Path) -> bool {
 }
 
 pub const WRITE_HEADERS: &[(&str, &str)] = &[("Content-Type", "application/json"), ("X-Drmanhattan", "1")];
+
+/// A stand-in for `ssh`: runs the command on this machine as the worker `worker` (with its
+/// state and data directories), and puts what `rsync` sends under `<dir>/root`, so a test
+/// sees what reached the "worker" apart from the original. `<dir>/down-<alias>` makes the
+/// alias unreachable; every command is appended to `<dir>/calls-<alias>`.
+pub fn fake_ssh(dir: &Path, worker: &Daemon) -> PathBuf {
+    fs::create_dir_all(dir.join("root")).unwrap();
+    let script = dir.join("ssh");
+    let text = format!(
+        r#"#!/bin/bash
+while [ $# -gt 0 ]; do
+  case "$1" in -o|-p|-l|-i|-F|-e) shift 2 ;; -*) shift ;; *) break ;; esac
+done
+alias="$1"; shift
+if [ -e "{dir}/down-$alias" ]; then echo "ssh: connect to host $alias port 22: Connection refused" >&2; exit 255; fi
+printf '%s\n' "$*" >> "{dir}/calls-$alias"
+export DRMANHATTAN_STATE_DIR="{state}" DRMANHATTAN_DATA_DIR="{data}"
+unset DRMANHATTAN_INBOX DRMANHATTAN_SLOTS
+if [ "$1" = rsync ]; then
+  dest="${{@: -1}}"; dest="{dir}/root$dest"
+  mkdir -p "$(dirname "$dest")"
+  set -- "${{@:1:$#-1}}" "$dest"
+  exec "$@"
+fi
+exec /bin/bash -c "$*"
+"#,
+        dir = dir.display(),
+        state = worker.state.display(),
+        data = worker.data.display(),
+    );
+    fs::write(&script, text).unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    script
+}
+
+/// Writes the data directory's `config.json`.
+pub fn write_config(d: &Daemon, config: Value) {
+    fs::create_dir_all(&d.data).unwrap();
+    fs::write(d.data.join("config.json"), serde_json::to_string_pretty(&config).unwrap()).unwrap();
+}

@@ -8,7 +8,8 @@ use crate::job::Job;
 use crate::log;
 use crate::paths::Paths;
 use crate::queue::{self, claim_job, scan_inbox, Admitted, Shared};
-use crate::settings::{effective_capacity, read_manual_order};
+use crate::settings::{effective_capacity, load_config, read_manual_order};
+use crate::workers;
 
 /// The scheduler's memory between passes: which problems it has already reported, so a
 /// file that stays wrong is reported once rather than five times a second.
@@ -48,6 +49,7 @@ impl Scheduler {
         }
         let capacity = self.capacity();
         let manual = read_manual_order(&self.paths);
+        let workers = load_config(&self.paths).map(|c| workers::slots(&self.paths, &c.workers)).unwrap_or_default();
 
         let mut q = queue::lock(shared);
         for job in new_jobs {
@@ -73,7 +75,7 @@ impl Scheduler {
             return Vec::new();
         }
         let max_prepares = q.settings.max_prepares;
-        let mut started = q.admit(capacity, &manual);
+        let mut started = q.admit(capacity, &workers, &manual);
         started.extend(q.start_prepares(max_prepares, &manual));
         started
     }

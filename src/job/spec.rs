@@ -55,6 +55,57 @@ pub(crate) struct JobSpec {
     /// replaces an older one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group: Option<String>,
+    /// Whether the job may run on a worker (`config.json`'s `workers`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) remote: Option<RemoteMode>,
+    /// Tags a worker must have to run it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) requires: Vec<String>,
+    /// What to mirror to a worker before running it there; the default is its `cwd`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sync: Vec<SyncSpec>,
+    /// Mirror the git metadata of synced checkouts too.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) sync_git: bool,
+    /// The daemon's environment variables, by name or `PREFIX_*`, that go with it to a worker.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) env_forward: Vec<String>,
+    /// Set by a dispatcher on a job it hands to a worker: the dispatching machine, its run
+    /// id, and how many of this machine's slots it was granted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatched_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slots_hint: Option<u32>,
+}
+
+/// Where a job may run: here only (the default), on a worker when every slot here is busy,
+/// or on a worker first.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum RemoteMode {
+    #[default]
+    Never,
+    Allowed,
+    Prefer,
+}
+
+/// A path to mirror to a worker: a path, or `{"path": …, "exclude": […]}`.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(untagged, expecting = "each sync entry must be a path or an object with path and exclude")]
+pub(crate) enum SyncSpec {
+    Path(String),
+    Full(SyncPath),
+}
+
+/// One path mirrored to a worker, at the same absolute path, and rsync patterns left out.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SyncPath {
+    pub(crate) path: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) exclude: Vec<String>,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -116,6 +167,23 @@ pub(crate) struct Job {
     pub(crate) prepare: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group: Option<String>,
+    #[serde(default)]
+    pub(crate) remote: RemoteMode,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) requires: Vec<String>,
+    /// Absolute paths; empty means the job's `cwd`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sync: Vec<SyncPath>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) sync_git: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) env_forward: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatched_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) dispatch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) slots_hint: Option<u32>,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -184,9 +252,40 @@ impl JobSpec {
             fail_patterns: self.fail_patterns,
             prepare,
             group: text_field("group", self.group)?,
+            remote: self.remote.unwrap_or_default(),
+            requires: self.requires,
+            sync: resolve_sync(self.sync)?,
+            sync_git: self.sync_git,
+            env_forward: self.env_forward,
+            dispatched_from: text_field("dispatched_from", self.dispatched_from)?,
+            dispatch_id: text_field("dispatch_id", self.dispatch_id)?,
+            slots_hint: self.slots_hint.filter(|n| *n > 0).map(|n| n.min(crate::settings::MAX_SLOTS)),
             claim: None,
         })
     }
+}
+
+/// Sync entries as absolute paths: `~/…` is under the home directory; anything else must be
+/// absolute. They need not exist yet; a dispatch checks them.
+fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
+    entries
+        .into_iter()
+        .map(|entry| {
+            let mut sync = match entry {
+                SyncSpec::Path(path) => SyncPath { path, exclude: Vec::new() },
+                SyncSpec::Full(sync) => sync,
+            };
+            sync.path = match sync.path.strip_prefix("~/") {
+                Some(rest) => paths::home().join(rest).to_string_lossy().into_owned(),
+                None if sync.path.starts_with('/') => sync.path,
+                None => return invalid(format!("sync paths must be absolute or start with ~/, not {:?}", sync.path)),
+            };
+            if sync.exclude.iter().any(|e| e.is_empty() || e.contains(['\n', '\0'])) {
+                return invalid(format!("sync.exclude for {} has an empty or multi-line pattern", sync.path));
+            }
+            Ok(sync)
+        })
+        .collect()
 }
 
 /// A command as the argv it runs: a string runs with `/bin/sh -c`.
@@ -311,6 +410,9 @@ mod tests {
             (r#"{"command": ["true"], "prepare": []}"#, "prepare must not be empty"),
             (r#"{"command": ["true"], "prepare": 3}"#, "command must be a string"),
             (r#"{"command": ["true"], "group": "a\nb"}"#, "line breaks"),
+            (r#"{"command": ["true"], "remote": "sometimes"}"#, "unknown variant"),
+            (r#"{"command": ["true"], "sync": ["relative/path"]}"#, "sync paths must be absolute"),
+            (r#"{"command": ["true"], "sync": [{"path": "/a", "exclud": []}]}"#, "each sync entry"),
         ] {
             let e = resolve(job).unwrap_err().to_string();
             assert!(e.contains(message), "{job}: {e}");
@@ -334,6 +436,14 @@ mod tests {
             fail_patterns: Vec::new(),
             prepare: None,
             group: None,
+            remote: None,
+            requires: Vec::new(),
+            sync: Vec::new(),
+            sync_git: false,
+            env_forward: Vec::new(),
+            dispatched_from: None,
+            dispatch_id: None,
+            slots_hint: None,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

@@ -46,15 +46,48 @@ pub(crate) struct Override {
 /// The override, if one is set, well-formed and not yet expired. The file holds
 /// `<slots> <until>`.
 pub(crate) fn read_override(paths: &Paths) -> Option<Override> {
-    let path = paths.capacity_override();
-    if !fsutil::is_own_file(&path) {
+    read_override_file(&paths.capacity_override(), 1)
+}
+
+fn read_override_file(path: &std::path::Path, min: u32) -> Option<Override> {
+    if !fsutil::is_own_file(path) {
         return None;
     }
-    let text = std::fs::read_to_string(&path).ok()?;
+    let text = std::fs::read_to_string(path).ok()?;
     let mut words = text.split_whitespace();
     let slots: u32 = words.next()?.parse().ok()?;
     let until: Timestamp = words.next()?.parse().ok()?;
-    ((1..=MAX_SLOTS).contains(&slots) && until > Timestamp::now()).then_some(Override { slots, until })
+    ((min..=MAX_SLOTS).contains(&slots) && until > Timestamp::now()).then_some(Override { slots, until })
+}
+
+/// A worker's override from the dashboard; 0 pauses it.
+pub(crate) fn read_worker_override(paths: &Paths, worker: &str) -> Option<Override> {
+    read_override_file(&paths.worker_override(worker), 0)
+}
+
+/// Sets a worker's override (0 to 16) for `lasting` from now, or removes it (`None`).
+pub(crate) fn write_worker_override(
+    paths: &Paths,
+    worker: &str,
+    slots: Option<u32>,
+    lasting: Duration,
+) -> Result<Option<Override>> {
+    let path = paths.worker_override(worker);
+    let Some(slots) = slots else {
+        fsutil::remove_if_present(&path)?;
+        return Ok(None);
+    };
+    if slots > MAX_SLOTS {
+        return invalid(format!("slots must be from 0 to {MAX_SLOTS}, not {slots}"));
+    }
+    let o = Override { slots, until: Timestamp::now().plus(lasting) };
+    fsutil::write_atomic(&path, &format!("{} {}\n", o.slots, o.until))?;
+    Ok(Some(o))
+}
+
+/// How many of a worker's slots this machine may use now: its override, else its `slots`.
+pub(crate) fn worker_capacity(paths: &Paths, worker: &crate::workers::WorkerConfig) -> u32 {
+    read_worker_override(paths, &worker.name).map_or(worker.slots, |o| o.slots)
 }
 
 /// Sets the override for `lasting` from now, or removes it (`None`).

@@ -40,6 +40,18 @@ pub(crate) fn snapshot() -> Snapshot {
     crate::sync::lock(&SNAPSHOT).clone()
 }
 
+/// Readings taken now, for a process that has no sampler running: CPU usage over `window`.
+pub(crate) fn read_now(window: Duration) -> Snapshot {
+    let before = cpu::ticks();
+    std::thread::sleep(window);
+    let cpu_pct = before.zip(cpu::ticks()).and_then(|(p, n)| cpu::percent(p, n));
+    #[cfg(target_os = "macos")]
+    let (memory, thermals) = (memory::read(), thermals::Sensors::new().as_ref().and_then(thermals::Sensors::read));
+    #[cfg(not(target_os = "macos"))]
+    let (memory, thermals) = (None, None);
+    Snapshot { cpu_pct, memory, thermals }
+}
+
 /// Starts the sampler: a first CPU figure half a second after start, then every reading
 /// every two seconds.
 pub(crate) fn start_sampler() {

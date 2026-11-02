@@ -43,6 +43,7 @@ pub(crate) struct Recovery {
     pub(crate) exits_rewritten: usize,
     pub(crate) reclaimed: usize,
     pub(crate) temp_removed: usize,
+    pub(crate) reattached: usize,
 }
 
 impl Recovery {
@@ -55,6 +56,7 @@ impl Recovery {
         [
             (self.requeued, "waiting job queued again", "waiting jobs queued again"),
             (self.abandoned, "running job abandoned", "running jobs abandoned"),
+            (self.reattached, "job on a worker followed again", "jobs on workers followed again"),
             (self.reclaimed, "lost job file recovered", "lost job files recovered"),
             (self.exits_rewritten, "missing .exit written", "missing .exit files written"),
             (self.temp_removed, "stray temp file removed", "stray temp files removed"),
@@ -98,6 +100,20 @@ impl Queue {
                     rec.daemon_pid = std::process::id();
                     rec.slot = None;
                     self.restart_prepare(&mut rec, died_by);
+                    write_results(&self.paths, &rec);
+                }
+                // On a worker: its runner follows it there again (`reattach`).
+                State::Running if rec.remote_run.is_some() => {
+                    done.reattached += 1;
+                    rec.daemon_pid = std::process::id();
+                    write_results(&self.paths, &rec);
+                }
+                // Still being handed to a worker, which never got it: it waits again.
+                State::Running if rec.machine.is_some() => {
+                    done.requeued += 1;
+                    rec.state = State::Queued;
+                    (rec.slot, rec.started_at, rec.machine) = (None, None, None);
+                    rec.daemon_pid = std::process::id();
                     write_results(&self.paths, &rec);
                 }
                 State::Running => {

@@ -122,8 +122,15 @@ impl Queue {
             .collect()
     }
 
+    /// The run's expected duration on this machine.
     pub(crate) fn estimate(&self, job: &Job) -> Estimate {
-        estimate::estimate(&self.history, &job.category, &job.label, job.variant.as_deref().unwrap_or_default())
+        self.estimate_on(job, None)
+    }
+
+    /// The run's expected duration on `machine` (a worker; None for this machine).
+    pub(crate) fn estimate_on(&self, job: &Job, machine: Option<&str>) -> Estimate {
+        let variant = job.variant.as_deref().unwrap_or_default();
+        estimate::estimate(&self.history, &job.category, &job.label, variant, machine)
     }
 
     /// Queues a validated job: gives it a run id, its expected duration and its
