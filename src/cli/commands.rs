@@ -65,20 +65,26 @@ pub(super) fn serve(rest: &[String]) -> Result<i32> {
 
 const STOP: Spec = Spec {
     usage: "\
-usage: drmanhattan stop
+usage: drmanhattan stop [<name>]
 
-Stops the running daemon. Running jobs get the shutdown grace period
+With no name, stops the running daemon. Running jobs get the shutdown grace period
 ($DRMANHATTAN_SHUTDOWN_GRACE_SECONDS, default 30) to finish and are then cancelled;
-queued jobs run on the next start.
+services are stopped at once; queued jobs run on the next start.
+
+With a name (a service's, or any run's: its run id, short id or job name), stops that one,
+its whole process group, and waits until it has ended.
 ",
     values: &[],
     switches: &[],
-    positional: 0,
+    positional: 1,
 };
 
 pub(super) fn stop(rest: &[String]) -> Result<i32> {
-    if args::parse(&STOP, rest)?.is_none() {
-        return Ok(0);
+    let Some(a) = args::parse(&STOP, rest)? else { return Ok(0) };
+    if let Some(name) = a.positional.first() {
+        super::runs::cancel(std::slice::from_ref(name))?;
+        let code = super::runs::wait(std::slice::from_ref(name))?;
+        return Ok(if code == 2 { 2 } else { 0 });
     }
     daemon::stop(&Paths::from_env(), &Settings::from_env()?)?;
     Ok(0)

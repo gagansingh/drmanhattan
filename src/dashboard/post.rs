@@ -52,6 +52,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
     }
     match path {
         "/api/capacity" => set_capacity(req, body, ctx),
+        "/api/service" => service_action(req, body, ctx),
         _ => set_order(req, body, ctx),
     }
 }
@@ -95,6 +96,37 @@ fn set_worker_capacity(req: Request, worker: &str, slots: Option<u32>, ctx: &Ctx
         Ok(o) => http::json(req, 200, &json!({ "worker": w.name, "override": o })),
         Err(e) => http::error(req, e),
     }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ServiceBody {
+    run_id: RunId,
+    /// `stop` or `restart`.
+    action: String,
+}
+
+/// The Services section's buttons: stop a service, or stop it and start it again.
+fn service_action(req: Request, body: &str, ctx: &Ctx) {
+    let Some(ServiceBody { run_id, action }) = object::<ServiceBody>(body) else {
+        return http::error(req, "send {\"run_id\": …, \"action\": \"stop\" or \"restart\"}");
+    };
+    let mut q = queue::lock(&ctx.shared);
+    let live_service = q.runs.get(&run_id).is_some_and(|e| e.rec.job.service && !e.rec.state.is_terminal());
+    if !live_service {
+        drop(q);
+        return http::error(req, "no running service has that run id");
+    }
+    match action.as_str() {
+        "stop" => q.cancel(&run_id),
+        "restart" => q.restart(&run_id),
+        _ => {
+            drop(q);
+            return http::error(req, "action must be stop or restart");
+        }
+    }
+    drop(q);
+    http::json(req, 200, &json!({ "run_id": run_id, "action": action }));
 }
 
 /// Keeps only ids of runs still queued and not priority (the manual order cannot move a

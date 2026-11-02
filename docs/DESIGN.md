@@ -111,6 +111,16 @@ bytes of output rather than file positions. `submit --wait` and the activity sca
 their place across a cut, and a reader that fell behind what was kept starts again at the note
 (`src/joblog.rs`).
 
+## Services
+
+A job with `service: true` is admitted against its own limit (`DRMANHATTAN_SERVICES`), not the
+slots, and holds no slot number. Its runner checks readiness every 250 ms (`runner::ready`: a
+TCP connect to the port, or the log against the regex) and records `ready_at`; past
+`ready_timeout`, or at `ttl`, it stops the group as a timeout would. `submit --service` waits
+for `ready_at` or `.exit`. A restart (from the page) marks the entry and cancels it; when the run
+ends, its job is queued again. The first stop signal cancels every service, since none would
+ever finish in the grace period.
+
 ## Workers
 
 A worker is another machine running its own drmanhattan. The job-file contract is the

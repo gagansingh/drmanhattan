@@ -95,6 +95,10 @@ mod tests {
             dispatched_from: None,
             dispatch_id: None,
             slots_hint: None,
+            service: false,
+            ready: None,
+            ready_timeout: None,
+            ttl: None,
             claim: None,
         };
         let mut r = Record::new(id.parse().unwrap(), job, expected, 600);

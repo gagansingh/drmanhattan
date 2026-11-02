@@ -62,6 +62,11 @@ struct RunningDoc<'a> {
     /// The worker it runs on; none for this machine.
     #[serde(skip_serializing_if = "Option::is_none")]
     machine: Option<&'a str>,
+    /// A service: it takes no slot, and `ready` says whether it is ready yet.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    service: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ready: Option<bool>,
     run_id: &'a RunId,
     label: &'a str,
     category: &'a str,
@@ -118,7 +123,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     running.sort_by_key(|r| r.slot.unwrap_or(0));
     let by_id: HashMap<&RunId, &Record> = records.iter().map(|r| (&r.run_id, r)).collect();
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
-    let here = running.iter().filter(|r| r.machine.is_none()).count();
+    let here = running.iter().filter(|r| r.machine.is_none() && !r.job.service).count();
     let state = match &daemon {
         None => "stopped",
         Some(_) if running.is_empty() => "idle",
@@ -157,6 +162,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             .map(|r| RunningDoc {
                 slot: r.slot,
                 machine: r.machine.as_deref(),
+                service: r.job.service,
+                ready: r.job.service.then_some(r.ready_at.is_some()),
                 run_id: &r.run_id,
                 label: &r.job.label,
                 category: &r.job.category,
@@ -195,6 +202,9 @@ fn print_text(doc: &StatusDoc) {
     for r in &doc.running {
         let mut line = vec![kv("slot", r.slot.unwrap_or(0))];
         line.extend(r.machine.map(|m| kv("machine", m)));
+        if r.service {
+            line.push(kv("service", if r.ready == Some(true) { "ready" } else { "starting" }));
+        }
         line.extend([kv("run_id", r.run_id), kv("label", r.label), kv("category", r.category)]);
         line.extend(r.elapsed_seconds.map(|s| kv("elapsed", format_elapsed(std::time::Duration::from_secs(s)))));
         line.extend(r.expected_seconds.map(|e| kv("expected", format!("{e}s"))));

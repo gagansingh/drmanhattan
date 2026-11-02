@@ -112,8 +112,9 @@ fn a_prepare_cut_short_by_the_daemon_dying_runs_again() {
 #[test]
 fn a_cancel_as_the_prepare_command_ends_still_cancels_the_run() {
     let d = Daemon::start(&[]);
-    // Many tries at the moment between the prepare command's exit and its record. A run
-    // may only succeed if it had finished before its cancel was asked for.
+    // Many tries at the moment between the prepare command's exit and its record. A run may
+    // only have started before its cancel was asked for (one that started first can still
+    // finish: its command may exit before the cancel reaches it).
     for i in 0..30 {
         let name = format!("race{i}");
         d.submit(&name, json!({"command": "true", "cwd": d.work, "prepare": "true"}));
@@ -123,7 +124,7 @@ fn a_cancel_as_the_prepare_command_ends_still_cancels_the_run() {
         let code = d.wait_exit(&name, T);
         let s = d.status_of(&name).unwrap();
         if code == 0 {
-            assert!(common::epoch(&s["finished_at"]) <= asked + 0.05, "{name} ran after its cancel: {s}");
+            assert!(common::epoch(&s["started_at"]) <= asked + 0.05, "{name} started after its cancel: {s}");
         } else {
             assert_eq!((code, s["state"].as_str()), (130, Some("cancelled")), "{name}: {s}");
         }

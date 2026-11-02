@@ -16,7 +16,9 @@ use crate::cli::source;
 use crate::daemon;
 use crate::error::{invalid, IoContext, Result};
 use crate::fsutil;
-use crate::job::{is_job_name, CommandSpec, JobFiles, JobSpec, RemoteMode, RunId, SourceSpec, SyncSpec, MAX_NAME};
+use crate::job::{
+    is_job_name, CommandSpec, JobFiles, JobSpec, Ready, RemoteMode, RunId, SourceSpec, SyncSpec, MAX_NAME,
+};
 use crate::joblog;
 use crate::log;
 use crate::naming;
@@ -61,6 +63,13 @@ options:
   --requires TAG      a tag the worker must have (repeatable)
   --sync PATH         a path to mirror to the worker (repeatable; default: --cwd)
   --sync-git          mirror the git metadata of synced checkouts too
+  --service           a server that keeps running: submit returns once it is ready (with
+                      --ready-port or --ready-log) and it takes no build slot
+  --ready-port N      the service is ready once 127.0.0.1:N accepts connections
+  --ready-log RE      the service is ready once a line of its output matches RE
+  --ready-timeout S   seconds it may take to be ready (default 120)
+  --ttl S             seconds it may run before it is stopped (default 8 hours)
+  --restart           replace the service of this name if it is already running
   --fail-pattern RE   fail the job when a line of its output matches RE, even if the
                       command exits 0 (repeatable)
 ",
@@ -82,8 +91,12 @@ options:
         "remote",
         "requires",
         "sync",
+        "ready-port",
+        "ready-log",
+        "ready-timeout",
+        "ttl",
     ],
-    switches: &["priority", "wait", "sync-git"],
+    switches: &["priority", "wait", "sync-git", "service", "restart"],
     positional: 0,
 };
 
@@ -99,8 +112,15 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         (None, Some(info)) => info.inbox.clone(),
         (None, None) => paths::default_inbox(),
     };
+    let service = a.has("service");
+    if service && a.has("wait") {
+        return invalid("a service never finishes: drop --wait; submit --service returns once it is ready");
+    }
+    if !service && ["ready-port", "ready-log", "ready-timeout", "ttl", "restart"].iter().any(|f| a.has(f)) {
+        return invalid("--ready-port, --ready-log, --ready-timeout, --ttl and --restart are for --service");
+    }
     // Waiting on a job nothing will run would never end: say so instead.
-    if daemon.is_none() && a.has("wait") {
+    if daemon.is_none() && (a.has("wait") || service) {
         return invalid(NOT_RUNNING_NOTHING_QUEUED);
     }
     if !inbox.is_dir() {
@@ -115,7 +135,11 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
     };
     let cwd = cwd.canonicalize().context("find the working directory", &cwd)?;
     let label = a.get("label").map_or_else(|| naming::default_label(&a.rest), String::from);
-    let name = a.get("name").map_or_else(|| format!("{}-{}", naming::file_safe(&label), RunId::new()), String::from);
+    // A service's name is its label's, so that submitting it again finds the running one.
+    let name = a.get("name").map_or_else(
+        || if service { naming::file_safe(&label) } else { format!("{}-{}", naming::file_safe(&label), RunId::new()) },
+        String::from,
+    );
     if !is_job_name(&name) {
         return invalid(format!(
             "--name {name:?} cannot name a job: use a plain file name of at most {MAX_NAME} bytes, not starting with a dot or ending in .status, .json, .log, .exit or .cancel"
@@ -165,8 +189,28 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         dispatched_from: None,
         dispatch_id: None,
         slots_hint: None,
+        service,
+        ready: match (a.parsed::<u16>("ready-port", "a port number")?, a.get("ready-log")) {
+            (Some(_), Some(_)) => return invalid("give --ready-port or --ready-log, not both"),
+            (Some(port), None) => Some(Ready::Port(port)),
+            (None, Some(re)) => Some(Ready::Log(re.to_string())),
+            (None, None) => None,
+        },
+        ready_timeout: a.parsed("ready-timeout", "a number of seconds")?,
+        ttl: a.parsed("ttl", "a number of seconds")?,
     };
     let files = JobFiles::new(&inbox, &name);
+    if service && live(&files) {
+        if !a.has("restart") {
+            // The same service, already running or starting: use it rather than start another.
+            return wait_ready(&files, true);
+        }
+        fsutil::write_atomic(&files.cancel(), "")?;
+        log::note(format_args!("stopping the running {name} to start it again"));
+        while !files.exit().exists() {
+            std::thread::sleep(POLL);
+        }
+    }
     write_job(&files, &spec)?;
     let queued = format!(
         "{}queued {} as {name} in {}",
@@ -178,10 +222,67 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
     if daemon.is_none() {
         log::warn("drmanhattan isn't running; the job waits in the inbox until it starts (`drmanhattan`)");
     }
-    if a.has("wait") {
+    if service {
+        wait_ready(&files, false)
+    } else if a.has("wait") {
         wait(&files)
     } else {
         Ok(0)
+    }
+}
+
+/// A job by this name is queued or running.
+fn live(files: &JobFiles) -> bool {
+    files.job().exists() || (files.claimed().exists() && !files.exit().exists())
+}
+
+/// The parts of a service's `.status.json` that `submit --service` reports.
+#[derive(Deserialize)]
+struct ServiceStatus {
+    state: String,
+    ready_at: Option<String>,
+    process_group: Option<i32>,
+    ready: Option<Ready>,
+    failure_reason: Option<String>,
+    log: Option<PathBuf>,
+}
+
+/// Waits for a service to be ready, then says where it is and returns 0; if it ends first,
+/// shows the end of its log and returns its exit code. `existing`: it was already running.
+fn wait_ready(files: &JobFiles, existing: bool) -> Result<i32> {
+    loop {
+        let status: Option<ServiceStatus> = fsutil::read_json(&files.status());
+        if let Some(s) = status.as_ref().filter(|s| s.ready_at.is_some() && s.state == "running") {
+            let port = match &s.ready {
+                Some(Ready::Port(p)) => format!(" · port {p}"),
+                _ => String::new(),
+            };
+            let pid = s.process_group.map(|p| format!(" · pid {p}")).unwrap_or_default();
+            let log = s.log.as_ref().map_or_else(|| files.log(), Clone::clone);
+            let how = if existing { "already running" } else { "ready" };
+            let line = format!(
+                "{}{} {how}{pid}{port} · log {} · stop it with `manhattan stop {}`",
+                log::NOTE_PREFIX,
+                files.name(),
+                log.display(),
+                files.name()
+            );
+            println!("{}", log::mark_own_line(&line, log::stdout_colour()));
+            return Ok(0);
+        }
+        if files.exit().exists() && !files.job().exists() {
+            let code = std::fs::read_to_string(files.exit()).ok().and_then(|t| t.trim().parse().ok()).unwrap_or(1);
+            if let Some(text) = fsutil::read_tail(&files.log(), 16 * 1024) {
+                let lines: Vec<&str> = text.lines().collect();
+                for line in &lines[lines.len().saturating_sub(20)..] {
+                    eprintln!("{line}");
+                }
+            }
+            let reason = status.and_then(|s| s.failure_reason).unwrap_or_else(|| "it stopped".into());
+            log::error(format_args!("{} did not become ready: {reason}", files.name()));
+            return Ok(if code == 0 { 1 } else { code });
+        }
+        std::thread::sleep(POLL);
     }
 }
 

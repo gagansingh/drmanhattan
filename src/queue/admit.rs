@@ -44,9 +44,17 @@ impl Queue {
             if waiter.job.group.as_ref().is_some_and(|g| busy_groups.contains(g)) {
                 continue; // another of its group is running
             }
-            let Some(machine) = self.place(waiter, capacity, workers) else { continue };
+            // A service takes none of the build slots, only one of its own few.
+            let service = waiter.job.service;
+            let machine = if service {
+                let running = self.records(State::Running).filter(|r| r.job.service).count();
+                (running < self.settings.max_services).then_some(None)
+            } else {
+                self.place(waiter, capacity, workers)
+            };
+            let Some(machine) = machine else { continue };
             busy_groups.extend(waiter.job.group.clone());
-            let slot = self.free_slot(machine.as_deref());
+            let slot = (!service).then(|| self.free_slot(machine.as_deref()));
             let default_patterns = self.default_patterns.clone();
             let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
             let (control, events) = mpsc::channel();
@@ -54,7 +62,7 @@ impl Queue {
             entry.live = Some(Live { control: control.clone(), activity: activity.clone(), cancel_requested: false });
             let rec = &mut entry.rec;
             rec.state = State::Running;
-            rec.slot = Some(slot);
+            rec.slot = slot;
             let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
             rec.machine = machine;
             rec.started_at = Some(now);
@@ -65,7 +73,7 @@ impl Queue {
                 "started",
                 &rec.job.label,
                 Some(&rec.run_id),
-                &[format!("slot {slot}{on}"), waited],
+                &[slot.map_or_else(|| "a service".to_string(), |s| format!("slot {s}{on}")), waited],
             );
             let record = rec.clone();
             self.persist(&next.run_id);
@@ -111,7 +119,9 @@ impl Queue {
     /// must have a free slot, every tag the job `requires`, and not be out of admission after
     /// a failure; a run that a worker could not take stays here.
     fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
-        let running_on = |m: Option<&str>| self.records(State::Running).filter(|r| r.machine.as_deref() == m).count();
+        let running_on = |m: Option<&str>| {
+            self.records(State::Running).filter(|r| r.machine.as_deref() == m && !r.job.service).count()
+        };
         // A worker's dispatcher may grant more of its slots than it would use itself.
         let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
         let here = (running_on(None) < local_capacity as usize).then_some(None);
@@ -134,8 +144,11 @@ impl Queue {
 
     /// The lowest slot number no running run on `machine` (None: this one) holds.
     fn free_slot(&self, machine: Option<&str>) -> u32 {
-        let used: HashSet<u32> =
-            self.records(State::Running).filter(|r| r.machine.as_deref() == machine).filter_map(|r| r.slot).collect();
+        let used: HashSet<u32> = self
+            .records(State::Running)
+            .filter(|r| r.machine.as_deref() == machine && !r.job.service)
+            .filter_map(|r| r.slot)
+            .collect();
         (1..=MAX_SLOTS).find(|n| !used.contains(n)).unwrap_or(MAX_SLOTS)
     }
 
