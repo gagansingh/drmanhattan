@@ -41,7 +41,11 @@ struct StatusDoc<'a> {
     daemon: Option<DaemonDoc>,
     active: usize,
     capacity: u32,
-    version: &'static str,
+    /// The running daemon's version, or this command's when none runs.
+    version: String,
+    /// This command's version, when the daemon still runs another: it restarts into it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    installed: Option<&'static str>,
     auto_update: bool,
     /// What auto-update is doing, in words.
     auto_update_state: String,
@@ -162,13 +166,15 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             job_file: &r.job.job_file,
         })
         .collect();
+    let (version, installed) = versions(daemon.as_ref());
     Ok(StatusDoc {
         state,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
         active: here,
         workers: super::workers::docs(paths)?,
         capacity,
-        version: crate::update::current(),
+        version,
+        installed,
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
@@ -196,6 +202,15 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     })
 }
 
+/// The running daemon's version, and this command's when the daemon has yet to restart into it.
+fn versions(daemon: Option<&crate::daemon::RunningDaemon>) -> (String, Option<&'static str>) {
+    let ours = crate::update::current();
+    match crate::update::daemon_behind(daemon) {
+        Some(running) => (running, Some(ours)),
+        None => (ours.into(), None),
+    }
+}
+
 /// `key=value`, quoting a value a shell or a `cut`-style reader would split.
 fn kv(key: &str, value: impl std::fmt::Display) -> String {
     let value = value.to_string();
@@ -211,9 +226,12 @@ fn print_text(doc: &StatusDoc) {
         kv("state", doc.state),
         kv("active", doc.active),
         kv("capacity", doc.capacity),
-        kv("version", doc.version),
+        kv("version", &doc.version),
         kv("auto_update", if doc.auto_update { "on" } else { "off" }),
     ];
+    if let Some(installed) = doc.installed {
+        head.extend([kv("installed", installed), kv("running", &doc.version), kv("restart", "pending")]);
+    }
     if doc.auto_update {
         head.push(kv("auto_update_state", &doc.auto_update_state));
     }

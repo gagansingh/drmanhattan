@@ -56,6 +56,8 @@ pub(super) struct StateDoc {
     /// A newer release, when the daemon's daily check found one.
     update: Option<crate::update::Available>,
     auto_update: bool,
+    /// The installed version, when the daemon has yet to restart into it.
+    installed: Option<String>,
     /// What auto-update is doing, in words, for the footer's tooltip.
     auto_update_state: String,
     /// The update that installed this version, in the last week.
@@ -250,6 +252,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         update: crate::update::available(&ctx.paths),
         auto_update: load_config(&ctx.paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(&ctx.paths),
+        installed: crate::update::installed_version(),
         updated: crate::update::updated(&ctx.paths),
         idle: crate::update::idle(&ctx.paths),
         home: crate::paths::home(),

@@ -55,6 +55,12 @@ impl Timestamp {
     }
 }
 
+impl From<SystemTime> for Timestamp {
+    fn from(t: SystemTime) -> Timestamp {
+        Timestamp(t)
+    }
+}
+
 impl fmt::Display for Timestamp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&DateTime::<Utc>::from(self.0).to_rfc3339_opts(SecondsFormat::Millis, true))

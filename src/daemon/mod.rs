@@ -95,6 +95,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         url: None,
         slots_env: settings.slots_env.clone(),
         shell_env: Some(shell_env.summary.clone()),
+        version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        protocol: Some(crate::workers::PROTOCOL),
     };
     if opts.dashboard {
         info.url = Some(setup::start_dashboard(&shared, &opts)?);

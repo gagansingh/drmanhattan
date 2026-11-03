@@ -8,6 +8,7 @@
 
 mod auto;
 mod check;
+mod installed;
 mod release;
 mod restart;
 mod updated;
@@ -18,6 +19,7 @@ use std::time::Duration;
 
 pub(crate) use auto::{start_auto_updater, summary as auto_update_summary};
 pub(crate) use check::{available, start_checker, Available};
+pub(crate) use installed::{daemon_behind, installed_version};
 pub(crate) use release::current;
 use release::{asset, download, is_newer, latest_tag, releases_url, sha256};
 pub(crate) use updated::{announce, updated, Updated};
@@ -37,6 +39,15 @@ pub(crate) fn update(now: bool) -> Result<i32> {
     let paths = Paths::from_env();
     let tag = latest_tag()?;
     if !is_newer(&tag, current()) {
+        // Installed already, by an update whose restart has not happened: restart now.
+        if let Some(running) = daemon_behind(crate::daemon::running(&paths).as_ref()) {
+            if !now {
+                wait_until_idle(&paths);
+            }
+            restart::restart(&paths, &install_dir()?)?;
+            println!("restarted the daemon: {running} → {}", current());
+            return Ok(0);
+        }
         println!("drmanhattan {} is already up to date", current());
         return Ok(0);
     }

@@ -146,3 +146,34 @@ fn the_dashboard_offers_the_update_only_when_it_can_run() {
     assert_eq!(code, 202, "{body}");
     let _ = fs::remove_dir_all(&root);
 }
+
+#[test]
+fn status_and_the_dashboard_say_when_the_daemon_runs_an_older_version() {
+    let d = Daemon::start_with(&[], |root| installed(root).join("drmanhattan"));
+    let line = |d: &Daemon| {
+        String::from_utf8_lossy(&d.cmd(&["status"]).output().unwrap().stdout)
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(line(&d).contains(&format!("version={CURRENT} ")) && !line(&d).contains("installed="), "{}", line(&d));
+    assert!(d.api_state()["installed"].is_null());
+    // As if an update had replaced the file and the restart were still to come.
+    let info = d.state.join("dashboard.json");
+    let mut doc: serde_json::Value = serde_json::from_str(&fs::read_to_string(&info).unwrap()).unwrap();
+    doc["version"] = "0.0.1".into();
+    fs::write(&info, doc.to_string()).unwrap();
+    assert!(
+        line(&d).contains(" version=0.0.1 ")
+            && line(&d).contains(&format!(" installed={CURRENT} running=0.0.1 restart=pending")),
+        "{}",
+        line(&d)
+    );
+    assert_eq!(d.status_json()["installed"], CURRENT);
+    let replacement = d.program.with_extension("new");
+    fs::write(&replacement, "#!/bin/sh\necho 'drmanhattan 9.9.9'\n").unwrap();
+    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
+    fs::rename(&replacement, &d.program).unwrap(); // as an update swaps it in
+    assert_eq!(d.api_state()["installed"], "9.9.9");
+}
