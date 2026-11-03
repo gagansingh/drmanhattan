@@ -251,9 +251,6 @@ fn absolute(path: &str) -> String {
     std::env::current_dir().map_or_else(|_| path.to_string(), |d| d.join(p).to_string_lossy().into_owned())
 }
 
-/// Writes the job file, refusing a name that is already queued or running. A finished
-/// job's results under the same name are removed first, so `--wait` cannot mistake them
-/// for this run's (the daemon would remove them when it claims the job anyway).
 /// Whether something has already been piped into `submit`: fd 0 is a pipe with bytes
 /// waiting. A terminal or `/dev/null` is never a pipe, and a pipe nothing has written to
 /// yet counts as empty, so this never blocks; it is a warning's worth of certainty, not more.
@@ -273,6 +270,9 @@ fn piped_input_waiting() -> bool {
     unsafe { libc::ioctl(0, libc::FIONREAD as _, &mut waiting) == 0 && waiting > 0 }
 }
 
+/// Writes the job file, refusing a name that is already queued or running. A finished
+/// job's results under the same name are removed first, so `--wait` cannot mistake them
+/// for this run's (the daemon would remove them when it claims the job anyway).
 fn write_job(files: &JobFiles, spec: &JobSpec) -> Result<()> {
     let live = files.job().exists() || (files.claimed().exists() && !files.exit().exists());
     if live {

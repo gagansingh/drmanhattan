@@ -225,8 +225,8 @@ It is read again when the daemon restarts.
 Jobs run with stdin at EOF and their output going to the log, not to a terminal. Input a
 command needs goes in a file or an argument, not through a pipe into `submit`:
 `manhattan submit -- sh -c 'psql < dump.sql'` or `git commit -F msg.txt`; keep the file under
-the job's folder, which is what workers mirror. `submit` warns when something was piped into
-it. For a command that needs a terminal, set `"tty": true` (`submit --tty`): it runs in its own session with a
+the job's working directory, which workers mirror by default (`sync` entries replace it).
+`submit` warns when input is already waiting in a pipe. For a command that needs a terminal, set `"tty": true` (`submit --tty`): it runs in its own session with a
 pseudo-terminal as its controlling terminal, stdout and stderr, 120 columns by 40 rows and
 `TERM=xterm-256color`; stdin stays at EOF, and cancel and timeout still end its whole process
 group.
