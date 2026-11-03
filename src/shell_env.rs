@@ -1,15 +1,18 @@
-//! The user's login shell environment, captured once when the daemon starts and given to
-//! every job, so a daemon started by launchd or systemd runs commands with the PATH and
-//! variables a terminal has. Agents then need no `zsh -ic` wrapper, whose interactive rc
-//! files can wait for a terminal that a job does not have.
+//! The user's login shell environment, captured when the daemon starts and given to every
+//! job, so a daemon started by launchd or systemd runs commands with the PATH and variables
+//! a terminal has. Agents then need no `zsh -ic` wrapper, whose interactive rc files can
+//! wait for a terminal that a job does not have. `drmanhattan reload-env` captures it again
+//! for the jobs that start afterwards (`reload`).
 
 use std::io::Read;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
-use std::sync::{mpsc, OnceLock};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
+
+use crate::time::Timestamp;
 
 const BEGIN: &[u8] = b"__DRMANHATTAN_ENV_BEGIN__\0";
 const END: &[u8] = b"__DRMANHATTAN_ENV_END__\0";
@@ -40,32 +43,63 @@ pub(crate) struct ShellEnv {
     pub(crate) vars: Vec<(String, String)>,
     /// For `drmanhattan paths`: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     pub(crate) summary: String,
+    /// When the shell was asked; None when the capture is off.
+    pub(crate) read_at: Option<Timestamp>,
 }
 
-static CAPTURED: OnceLock<ShellEnv> = OnceLock::new();
+/// The snapshot jobs start from. A job takes an `Arc` to it when it is spawned, so a reload
+/// swapping it in the meantime changes nothing for that job.
+static CURRENT: Mutex<Option<Arc<ShellEnv>>> = Mutex::new(None);
 
 /// The jobs' base environment; empty until `init`, and in commands other than the daemon.
-pub(crate) fn vars() -> &'static [(String, String)] {
-    CAPTURED.get().map_or(&[], |e| &e.vars)
+pub(crate) fn vars() -> Arc<ShellEnv> {
+    crate::sync::lock(&CURRENT).clone().unwrap_or_else(|| Arc::new(off()))
 }
 
 /// Captures the environment, or settles on the fallback, and says which in the daemon log.
-pub(crate) fn init(enabled: bool, timeout: Duration) -> &'static ShellEnv {
-    CAPTURED.get_or_init(|| {
-        if !enabled {
-            return ShellEnv { vars: Vec::new(), summary: "off".into() };
+pub(crate) fn init(enabled: bool, timeout: Duration) -> Arc<ShellEnv> {
+    let env = Arc::new(if enabled { read(timeout) } else { off() });
+    *crate::sync::lock(&CURRENT) = Some(env.clone());
+    env
+}
+
+/// Captures the environment again and makes it the jobs' base from now on. A shell that
+/// fails now changes nothing: the jobs keep the snapshot they had, and the error says why.
+pub(crate) fn reload(timeout: Duration) -> Result<Arc<ShellEnv>, String> {
+    if vars().read_at.is_none() {
+        return Err("the shell environment is off (DRMANHATTAN_SHELL_ENV=0), so jobs get the daemon's own".into());
+    }
+    let shell = login_shell();
+    let vars = capture(&shell, timeout).map_err(|why| format!("could not read {shell}'s login environment ({why})"))?;
+    let env = Arc::new(ShellEnv { vars, summary: summary(&shell), read_at: Some(Timestamp::now()) });
+    *crate::sync::lock(&CURRENT) = Some(env.clone());
+    Ok(env)
+}
+
+/// The capture turned off: nothing is set on jobs.
+fn off() -> ShellEnv {
+    ShellEnv { vars: Vec::new(), summary: "off".into(), read_at: None }
+}
+
+/// `zsh (/bin/zsh)`.
+fn summary(shell: &str) -> String {
+    format!("{} ({shell})", short_name(shell))
+}
+
+/// The first capture: the fallback stands in when the shell does not answer, and the daemon
+/// log says so.
+fn read(timeout: Duration) -> ShellEnv {
+    let shell = login_shell();
+    let read_at = Some(Timestamp::now());
+    match capture(&shell, timeout) {
+        Ok(vars) => ShellEnv { vars, summary: summary(&shell), read_at },
+        Err(why) => {
+            crate::log::problem(format_args!(
+                "could not read {shell}'s login environment ({why}); jobs get a standard PATH"
+            ));
+            ShellEnv { vars: fallback(), summary: format!("fallback: {why}"), read_at }
         }
-        let shell = login_shell();
-        match capture(&shell, timeout) {
-            Ok(vars) => ShellEnv { vars, summary: format!("{} ({shell})", short_name(&shell)) },
-            Err(why) => {
-                crate::log::problem(format_args!(
-                    "could not read {shell}'s login environment ({why}); jobs get a standard PATH"
-                ));
-                ShellEnv { vars: fallback(), summary: format!("fallback: {why}") }
-            }
-        }
-    })
+    }
 }
 
 /// `$SHELL`, else zsh, else bash.

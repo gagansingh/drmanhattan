@@ -43,12 +43,27 @@ pub(crate) struct DaemonInfo {
     /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_env: Option<String>,
+    /// When the shell was asked for it. Absent when the capture is off, and from a daemon
+    /// before 0.6.5, which `reload-env`'s signal would end rather than reach.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shell_env_read_at: Option<Timestamp>,
+    /// The last `reload-env`, for the command that asked to report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shell_env_reload: Option<ShellEnvReload>,
     /// The running daemon's version and worker protocol, which the installed command may
     /// no longer share until it restarts. Absent before 0.6.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) protocol: Option<u32>,
+}
+
+/// How a `reload-env` ended: when, and why it failed when it did.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+pub(crate) struct ShellEnvReload {
+    pub(crate) at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) error: Option<String>,
 }
 
 /// Takes the lock, or returns None when another daemon holds it.

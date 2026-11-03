@@ -1,6 +1,7 @@
 //! The small commands: `serve`, `stop`, `slots` and `paths`.
 
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use crate::acknowledge;
 use crate::cli::args::{self, Spec};
@@ -8,7 +9,9 @@ use crate::daemon::{self, ServeOptions};
 use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
+use crate::process;
 use crate::settings::{load_config, read_override, save_config, standing_capacity, Settings, MAX_SLOTS};
+use crate::time::Timestamp;
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -127,6 +130,66 @@ pub(super) fn stop(rest: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+const RELOAD_ENV: Spec = Spec {
+    usage: "\
+usage: drmanhattan reload-env
+
+Asks the running daemon to read your login shell's environment again, as it did when it
+started; jobs that start afterwards get it, running jobs and services keep theirs. If the
+shell fails or does not answer, jobs keep the environment they had and the command says so.
+",
+    values: &[],
+    switches: &[],
+    positional: 0,
+};
+
+/// Sends SIGUSR1 to the daemon holding the lock, then waits for it to record the outcome
+/// in `dashboard.json`. A daemon that would not understand the signal is never sent it.
+pub(super) fn reload_env(rest: &[String]) -> Result<i32> {
+    if args::parse(&RELOAD_ENV, rest)?.is_none() {
+        return Ok(0);
+    }
+    let paths = Paths::from_env();
+    let settings = Settings::from_env()?;
+    let Some(daemon) = daemon::running(&paths) else {
+        return invalid("drmanhattan is not running");
+    };
+    let info = daemon.info.as_ref();
+    if info.and_then(|i| i.shell_env.as_deref()) == Some("off") {
+        return invalid(
+            "the daemon runs with DRMANHATTAN_SHELL_ENV=0, so jobs get its own environment; nothing to read",
+        );
+    }
+    if info.map_or(true, |i| i.shell_env_read_at.is_none()) {
+        let version = info.and_then(|i| i.version.as_deref()).unwrap_or("before 0.6.2");
+        return invalid(format!(
+            "the running daemon ({version}) predates reload-env; `drmanhattan update`, or `drmanhattan stop` and a new start, reads the environment afresh"
+        ));
+    }
+    let asked = Timestamp::now();
+    if !process::signal_process(daemon.pid as i32, libc::SIGUSR1) {
+        return invalid(format!("could not signal drmanhattan (pid {})", daemon.pid));
+    }
+    let deadline = Instant::now() + settings.shell_env_timeout + settings.poll + Duration::from_secs(5);
+    loop {
+        let info = daemon::running(&paths).filter(|d| d.pid == daemon.pid).and_then(|d| d.info);
+        if let Some(reload) = info.as_ref().and_then(|i| i.shell_env_reload.as_ref()).filter(|r| r.at >= asked) {
+            return match &reload.error {
+                None => {
+                    let summary = info.as_ref().and_then(|i| i.shell_env.as_deref()).unwrap_or_default();
+                    println!("read {summary} again; jobs that start from now get it");
+                    Ok(0)
+                }
+                Some(why) => invalid(why),
+            };
+        }
+        if Instant::now() >= deadline {
+            return invalid("drmanhattan has not answered; see its log (`drmanhattan paths` shows where)");
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 const SLOTS: Spec = Spec {
     usage: "\
 usage: drmanhattan slots [N]
@@ -201,8 +264,11 @@ pub(super) fn paths(rest: &[String]) -> Result<i32> {
     );
     if let Some(d) = &daemon {
         let url = info.and_then(|i| i.url.as_deref()).map(|u| format!(" dashboard={u}")).unwrap_or_default();
-        let shell_env =
-            info.and_then(|i| i.shell_env.as_deref()).map(|s| format!(" shell_env={s:?}")).unwrap_or_default();
+        let read_at = info.and_then(|i| i.shell_env_read_at).map(|t| format!(" · read {}", t.local_clock()));
+        let shell_env = info
+            .and_then(|i| i.shell_env.as_deref())
+            .map(|s| format!(" shell_env={:?}", format!("{s}{}", read_at.unwrap_or_default())))
+            .unwrap_or_default();
         println!("daemon=pid {}{url}{shell_env}", d.pid);
     }
     Ok(0)
