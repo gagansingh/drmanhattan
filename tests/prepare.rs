@@ -123,10 +123,11 @@ fn a_cancel_as_the_prepare_command_ends_still_cancels_the_run() {
         fs::write(d.inbox.join(format!("{name}.cancel")), "").unwrap();
         let code = d.wait_exit(&name, T);
         let s = d.status_of(&name).unwrap();
-        if code == 0 {
-            assert!(common::epoch(&s["started_at"]) <= asked + 0.05, "{name} started after its cancel: {s}");
-        } else {
-            assert_eq!((code, s["state"].as_str()), (130, Some("cancelled")), "{name}: {s}");
+        // Succeeded, or cancelled before it started (130) or while running (143).
+        let ended = (code, s["state"].as_str());
+        assert!(matches!(ended, (0, Some("succeeded")) | (130 | 143, Some("cancelled"))), "{name}: {s}");
+        if let Some(started) = s["started_at"].as_str() {
+            assert!(common::epoch(&json!(started)) <= asked + 0.05, "{name} started after its cancel: {s}");
         }
     }
 }
