@@ -208,3 +208,30 @@ fn commands_are_formatted_by_the_page_from_their_argv() {
     let said = format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     assert!(out.status.success() && said.starts_with("ok "), "{said}");
 }
+
+#[test]
+fn the_pane_shows_a_runs_command_once() {
+    let d = Daemon::start(&[]);
+    let argv = json!(["sh", "-c", "echo 'distinct output' && true"]);
+    d.submit("once", json!({"command": argv, "cwd": d.work, "prepare": ["true"]}));
+    assert_eq!(d.wait_exit("once", T), 0);
+    let log = d.log_of("once");
+    let command = "sh -c 'echo '\\''distinct output'\\'' && true'";
+    assert!(log.contains(command), "the log file keeps its framing: {log}");
+    // The strip shows the command from the run's argv; the output must not show it again.
+    assert_eq!(d.api_state()["done"][0]["command"], argv);
+    let Ok(node) = std::process::Command::new("node").arg("--version").output() else { return };
+    if !node.status.success() {
+        return;
+    }
+    let (_, page) = d.get("/");
+    let framing = page.lines().find(|l| l.starts_with("const FRAMING =")).expect("the page's framing pattern");
+    let program = format!(
+        "{framing}\nconst lines = {};\nconst shown = lines.filter((l) => !FRAMING.test(l));\n\
+         if (shown.some((l) => l.includes({command:?}))) throw new Error(shown.join('\\n'));\n\
+         if (!shown.some((l) => l === 'distinct output')) throw new Error('output missing');\nconsole.log('ok');",
+        serde_json::to_string(&log.lines().collect::<Vec<_>>()).unwrap(),
+    );
+    let out = std::process::Command::new("node").arg("-e").arg(program).output().unwrap();
+    assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}

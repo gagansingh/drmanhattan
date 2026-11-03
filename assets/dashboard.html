@@ -1182,25 +1182,16 @@ function collapseHeartbeats(lines) {
 }
 
 // drmanhattan's own lines in a job's log. The file keeps them so that it explains itself.
-// The pane says where and when the job started above the output, so those two lines are
-// left out; the rest (how it ended, a timeout, a cut) become notes, apart from the output.
+// The strip above the output says where and when the job started and its command, so
+// those lines are left out; the rest (how it ended, a timeout, a cut) become notes.
 const OWN = 'drmanhattan · ';
-const FRAMING = /^drmanhattan · .+ started in slot \d+ at .+ · run \S+$/;
-// `drmanhattan · in <cwd>: <command>`: the command, coloured from the run's own argv (the
-// runner wrote it joined, quoted as cmdJoin quotes), or as plain text if it is another.
-const IN_LINE = /^in (.+?): (.*)$/;
-function inLine(rest, run) {
-  const m = IN_LINE.exec(rest);
-  if (!m || !run) return null;
-  const argv = [run.command, run.prepare_command].find((a) => Array.isArray(a) && cmdJoin(a) === m[2]);
-  return argv ? `in ${esc(m[1])}: <span class="cmd">${commandHtml(argv, run.cwd)}</span>` : null;
-}
+const FRAMING = /^drmanhattan · (.+ started (in slot \d+|as a service) at .+ · run \S+|in .+?: .*)$/;
 // Progress markers are for drmanhattan too. A step becomes a divider; a command's start and
 // end are left out, since the job's row shows the commands in flight.
 const STEP = /^\s*::step\s+(\d+)(?:\s*\/\s*(\d+))?\s*(.*)$/;
 const COMMAND_MARK = /^\s*::(start|done)\s+\S/;
 
-function formatLog(raw, run = null) {
+function formatLog(raw) {
   // A log ends with a newline; it does not start an empty last line.
   const lines = raw.replace(/\n$/, '').split('\n').filter((line) => {
     line = line.replace(/\r+$/, '');
@@ -1223,7 +1214,7 @@ function formatLog(raw, run = null) {
     if (plain.startsWith(OWN)) {
       const rest = plain.slice(OWN.length);
       return `<span class="note${kind ? ' ' + kind : ''}" role="note"><span class="note-tag">drmanhattan<span class="sr">:</span></span>`
-        + `<span>${inLine(rest, run) ?? esc(rest)}</span></span>`;
+        + `<span>${esc(rest)}</span></span>`;
     }
     return `<span class="ln${kind ? ' ' + kind : ''}">${ansi(line) || ' '}</span>`;
   }).join('');
@@ -1242,7 +1233,7 @@ function paint() {
     newButton.style.display = 'block';
     return;
   }
-  text.innerHTML = formatLog(view.text, findRun(view.id));
+  text.innerHTML = formatLog(view.text);
   view.shown = view.text;
   newButton.style.display = 'none';
   if (view.follow) text.scrollTop = text.scrollHeight;
