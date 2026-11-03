@@ -304,7 +304,7 @@ leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATT
 
 ## Goals and loops for coding agents
 
-[`examples/agent-runner.sh`](examples/agent-runner.sh) runs a headless coding agent as a
+[`examples/agent-runner.sh`](../examples/agent-runner.sh) runs a headless coding agent as a
 drmanhattan job, either until a goal is met or on an interval. Copy it onto your `PATH`.
 
 ```

@@ -27,8 +27,11 @@ curl -fsSL https://github.com/gagansingh/drmanhattan/releases/latest/download/in
 ```
 
 This puts `drmanhattan` and its short alias `manhattan` in `~/.local/bin`. To install
-somewhere else, pass a directory: `… | sh -s -- /usr/local/bin`. With Rust 1.75 or later,
-`cargo install --git https://github.com/gagansingh/drmanhattan` works too.
+somewhere else, pass a directory: `… | sh -s -- /usr/local/bin`.
+
+With Rust 1.75 or later, `cargo install --git https://github.com/gagansingh/drmanhattan`, or
+from a clone, `cargo build --release` and copy both binaries from `target/release` onto
+your `PATH`.
 
 ## Quick start
 
