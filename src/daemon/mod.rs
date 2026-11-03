@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use notify::Watcher;
 
-pub(crate) use lock::{running, slots_env, DaemonInfo, RunningDaemon};
+pub(crate) use lock::{running, slots_env, DaemonInfo, RunningDaemon, ShellEnvReload};
 pub(crate) use setup::open_in_browser;
 pub(crate) use stop::stop;
 
@@ -31,6 +31,7 @@ use crate::paths::Paths;
 use crate::queue::{self, prune_files, Queue, Shared, HEARTBEAT_EVERY};
 use crate::runner;
 use crate::settings::{load_config, standing_capacity, Settings};
+use crate::signals;
 use crate::sysinfo;
 use crate::time::{count, human, Timestamp};
 use crate::workers;
@@ -95,6 +96,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         url: None,
         slots_env: settings.slots_env.clone(),
         shell_env: Some(shell_env.summary.clone()),
+        shell_env_read_at: shell_env.read_at,
+        shell_env_reload: None,
         version: Some(env!("CARGO_PKG_VERSION").to_string()),
         protocol: Some(crate::workers::PROTOCOL),
     };
@@ -102,6 +105,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         info.url = Some(setup::start_dashboard(&shared, &opts)?);
     }
     fsutil::write_json(&paths.daemon_info(), &info)?;
+    let info = Arc::new(Mutex::new(info));
     let (slots, _) = standing_capacity(&paths, settings.slots_env.as_deref())?;
     // Two lines: where to look and what it does. The state and data directories are left to
     // `drmanhattan paths`; recovery is mentioned only when it did something.
@@ -109,7 +113,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         format!(
             "drmanhattan {} running · dashboard {}",
             env!("CARGO_PKG_VERSION"),
-            info.url.as_deref().unwrap_or("off")
+            crate::sync::lock(&info).url.as_deref().unwrap_or("off")
         ),
         format!("watching {} · {}", tilde_path(&inbox), count(slots as usize, "slot", "slots")),
     ];
@@ -131,7 +135,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         log::problem(format_args!("cannot watch the inbox ({e}); checking it every {:?} instead", settings.poll));
     }
 
-    run_loop(&shared, Scheduler::new(paths.clone(), inbox, settings.slots_env.clone()), &settings, &wake);
+    run_loop(&shared, Scheduler::new(paths.clone(), inbox, settings.slots_env.clone()), &settings, &wake, &info);
     let queued = queue::lock(&shared).count(State::Queued);
     let staying = if queued > 0 {
         count(queued, "waiting job runs", "waiting jobs run") + " on the next start"
@@ -143,6 +147,32 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     Ok(())
 }
 
+/// `drmanhattan reload-env` asked (SIGUSR1): reads the login shell's environment again for
+/// the jobs that start afterwards, and records how it went in `dashboard.json`, where the
+/// command that asked reads it. When the shell fails now, jobs keep the snapshot they had.
+fn reload_shell_env(paths: &Paths, timeout: Duration, info: &Mutex<DaemonInfo>) {
+    let result = crate::shell_env::reload(timeout);
+    let mut info = crate::sync::lock(info);
+    let error = match &result {
+        Ok(env) => {
+            log::notice(log::Tone::Quiet, "reloaded", format_args!("{}: {} variables", env.summary, env.vars.len()));
+            info.shell_env = Some(env.summary.clone());
+            info.shell_env_read_at = env.read_at;
+            None
+        }
+        Err(why) => {
+            let kept = info.shell_env_read_at.map(|t| format!(" read at {}", t.local_clock())).unwrap_or_default();
+            let why = format!("{why}; jobs keep the environment{kept}");
+            log::problem(&why);
+            Some(why)
+        }
+    };
+    info.shell_env_reload = Some(ShellEnvReload { at: Timestamp::now(), error });
+    if let Err(e) = fsutil::write_json(&paths.daemon_info(), &*info) {
+        log::problem(format_args!("cannot record the reload in {}: {e}", paths.daemon_info().display()));
+    }
+}
+
 /// Only job and cancel files wake the scheduler: logs and status files change constantly
 /// while jobs run.
 fn wakes_scheduler(path: &Path) -> bool {
@@ -150,12 +180,34 @@ fn wakes_scheduler(path: &Path) -> bool {
     matches!(classify(name), Some((InboxFile::Job | InboxFile::Cancel, _)))
 }
 
-fn run_loop(shared: &Shared, mut scheduler: Scheduler, settings: &Settings, wake: &Receiver<()>) {
+fn run_loop(
+    shared: &Shared,
+    mut scheduler: Scheduler,
+    settings: &Settings,
+    wake: &Receiver<()>,
+    info: &Arc<Mutex<DaemonInfo>>,
+) {
     let mut last_prune = Instant::now();
     let mut last_heartbeat: Option<Instant> = None;
     let mut stopping: Option<Instant> = None;
+    let mut reloads_seen = 0;
+    let mut reloading: Option<std::thread::JoinHandle<()>> = None;
     loop {
         let signals = shutdown::signals();
+        // One reload at a time; a request that arrives during one runs after it.
+        let reloads = signals::reloads_received();
+        if reloads > reloads_seen && reloading.as_ref().map_or(true, |t| t.is_finished()) {
+            let (paths, timeout, info) = (scheduler.paths.clone(), settings.shell_env_timeout, info.clone());
+            let thread = std::thread::Builder::new().name("reload-env".into());
+            match thread.spawn(move || reload_shell_env(&paths, timeout, &info)) {
+                Ok(handle) => {
+                    reloads_seen = reloads;
+                    reloading = Some(handle);
+                }
+                // Not counted as seen: the next pass tries again.
+                Err(e) => log::problem(format_args!("could not start a thread to re-read the environment: {e}")),
+            }
+        }
         if signals >= 2 {
             log::notice(log::Tone::Warning, "stopping", "now: cancelling the running jobs");
             shutdown::force_stop(shared, settings);

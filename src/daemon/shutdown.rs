@@ -17,6 +17,8 @@ use crate::time::{count, human};
 
 pub(super) fn install_signal_handlers() {
     signals::count(&[libc::SIGINT, libc::SIGTERM, libc::SIGHUP]);
+    // `drmanhattan reload-env`: a request, not a stop (see `daemon::reload_shell_env`).
+    signals::count_reloads();
 }
 
 /// How many stop signals have arrived.

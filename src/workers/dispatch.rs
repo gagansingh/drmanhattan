@@ -214,7 +214,7 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         priority: job.priority,
         variant: job.variant.clone(),
         // The jobs' shell environment, when captured, is what `env_forward` picks from.
-        env: forwarded_env(job, std::env::vars().chain(crate::shell_env::vars().iter().cloned())),
+        env: forwarded_env(job, std::env::vars().chain(crate::shell_env::vars().vars.iter().cloned())),
         source: job.source.clone().map(SourceSpec::Full),
         session: None,
         activity: job.activity.clone(),

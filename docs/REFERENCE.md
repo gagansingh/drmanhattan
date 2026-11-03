@@ -213,14 +213,19 @@ for start and done, `text` for a note).
 ## The jobs' environment and terminal
 
 A daemon started by launchd or systemd has a bare environment. So when it starts, drmanhattan
-asks your login shell for its environment once (`$SHELL -ilc`, else zsh, else bash), under a
+asks your login shell for its environment (`$SHELL -ilc`, else zsh, else bash), under a
 terminal and with up to 10 seconds to answer, and every job starts from that: the PATH your
 shell sets up (Homebrew, nvm, pyenv, `~/.local/bin`) and your exported variables, but not the
 shell's own (`SHLVL`, `PWD`, prompts). A job's `env` overrides them. If the shell fails or does
 not answer, the daemon log says so once and jobs get the daemon's environment with
 `/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and the system directories at the front
-of PATH. `drmanhattan paths` shows which (`shell_env=`); `DRMANHATTAN_SHELL_ENV=0` turns it off.
-It is read again when the daemon restarts.
+of PATH. `drmanhattan paths` shows which, and when it was read (`shell_env=`);
+`DRMANHATTAN_SHELL_ENV=0` turns it off.
+
+It is read once, so a new `export` in your shell files, or an nvm default switched to another
+version, reaches jobs only after `drmanhattan reload-env`, which reads it again for the jobs
+that start afterwards (running jobs and services keep theirs), or after a restart. If the
+shell then fails or does not answer, jobs keep the environment they had and the command says so.
 
 Jobs run with stdin at EOF and their output going to the log, not to a terminal. Input a
 command needs goes in a file or an argument, not through a pipe into `submit`:
@@ -355,7 +360,8 @@ shell operators each have a colour; hover a job's name to see its command.
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `stop [<name>]`, `slots [N]` and `paths`. Each has `--help`.
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]` and
+`paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |
@@ -368,6 +374,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | jobs that may run at once (also `drmanhattan slots N`) |
 | `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
+| `DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS` | 10 | how long the login shell may take to print its environment |
 | `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |
 | `DRMANHATTAN_MAX_PREPARES` | 4 | `prepare` commands that may run at once |
 | `DRMANHATTAN_SHUTDOWN_GRACE_SECONDS` | 30 | how long `stop` lets running jobs finish |

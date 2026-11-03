@@ -6,9 +6,9 @@
 #
 # Run `drmanhattan` once in a terminal first to answer its one-time question (a service has
 # no terminal to ask in). Logs: journalctl --user -u drmanhattan, or drmanhattan.log in the
-# data directory, which it rotates itself. It is restarted if it
-# crashes, not after `drmanhattan stop`. Jobs inherit the PATH below: add the directories
-# your builds need.
+# data directory, which it rotates itself. It is restarted if it crashes, not after
+# `drmanhattan stop`. Jobs get your login shell's environment, not the PATH below, which is
+# the daemon's own and the fallback when the shell does not answer.
 [Unit]
 Description=drmanhattan local job queue
 Documentation=https://github.com/gagansingh/drmanhattan
