@@ -43,6 +43,8 @@ struct StatusDoc<'a> {
     capacity: u32,
     version: &'static str,
     auto_update: bool,
+    /// What auto-update is doing, in words.
+    auto_update_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     update: Option<crate::update::Available>,
     #[serde(rename = "override")]
@@ -168,6 +170,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         capacity,
         version: crate::update::current(),
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
+        auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
         capacity_override: read_override(paths),
         running: running
@@ -211,6 +214,9 @@ fn print_text(doc: &StatusDoc) {
         kv("version", doc.version),
         kv("auto_update", if doc.auto_update { "on" } else { "off" }),
     ];
+    if doc.auto_update {
+        head.push(kv("auto_update_state", &doc.auto_update_state));
+    }
     if let Some(o) = &doc.capacity_override {
         head.extend([kv("override", o.slots), kv("override_until", o.until)]);
     }

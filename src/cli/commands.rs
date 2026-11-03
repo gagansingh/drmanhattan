@@ -74,7 +74,7 @@ and running jobs end when the daemon restarts. The archive's SHA-256 is checked 
 anything is replaced; a failed download or checksum leaves this version in place.
 
 --auto on lets the daemon install newer releases of this major version by itself, once the
-queue has been idle for 10 minutes; --auto off (the default) only shows the notice.
+queue has been idle for 5 minutes; --auto off (the default) only shows the notice.
 ",
     values: &["auto"],
     switches: &["now"],

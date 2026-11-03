@@ -4,13 +4,22 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use super::bin;
 
 /// A release server: `/latest` redirects to `/tag/<tag>`, and `/download/<tag>/` serves this
-/// platform's archive (two scripts that say they are `<tag>`) and its checksum.
+/// platform's archive (two scripts that say they are `<tag>`) and its checksum. `/latest`
+/// can be pointed at another tag, to publish a release while a daemon runs.
 pub struct Releases {
     pub url: String,
+    latest: Arc<Mutex<String>>,
+}
+
+impl Releases {
+    pub fn set_latest(&self, tag: &str) {
+        *self.latest.lock().unwrap() = tag.to_string();
+    }
 }
 
 pub fn asset(tag: &str) -> String {
@@ -47,13 +56,16 @@ pub fn releases(root: &Path, tag: &str, good_checksum: bool) -> Releases {
     let url = format!("http://{}", server.server_addr().to_ip().unwrap());
     let (tag, bytes, name) = (tag.to_string(), fs::read(&archive).unwrap(), asset(tag));
     let base = url.clone();
+    let latest = Arc::new(Mutex::new(tag.clone()));
+    let served = latest.clone();
     std::thread::spawn(move || {
         while let Ok(req) = server.recv() {
             let path = req.url().to_string();
             let response = if path == "/latest" {
-                let to = tiny_http::Header::from_bytes("Location", format!("{base}/tag/{tag}")).unwrap();
+                let now = served.lock().unwrap().clone();
+                let to = tiny_http::Header::from_bytes("Location", format!("{base}/tag/{now}")).unwrap();
                 tiny_http::Response::from_data(Vec::new()).with_status_code(302).with_header(to)
-            } else if path == format!("/tag/{tag}") {
+            } else if path.starts_with("/tag/") {
                 tiny_http::Response::from_data(b"release notes".to_vec())
             } else if path == format!("/download/{tag}/{name}") {
                 tiny_http::Response::from_data(bytes.clone())
@@ -65,7 +77,7 @@ pub fn releases(root: &Path, tag: &str, good_checksum: bool) -> Releases {
             let _ = req.respond(response);
         }
     });
-    Releases { url }
+    Releases { url, latest }
 }
 
 /// A copy of drmanhattan installed in a directory of its own, as the installer would.

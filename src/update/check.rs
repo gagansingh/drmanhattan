@@ -1,5 +1,8 @@
-//! The daemon's daily look for a newer release, kept in `update-check.json` in the data
-//! directory for the dashboard and `status`. `DRMANHATTAN_NO_UPDATE_CHECK=1` turns it off.
+//! The daemon's look for a newer release, every 4 hours by the wall clock, kept in
+//! `update-check.json` in the data directory for the dashboard and `status`. The wait is
+//! short sleeps against `checked_at`, not one long sleep, whose monotonic clock stops while
+//! a laptop sleeps: a machine that wakes after the interval checks within minutes.
+//! `DRMANHATTAN_NO_UPDATE_CHECK=1` turns it off.
 
 use std::time::Duration;
 
@@ -10,7 +13,16 @@ use crate::fsutil;
 use crate::paths::Paths;
 use crate::time::Timestamp;
 
-const CHECK_EVERY: Duration = Duration::from_secs(86_400);
+/// Between checks; `DRMANHATTAN_UPDATE_CHECK_SECONDS` for tests.
+pub(super) fn check_every() -> Duration {
+    super::seconds_env("DRMANHATTAN_UPDATE_CHECK_SECONDS", 4 * 3600)
+}
+
+/// How often the loop wakes to compare the clock; the first look is this long after start
+/// too, at most a minute, so a restart never waits on the network.
+fn tick() -> Duration {
+    super::seconds_env("DRMANHATTAN_UPDATE_TICK_SECONDS", 300)
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 struct Check {
@@ -39,21 +51,34 @@ pub(super) fn last_checked(paths: &Paths) -> Option<Timestamp> {
     fsutil::read_json::<Check>(&paths.data.join("update-check.json")).map(|c| c.checked_at)
 }
 
-/// Starts the check on a thread of its own: at most once a day, never in start-up's way.
+/// Starts the check on a thread of its own.
 pub(crate) fn start_checker(paths: Paths) {
-    if std::env::var("DRMANHATTAN_NO_UPDATE_CHECK").is_ok_and(|v| v == "1") {
+    if !checks_on() {
         return;
     }
-    let _ = std::thread::Builder::new().name("update-check".into()).spawn(move || loop {
+    let _ = std::thread::Builder::new().name("update-check".into()).spawn(move || {
         let file = paths.data.join("update-check.json");
-        let last: Option<Check> = fsutil::read_json(&file);
-        let due = last.as_ref().map_or(Duration::ZERO, |c| CHECK_EVERY.saturating_sub(c.checked_at.elapsed()));
-        std::thread::sleep(due);
-        match latest_tag() {
-            Ok(latest) => {
-                let _ = fsutil::write_json(&file, &Check { checked_at: Timestamp::now(), latest });
+        let mut offline_until: Option<Timestamp> = None;
+        std::thread::sleep(tick().min(Duration::from_secs(60)));
+        loop {
+            let last: Option<Check> = fsutil::read_json(&file);
+            // A checked_at in the future means the clock moved back: check rather than wait.
+            let due = last.map_or(true, |c| c.checked_at.elapsed() >= check_every() || c.checked_at > Timestamp::now());
+            if due && offline_until.map_or(true, |t| Timestamp::now() >= t) {
+                match latest_tag() {
+                    Ok(latest) => {
+                        offline_until = None;
+                        let _ = fsutil::write_json(&file, &Check { checked_at: Timestamp::now(), latest });
+                    }
+                    // Offline: try again in an hour, or sooner when checks are that frequent.
+                    Err(_) => offline_until = Some(Timestamp::now().plus(check_every().min(Duration::from_secs(3600)))),
+                }
             }
-            Err(_) => std::thread::sleep(Duration::from_secs(3600)), // offline: try again later
+            std::thread::sleep(tick());
         }
     });
+}
+
+pub(super) fn checks_on() -> bool {
+    std::env::var("DRMANHATTAN_NO_UPDATE_CHECK").map_or(true, |v| v != "1")
 }

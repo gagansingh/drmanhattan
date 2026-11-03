@@ -4,7 +4,7 @@
 //! running or queued (`--now` does not), downloads this platform's archive, checks its
 //! SHA-256, replaces both commands beside the running executable, and restarts the daemon
 //! (`restart`). A failed download or checksum leaves the old version in place. The daemon
-//! looks for a newer release once a day (`check`).
+//! looks for a newer release every 4 hours (`check`) and may install it itself (`auto`).
 
 mod auto;
 mod check;
@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-pub(crate) use auto::start_auto_updater;
+pub(crate) use auto::{start_auto_updater, summary as auto_update_summary};
 pub(crate) use check::{available, start_checker, Available};
 pub(crate) use release::current;
 use release::{asset, download, is_newer, latest_tag, releases_url, sha256};
@@ -26,6 +26,11 @@ use crate::error::{invalid, Error, Result};
 use crate::job::State;
 use crate::paths::Paths;
 use crate::queue::read_records;
+
+/// A whole number of seconds from the environment, for tests to shorten a wait.
+fn seconds_env(name: &str, default: u64) -> Duration {
+    Duration::from_secs_f64(std::env::var(name).ok().and_then(|s| s.parse().ok()).unwrap_or(default as f64))
+}
 
 /// `drmanhattan update`.
 pub(crate) fn update(now: bool) -> Result<i32> {
