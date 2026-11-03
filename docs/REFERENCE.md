@@ -76,8 +76,18 @@ Results are removed seven days after the job finishes.
 
 ## Following one run
 
-A run can be named by its run id, its short id (the `#094a70` in the queue's terminal), or
-its job's name:
+The queue's terminal prints a line for each thing that happens, with the run's short id:
+
+```
+drmanhattan 0.6.2 running · dashboard http://127.0.0.1:8417/
+watching ~/.drmanhattan/inbox · 1 slot
+
+14:52:34  queued     make test   #094a70  make · ~/project
+14:52:34  started    make test   #094a70  slot 1 · waited 0s
+14:53:20  succeeded  make test   #094a70  46s
+```
+
+A run can be named by its run id, that short id, or its job's name:
 
 ```
 drmanhattan status tests --json          # its record, as tests.status.json has it, plus state and exit
@@ -405,8 +415,9 @@ releases of the same major version by itself, once the queue has been empty for 
 mid-job. A new major version only shows the notice. A failed update leaves the running version
 and is tried again an hour later. `status` (`auto_update_state=`) and the footer toggle's
 tooltip say where it stands: `up to date (checked 2:10 PM, next ~6:10 PM)`, `0.6.1 found,
-waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt failed: …`. The daemon's log then says `auto-updated 0.5.0 → 0.5.1`, and the dashboard shows a
-note you can dismiss. It is off by default; `status` shows the setting.
+waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt failed: …`.
+After an update the daemon's log says `auto-updated 0.6.1 → 0.6.2`, and the dashboard shows
+a note you can dismiss. It is off by default; `status` shows the setting.
 
 ## Disk use
 
