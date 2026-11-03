@@ -856,9 +856,14 @@ function renderVersion(d) {
   firstVersion = firstVersion || d.version;
   if (d.version && d.version !== firstVersion) { location.reload(); return; }
   const u = d.update;
-  const offer = u && !updating
-    ? ` · <a href="${esc(u.url)}" title="What is new">${esc(u.version)} available</a>`
-      + `<button data-action="update" ${d.idle ? '' : 'disabled'} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
+  const when = d.idle ? '' : 'disabled';
+  const offer = updating ? ''
+    : d.installed
+      ? ` · ${esc(d.installed)} installed, restart pending`
+        + `<button data-action="update" ${when} title="${d.idle ? `Restart into ${esc(d.installed)}` : 'Once nothing is running or waiting'}">Restart</button>`
+    : u
+      ? ` · <a href="${esc(u.url)}" title="What is new">${esc(u.version)} available</a>`
+        + `<button data-action="update" ${when} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
     : '';
   const auto = `<button data-action="auto-update" aria-pressed="${!!d.auto_update}" title="${d.auto_update
     ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves once the queue has been idle for 5 minutes. Click to turn off.`

@@ -43,6 +43,12 @@ pub(crate) struct DaemonInfo {
     /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_env: Option<String>,
+    /// The running daemon's version and worker protocol, which the installed command may
+    /// no longer share until it restarts. Absent before 0.6.2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) protocol: Option<u32>,
 }
 
 /// Takes the lock, or returns None when another daemon holds it.

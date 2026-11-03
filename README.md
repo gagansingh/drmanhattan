@@ -49,6 +49,9 @@ hours by the wall clock, so a laptop that slept past a check looks soon after it
 minute after it starts when the last look is older than that
 (`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
 dashboard's footer, which shows the version, offers an Update button while the queue is idle.
+Until the daemon restarts into a newly installed version, `status` says `installed=0.6.2
+running=0.6.1 restart=pending` and the footer offers a Restart button; `drmanhattan update`
+then restarts it, waiting for the queue as usual.
 
 `drmanhattan update --auto on` (or the footer's toggle) lets the daemon install newer
 releases of the same major version by itself, once the queue has been empty for 5 minutes
@@ -240,8 +243,10 @@ On this machine, `config.json` in the data directory lists them:
 | `drmanhattan` | the command on it, when `drmanhattan` is not on its non-interactive `PATH` |
 
 `drmanhattan workers add <ssh-alias> [--slots N] [--tag T]` checks the machine (it answers
-with its key alone, runs the same drmanhattan version, confirmed and running) and adds it.
-`drmanhattan workers` lists them with their state.
+with its key alone, speaks the same worker protocol, confirmed and running) and adds it.
+`drmanhattan workers` lists them with their state. Machines work together whatever their
+versions as long as their protocols match; the protocol changes only when the hand-off does,
+and a worker whose protocol differs is listed with the machine to update.
 
 A job says whether it may go to a worker:
 
@@ -261,7 +266,7 @@ What happens:
   that may use it: `remote` allows it, the worker has its tags, it is not paused, and it is
   not out of admission after a failure.
 - **Hand-over.** Dispatches to one worker go one at a time. This machine reaches the
-  worker, checks its version, that it holds fewer of its own slots than this machine may
+  worker, checks its protocol, that it holds fewer of its own slots than this machine may
   use, its free disk and its `check`; mirrors the `sync` paths with `rsync -a --delete`
   (leaving out what git ignores there, `.git` itself and `.DS_Store`; the worker keeps its
   own copies of those); writes the job into the worker's inbox; and waits up to two minutes

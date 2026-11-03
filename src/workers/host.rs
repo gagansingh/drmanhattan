@@ -27,12 +27,15 @@ use crate::settings::effective_capacity;
 use crate::sysinfo;
 use crate::time::Timestamp;
 
-/// Bumped when what a dispatcher and a worker say to each other changes.
+/// Bumped only when what a dispatcher and a worker say to each other changes: the probe,
+/// the job files a dispatcher writes into the worker's inbox, or how it follows and
+/// cancels them there. Machines whose protocols match work together whatever their versions.
 pub(crate) const PROTOCOL: u32 = 1;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub(crate) struct MachineStats {
     pub(crate) version: String,
+    /// The running daemon's protocol, else this command's.
     pub(crate) protocol: u32,
     pub(crate) hostname: String,
     pub(crate) home: PathBuf,
@@ -94,8 +97,12 @@ fn stats(paths: &Paths) -> MachineStats {
     let readings = sysinfo::read_now(Duration::from_millis(300));
     let home = paths::home();
     MachineStats {
-        version: env!("CARGO_PKG_VERSION").to_string(),
-        protocol: PROTOCOL,
+        // A daemon from before 0.6.2 does not say; those all spoke protocol 1.
+        version: running
+            .as_ref()
+            .and_then(|d| d.info.as_ref()?.version.clone())
+            .unwrap_or_else(|| env!("CARGO_PKG_VERSION").into()),
+        protocol: running.as_ref().map_or(PROTOCOL, |d| d.info.as_ref().and_then(|i| i.protocol).unwrap_or(1)),
         hostname: hostname(),
         acknowledged: acknowledge::is_acknowledged(paths),
         daemon: running.is_some(),

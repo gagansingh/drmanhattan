@@ -56,9 +56,14 @@ pub(crate) fn remote_name(rec: &Record) -> String {
 
 /// Checks that a machine's `machine-stats` make it a usable worker; the reason if not.
 pub(crate) fn unusable(stats: &MachineStats) -> Option<String> {
-    let ours = env!("CARGO_PKG_VERSION");
-    if stats.protocol != PROTOCOL || stats.version != ours {
-        return Some(format!("it runs drmanhattan {}, this machine {ours}; they must match", stats.version));
+    if stats.protocol != PROTOCOL {
+        let behind = if stats.protocol < PROTOCOL { stats.hostname.clone() } else { hostname() };
+        return Some(format!(
+            "its drmanhattan {} speaks worker protocol {}, this machine's {} speaks {PROTOCOL}; update {behind}",
+            stats.version,
+            stats.protocol,
+            env!("CARGO_PKG_VERSION"),
+        ));
     }
     if !stats.acknowledged {
         return Some("its drmanhattan has not been started and confirmed there yet".into());
@@ -250,6 +255,25 @@ pub(crate) fn forwarded_env(job: &Job, daemon_env: impl Iterator<Item = (String,
 mod tests {
     use super::*;
     use crate::job::JobFiles;
+
+    fn stats(version: &str, protocol: u32) -> MachineStats {
+        serde_json::from_value(serde_json::json!({
+            "version": version, "protocol": protocol, "hostname": "the-air", "home": "/Users/me",
+            "acknowledged": true, "daemon": true, "inbox": null, "running": 0, "capacity": 1,
+            "cpu_pct": null, "load": null, "ncpu": 8, "memory": null, "thermals": null, "free_gb": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn workers_match_by_protocol_not_version() {
+        assert_eq!(unusable(&stats("0.0.1", PROTOCOL)), None, "another version, the same protocol");
+        let behind = unusable(&stats("0.0.1", PROTOCOL - 1)).unwrap();
+        assert!(behind.contains(&format!("speaks worker protocol {}", PROTOCOL - 1)), "{behind}");
+        assert!(behind.ends_with("update the-air"), "{behind}");
+        let ahead = unusable(&stats("99.0.0", PROTOCOL + 1)).unwrap();
+        assert!(ahead.ends_with(&format!("update {}", hostname())), "{ahead}");
+    }
 
     #[test]
     fn env_forward_adds_named_daemon_variables_under_the_jobs_own() {
