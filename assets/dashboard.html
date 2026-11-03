@@ -861,8 +861,8 @@ function renderVersion(d) {
       + `<button data-action="update" ${d.idle ? '' : 'disabled'} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
     : '';
   const auto = `<button data-action="auto-update" aria-pressed="${!!d.auto_update}" title="${d.auto_update
-    ? 'Newer releases of this major version install by themselves once the queue has been idle for 10 minutes. Click to turn off.'
-    : 'Click to install newer releases of this major version by themselves, once the queue has been idle for 10 minutes'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
+    ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves once the queue has been idle for 5 minutes. Click to turn off.`
+    : 'Click to install newer releases of this major version by themselves, once the queue has been idle for 5 minutes'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
   const done = d.updated && recall('dismissed-updated') !== d.updated.to
     ? ` · <span class="updated">${d.updated.auto ? 'auto-' : ''}updated to <a href="${esc(d.updated.url)}">${esc(d.updated.to)}</a>`
       + `<button data-action="dismiss-updated" aria-label="Dismiss">✕</button></span>`

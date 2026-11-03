@@ -44,15 +44,19 @@ drmanhattan update --now  # does not wait; running jobs end when the daemon rest
 the running one lives in), after checking the archive's SHA-256, and restarts the daemon:
 through launchd or systemd when it runs as a service, else by starting the new version itself.
 A failed download or checksum leaves the installed version as it was; a directory it cannot
-write to gets a hint to rerun the installer. The daemon looks for a newer release once a day
+write to gets a hint to rerun the installer. The daemon looks for a newer release every 4
+hours by the wall clock, so a laptop that slept past a check looks soon after it wakes, and a
+minute after it starts when the last look is older than that
 (`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
 dashboard's footer, which shows the version, offers an Update button while the queue is idle.
 
 `drmanhattan update --auto on` (or the footer's toggle) lets the daemon install newer
-releases of the same major version by itself, once the queue has been empty for 10 minutes;
-new work restarts that wait, and it never updates mid-job. A new major version only shows the
-notice. A failed update leaves the running version and is tried again after the next daily
-check. The daemon's log then says `auto-updated 0.5.0 → 0.5.1`, and the dashboard shows a
+releases of the same major version by itself, once the queue has been empty for 5 minutes
+(`DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS`); new work restarts that wait, and it never updates
+mid-job. A new major version only shows the notice. A failed update leaves the running version
+and is tried again an hour later. `status` (`auto_update_state=`) and the footer toggle's
+tooltip say where it stands: `up to date (checked 2:10 PM, next ~6:10 PM)`, `0.6.1 found,
+waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt failed: …`. The daemon's log then says `auto-updated 0.5.0 → 0.5.1`, and the dashboard shows a
 note you can dismiss. It is off by default; `status` shows the setting.
 
 ## Quick start

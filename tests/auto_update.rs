@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
-use common::releases::{installed, releases};
+use common::releases::{installed, releases, Releases};
 use common::{wait_for, Daemon};
 use serde_json::Value;
 
@@ -20,19 +20,35 @@ fn next_minor() -> String {
     format!("v{}.{}.0", parts[0], parts[1])
 }
 
-/// A queue run by its own copy of drmanhattan, with releases at `tag` and a short idle wait.
-fn queue(tag: &str, good_checksum: bool) -> (Daemon, tempdir::Dir) {
+/// A queue run by its own copy of drmanhattan, with releases at `tag`, a short idle wait and
+/// a fast check loop, plus any `extra` settings.
+fn queue_with(tag: &str, good_checksum: bool, extra: &[(&str, &str)]) -> (Daemon, tempdir::Dir, Releases) {
     let dir = tempdir::Dir::new("auto");
     let r = releases(&dir.0, tag, good_checksum);
-    let extra = [
+    let mut env = vec![
         ("DRMANHATTAN_NO_UPDATE_CHECK", "0"),
         ("DRMANHATTAN_RELEASES_URL", r.url.as_str()),
         ("DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS", "2"),
+        ("DRMANHATTAN_UPDATE_TICK_SECONDS", "0.5"),
     ];
-    let d = Daemon::start_with(&extra, |root| installed(root).join("drmanhattan"));
-    // The daily check runs at start; wait for what it found.
+    env.extend_from_slice(extra);
+    let d = Daemon::start_with(&env, |root| installed(root).join("drmanhattan"));
+    // The first check runs a tick after start; wait for what it found.
     wait_for(T, || d.data.join("update-check.json").exists().then_some(())).expect("the release check ran");
+    (d, dir, r)
+}
+
+fn queue(tag: &str, good_checksum: bool) -> (Daemon, tempdir::Dir) {
+    let (d, dir, _) = queue_with(tag, good_checksum, &[]);
     (d, dir)
+}
+
+fn check(d: &Daemon) -> Value {
+    serde_json::from_str(&fs::read_to_string(d.data.join("update-check.json")).unwrap_or_default()).unwrap_or_default()
+}
+
+fn auto_state(d: &Daemon) -> String {
+    d.status_json()["auto_update_state"].as_str().unwrap_or_default().to_string()
 }
 
 fn version_of(program: &Path) -> String {
@@ -54,6 +70,7 @@ fn it_is_off_by_default() {
     std::thread::sleep(Duration::from_secs(4));
     assert_eq!(version_of(&d.program), format!("drmanhattan {CURRENT}"));
     assert_eq!(d.status_json()["auto_update"], false);
+    assert_eq!(auto_state(&d), "off");
     assert_eq!(d.api_state()["update"]["version"], next_minor().trim_start_matches('v'));
 }
 
@@ -64,9 +81,11 @@ fn it_waits_for_an_idle_queue_and_new_work_resets_the_wait() {
     assert_eq!(d.status_json()["auto_update"], true);
     d.submit("first", d.job("sleep 3"));
     d.wait_state("first", "running", T);
+    let found = next_minor().trim_start_matches('v').to_string();
+    wait_for(T, || auto_state(&d).contains(&format!("{found} found, queue busy")).then_some(())).expect("busy");
     d.wait_exit("first", T);
     // Arrives inside the idle wait: the wait starts again once it is done.
-    std::thread::sleep(Duration::from_millis(800));
+    wait_for(T, || auto_state(&d).contains("found, waiting for 1 min idle").then_some(())).expect("waiting");
     d.submit("second", d.job("sleep 2"));
     assert_eq!(d.wait_exit("second", T), 0, "never updated mid-job");
     let second_done = common::epoch(&d.status_of("second").unwrap()["finished_at"]);
@@ -92,6 +111,35 @@ fn a_bad_checksum_keeps_the_running_version_and_says_why() {
     d.wait_daemon_log("failed: the checksum");
     assert_eq!(version_of(&d.program), format!("drmanhattan {CURRENT}"));
     assert!(updated(&d).is_none());
+    assert!(auto_state(&d).starts_with("last attempt failed: the checksum"), "{}", auto_state(&d));
+}
+
+#[test]
+fn a_failed_install_is_tried_again_after_the_back_off() {
+    let (d, _dir, _r) = queue_with(&next_minor(), false, &[("DRMANHATTAN_AUTO_UPDATE_RETRY_SECONDS", "2")]);
+    auto(&d, "on");
+    let tries = || d.daemon_log().matches("failed: the checksum").count();
+    wait_for(T, || (tries() >= 2).then_some(())).expect("tried again after the back-off");
+}
+
+#[test]
+fn a_release_published_later_is_found_after_the_interval() {
+    let (d, _dir, r) = queue_with(&next_minor(), true, &[("DRMANHATTAN_UPDATE_CHECK_SECONDS", "2")]);
+    r.set_latest(&format!("v{CURRENT}"));
+    wait_for(T, || (check(&d)["latest"] == format!("v{CURRENT}")).then_some(())).expect("up to date");
+    auto(&d, "on");
+    assert!(auto_state(&d).starts_with("up to date (checked "), "{}", auto_state(&d));
+    r.set_latest(&next_minor());
+    wait_for(T, || (check(&d)["latest"] == next_minor()).then_some(())).expect("found on a later check");
+}
+
+#[test]
+fn a_check_older_than_the_interval_runs_on_the_next_loop() {
+    // As after a night asleep: the record is old, though the daemon's own clock barely moved.
+    let (d, _dir) = queue(&format!("v{CURRENT}"), true);
+    let stale = serde_json::json!({"checked_at": "2020-01-01T00:00:00.000Z", "latest": format!("v{CURRENT}")});
+    fs::write(d.data.join("update-check.json"), stale.to_string()).unwrap();
+    wait_for(T, || (!check(&d)["checked_at"].as_str()?.starts_with("2020")).then_some(())).expect("checked again");
 }
 
 /// A private temporary directory, removed when dropped.
