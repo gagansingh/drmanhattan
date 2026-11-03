@@ -214,6 +214,9 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
             std::thread::sleep(POLL);
         }
     }
+    if piped_input_waiting() {
+        log::warn("jobs get no stdin, so the input piped to submit is not passed on; give it as a file or an argument");
+    }
     write_job(&files, &spec)?;
     let queued = format!(
         "{}queued {} as {name} in {}",
@@ -246,6 +249,25 @@ fn absolute(path: &str) -> String {
         return path.to_string();
     }
     std::env::current_dir().map_or_else(|_| path.to_string(), |d| d.join(p).to_string_lossy().into_owned())
+}
+
+/// Whether something has already been piped into `submit`: fd 0 is a pipe with bytes
+/// waiting. A terminal or `/dev/null` is never a pipe, and a pipe nothing has written to
+/// yet counts as empty, so this never blocks; it is a warning's worth of certainty, not more.
+fn piped_input_waiting() -> bool {
+    use std::fs::File;
+    use std::mem::ManuallyDrop;
+    use std::os::unix::fs::FileTypeExt;
+    use std::os::unix::io::FromRawFd;
+
+    // SAFETY: fd 0 is open for the life of the process; ManuallyDrop keeps it from being closed.
+    let stdin = ManuallyDrop::new(unsafe { File::from_raw_fd(0) });
+    if !stdin.metadata().is_ok_and(|m| m.file_type().is_fifo()) {
+        return false;
+    }
+    let mut waiting: libc::c_int = 0;
+    // SAFETY: FIONREAD writes the number of unread bytes into the int it is given.
+    unsafe { libc::ioctl(0, libc::FIONREAD as _, &mut waiting) == 0 && waiting > 0 }
 }
 
 /// Writes the job file, refusing a name that is already queued or running. A finished

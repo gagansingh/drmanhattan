@@ -58,8 +58,9 @@ exit code. Start servers with
 `--ready-log <regex>`), never with `--wait`: it returns once the server is
 ready. Use it too for any command you can't run directly in this environment.
 Don't wrap commands in `zsh -ic` or `bash -lc`; jobs already get your shell
-environment. If it reports that drmanhattan isn't running, ask the user to
-start it; don't start it yourself.
+environment. Jobs get no stdin: pass input as a file or an argument, never by
+piping into `manhattan submit`. If it reports that drmanhattan isn't running,
+ask the user to start it; don't start it yourself.
 ```
 
 Agents sharing a machine then run their builds one after another. When the queue is not
