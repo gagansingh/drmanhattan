@@ -22,8 +22,12 @@ pub(crate) struct Pty {
 pub(crate) fn open() -> std::io::Result<Pty> {
     let (mut master, mut slave) = (-1, -1);
     let mut size = libc::winsize { ws_row: ROWS, ws_col: COLUMNS, ws_xpixel: 0, ws_ypixel: 0 };
-    // SAFETY: openpty writes two fresh descriptors, which we own from here on.
-    if unsafe { libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), &mut size) } != 0 {
+    // SAFETY: openpty writes two fresh descriptors, which we own from here on. The size is
+    // `*mut` on macOS and `*const` on Linux; a raw pointer suits both.
+    if unsafe {
+        libc::openpty(&mut master, &mut slave, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::addr_of_mut!(size))
+    } != 0
+    {
         return Err(std::io::Error::last_os_error());
     }
     // SAFETY: both descriptors were just opened and nothing else owns them.
