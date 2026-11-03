@@ -126,6 +126,8 @@ fn manual_order_puts_listed_waiters_first() {
     assert_eq!(st["waiters"][0]["label"], "long");
     assert_eq!(st["waiters"][0]["manual"], true);
     assert_eq!(st["waiters"][1]["manual"], false);
+    // Whole seconds, under the names scripts have read since 0.2.
+    assert!(st["waiters"][0]["waited_seconds"].is_u64() && st["running"][0]["elapsed_seconds"].is_u64(), "{st}");
     d.wait_exit("long", T);
     d.wait_exit("short", T);
     assert!(started(&d, "long") < started(&d, "short"));

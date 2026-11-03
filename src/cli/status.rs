@@ -76,6 +76,9 @@ struct RunningDoc<'a> {
     category: &'a str,
     cwd: &'a PathBuf,
     started_at: Option<Timestamp>,
+    elapsed_seconds: Option<u64>,
+    /// The same, to the millisecond, for the text lines.
+    #[serde(skip)]
     elapsed: Option<std::time::Duration>,
     expected_seconds: Option<u64>,
     log: &'a PathBuf,
@@ -88,6 +91,8 @@ struct WaiterDoc<'a> {
     run_id: &'a RunId,
     label: &'a str,
     category: &'a str,
+    waited_seconds: u64,
+    #[serde(skip)]
     waited: std::time::Duration,
     expected_seconds: Option<u64>,
     skip_after_seconds: u64,
@@ -143,6 +148,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             run_id: &r.run_id,
             label: &r.job.label,
             category: &r.job.category,
+            waited_seconds: r.queued_at.until(now).as_secs(),
             waited: r.queued_at.until(now),
             expected_seconds: r.expected_seconds,
             skip_after_seconds: r.skip_after_seconds,
@@ -176,6 +182,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 category: &r.job.category,
                 cwd: &r.job.cwd,
                 started_at: r.started_at,
+                elapsed_seconds: r.started_at.map(|s| s.until(now).as_secs()),
                 elapsed: r.started_at.map(|s| s.until(now)),
                 expected_seconds: r.expected_seconds,
                 log: &r.job.log,
