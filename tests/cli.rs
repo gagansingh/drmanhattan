@@ -11,6 +11,37 @@ use serde_json::json;
 const T: Duration = Duration::from_secs(30);
 
 #[test]
+fn submit_warns_about_piped_input_and_runs_the_job_anyway() {
+    use std::fs::File;
+    use std::os::unix::io::FromRawFd;
+    use std::process::Stdio;
+
+    let d = Daemon::start(&[]);
+    // A pipe with bytes already waiting, as `echo msg | manhattan submit …` gives.
+    let mut fds = [0; 2];
+    // SAFETY: pipe() fills two fds; the write end is written once and closed here.
+    let piped = unsafe {
+        assert_eq!(libc::pipe(fds.as_mut_ptr()), 0);
+        assert_eq!(libc::write(fds[1], b"msg\n".as_ptr().cast(), 4), 4);
+        libc::close(fds[1]);
+        File::from_raw_fd(fds[0])
+    };
+    let out = d
+        .cmd(&["submit", "--name", "piped", "--wait", "--", "sh", "-c", "cat; echo done"])
+        .stdin(Stdio::from(piped))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{stderr}");
+    assert!(stderr.contains("input piped to submit is not passed on"), "{stderr}");
+    assert!(String::from_utf8_lossy(&out.stdout).contains("done\n"));
+    // Nothing piped: no warning.
+    let quiet = d.cmd(&["submit", "--name", "quiet", "--wait", "--", "true"]).stdin(Stdio::null()).output().unwrap();
+    assert_eq!(quiet.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&quiet.stderr).contains("piped"));
+}
+
+#[test]
 fn submit_command_writes_a_job_and_can_wait_for_it() {
     let d = Daemon::start(&[]);
     let out = d
