@@ -196,7 +196,11 @@ td.none { padding: 12px 16px; color: var(--faint); font-size: 12px; line-height:
 .s-cancelled i { color: var(--faint); }
 
 /* The first error line of a failed run reads as the log output it is. */
-.error-line { margin-top: 4px; color: var(--red); font-family: var(--mono); font-size: 12px; line-height: 16px; overflow-wrap: anywhere; }
+/* At most two lines in a row; the whole line is in its title and the log. */
+.error-line {
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden;
+  margin-top: 4px; color: var(--red); font-family: var(--mono); font-size: 12px; line-height: 16px; overflow-wrap: anywhere;
+}
 
 /* Progress against the usual duration: a hairline under the elapsed time. */
 .progress { height: 2px; margin-top: 4px; border-radius: 1px; background: var(--track); overflow: hidden; }
@@ -287,8 +291,13 @@ html.log-open #log { display: flex; }
 #log-grip { position: absolute; top: -4px; left: 0; right: 0; z-index: 2; height: 8px; cursor: ns-resize; }
 #log-grip::after { content: ""; position: absolute; top: 4px; left: 50%; width: 40px; height: 4px; margin-left: -20px; border-radius: 2px; background: var(--line-strong); }
 #log-grip:focus-visible::after { background: var(--blue); }
-#log-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
-#log-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-family: var(--mono); font-weight: 600; }
+#log-head { display: flex; flex-wrap: nowrap; align-items: center; gap: 8px; padding: 8px 16px; border-bottom: 1px solid var(--line); }
+#log-title {
+  display: flex; flex: 0 1 auto; align-items: center; gap: 8px; min-width: 0; overflow: hidden;
+  font-family: var(--mono); font-weight: 600; white-space: nowrap;
+}
+#log-title .title-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#log-title .state-mark, #log-title .note { flex: none; }
 #log-meta { flex: 1; min-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--dim); font-size: 12px; }
 #log-head button, #log-head a {
   padding: 2px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: none;
@@ -297,7 +306,12 @@ html.log-open #log { display: flex; }
 #log-head button:hover, #log-head a:hover { border-color: var(--dim); }
 #log-head button[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
 #log-errors { display: none; color: var(--red) !important; }
-#log-body { position: relative; flex: 1; min-height: 0; }
+#log { overflow: hidden; }
+#log-head, #log-start { flex: none; }
+/* The opened command gives way first when the pane is small. */
+#log-cmd { flex: 0 1 auto; min-height: 0; }
+/* The output keeps most of the pane, however long the heading's parts. */
+#log-body { position: relative; flex: 1 1 auto; min-height: 60%; }
 #log-text {
   position: absolute; inset: 0; margin: 0; padding: 8px 16px 24px; overflow: auto; overscroll-behavior: contain;
   background: var(--code); font: 12px/20px var(--mono); white-space: pre; tab-size: 4; counter-reset: line;
@@ -330,12 +344,29 @@ html.log-open #log { display: flex; }
   font: 600 12px/20px var(--sans); white-space: normal;
 }
 #log-text .step-mark::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+/* Where and when the run started, and its command: one line, the command cut short. */
 #log-start {
-  padding: 4px 16px; border-bottom: 1px solid var(--line); background: var(--raised); color: var(--dim);
-  font-size: 12px; line-height: 20px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  display: flex; align-items: baseline; gap: 4px; padding: 4px 16px; border-bottom: 1px solid var(--line);
+  background: var(--raised); color: var(--dim); font-size: 12px; line-height: 20px; white-space: nowrap;
 }
 #log-start:empty { display: none; }
-#log-start code { color: var(--fg); }
+#log-start .where { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#log-start .start-cmd {
+  flex: 1 0 45%; min-width: 0; padding: 0; border: 0; background: none; text-align: left; cursor: pointer;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: inherit;
+}
+#log-start .start-cmd .cmd { overflow-wrap: normal; }
+#log-start .start-cmd br { display: none; }
+/* The whole command, opened from the strip: a few lines at most, scrolling inside. */
+#log-cmd {
+  position: relative; max-height: min(6.5em, 20%); overflow: auto; margin: 0; padding: 6px 72px 6px 16px;
+  border-bottom: 1px solid var(--line); background: var(--code); font: 12px/18px var(--mono); white-space: pre-wrap;
+}
+#log-cmd[hidden] { display: none; }
+#log-cmd button {
+  position: sticky; float: right; top: 0; margin-right: -60px; padding: 1px 8px; border: 1px solid var(--line-strong);
+  border-radius: 4px; background: var(--card); color: var(--dim); font: 12px/16px var(--sans); cursor: pointer;
+}
 /* Commands (commandHtml): colour is emphasis only, from the theme's tokens. */
 .cmd { font-family: var(--mono); color: var(--fg); overflow-wrap: anywhere; }
 .cmd .c-prog { font-weight: 650; color: var(--fg); }
@@ -484,6 +515,7 @@ html.log-open #log { display: flex; }
     <button id="log-close" title="Close (Esc)" aria-label="Close the log">✕</button>
   </div>
   <div id="log-start"></div>
+  <div id="log-cmd" hidden></div>
   <div id="log-body">
     <pre id="log-text" tabindex="0" aria-label="Log output"></pre>
     <button id="log-new">new output ↓</button>
@@ -1241,16 +1273,20 @@ function logHeading() {
   if (!view) return;
   const run = findRun(view.id);
   if (!run) { $('#log-meta').textContent = view.id; $('#log-start').textContent = ''; return; }
-  put($('#log-title'), `${esc(run.label)} ${stateMark(run.state)}${notes(run)}`);
+  put($('#log-title'), `<span class="title-label" title="${esc(run.label)}">${esc(run.label)}</span> ${stateMark(run.state)}${notes(run)}`);
   put($('#log-meta'), esc(run.run_id));
-  const start = [
+  const where = [
     run.slot ? `slot ${esc(run.slot)}` : '',
     run.started_at ? `started ${esc(clock(run.started_at))}` : 'not started',
     `in ${esc(run.cwd_short || run.cwd)}`,
-    run.command ? `<code class="cmd">${commandHtml(run.command, run.cwd)}</code>` : '',
-  ].filter(Boolean);
-  put($('#log-start'), start.join(' · '));
-  $('#log-start').title = `${run.cwd}\n${cmdJoin(run.command || [])}`;
+  ].filter(Boolean).join(' · ');
+  const command = run.command ? cmdJoin(run.command) : '';
+  const open = !$('#log-cmd').hidden;
+  put($('#log-start'), `<span class="where" title="${esc(run.cwd)}">${where}${command ? ' ·' : ''}</span>`
+    + (command ? `<button class="start-cmd" data-action="command" aria-expanded="${open}" aria-controls="log-cmd" title="${esc(command)}\n\nClick to ${open ? 'hide' : 'show'} it whole"><code class="cmd">${commandHtml(run.command, run.cwd)}</code></button>` : ''));
+  if (open) {
+    put($('#log-cmd'), `<button data-action="copy-command" title="Copy the command">copy</button><code class="cmd">${commandHtml(run.command || [], run.cwd)}</code>`);
+  }
   // The files and the process group are for digging further: a tooltip, not the heading.
   $('#log-meta').title = [
     run.job_file && `job file ${run.job_file}`,
@@ -1259,9 +1295,19 @@ function logHeading() {
   ].filter(Boolean).join('\n');
 }
 
+/** Copies the open run's command, as a shell would read it. */
+async function copyCommand(button) {
+  const run = view && findRun(view.id);
+  if (!run || !run.command) return;
+  try { await navigator.clipboard.writeText(cmdJoin(run.command)); button.textContent = 'copied'; }
+  catch (_) { button.textContent = 'select it'; }
+  setTimeout(() => { button.textContent = 'copy'; }, 1500);
+}
+
 function openLog(id) {
   if (view?.id === id) return closeLog();
   view = { id, text: null, shown: null, follow: true };
+  $('#log-cmd').hidden = true;
   text.innerHTML = '<span class="faint">loading…</span>';
   newButton.style.display = 'none';
   errorButton.style.display = 'none';
@@ -1527,6 +1573,8 @@ document.addEventListener('click', (e) => {
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
     else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
+    else if (action === 'command') { $('#log-cmd').hidden = !$('#log-cmd').hidden; logHeading(); }
+    else if (action === 'copy-command') copyCommand(control);
     else if (action === 'update') startUpdate();
     else if (action === 'service') serviceAction(id, value);
     else if (action === 'unit') { unit = unit === 'C' ? 'F' : 'C'; remember('unit', unit); render(last); }

@@ -171,6 +171,10 @@ fn commands_are_formatted_by_the_page_from_their_argv() {
     let d = Daemon::start(&[]);
     let (_, page) = d.get("/");
     assert!(page.contains(r#"<script src="command-format.js"></script>"#), "the page loads the formatter");
+    // A long command never squeezes the output: one line in the strip, a capped box on demand.
+    for needed in [r#"<div id="log-cmd" hidden></div>"#, "min-height: 60%", "max-height: min(6.5em, 20%)"] {
+        assert!(page.contains(needed), "the page lacks {needed}");
+    }
     let (code, format) = d.get("/command-format.js");
     assert_eq!(code, 200);
     for needed in ["function commandHtml(", "const cmdJoin = "] {
