@@ -34,6 +34,11 @@ pub(crate) fn available(paths: &Paths) -> Option<Available> {
     })
 }
 
+/// When the last check ran: the auto-updater tries a release once per check.
+pub(super) fn last_checked(paths: &Paths) -> Option<Timestamp> {
+    fsutil::read_json::<Check>(&paths.data.join("update-check.json")).map(|c| c.checked_at)
+}
+
 /// Starts the check on a thread of its own: at most once a day, never in start-up's way.
 pub(crate) fn start_checker(paths: Paths) {
     if std::env::var("DRMANHATTAN_NO_UPDATE_CHECK").is_ok_and(|v| v == "1") {

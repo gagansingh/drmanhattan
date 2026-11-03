@@ -55,6 +55,9 @@ pub(super) struct StateDoc {
     version: &'static str,
     /// A newer release, when the daemon's daily check found one.
     update: Option<crate::update::Available>,
+    auto_update: bool,
+    /// The update that installed this version, in the last week.
+    updated: Option<crate::update::Updated>,
     /// Whether nothing runs or waits, so the page may offer to update now.
     idle: bool,
     /// The home directory, which the page writes as `~` in commands.
@@ -243,6 +246,8 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         inbox: ctx.inbox.clone(),
         version: crate::update::current(),
         update: crate::update::available(&ctx.paths),
+        auto_update: load_config(&ctx.paths).is_ok_and(|c| c.auto_update),
+        updated: crate::update::updated(&ctx.paths),
         idle: crate::update::idle(&ctx.paths),
         home: crate::paths::home(),
         state_dir: ctx.paths.state.clone(),
