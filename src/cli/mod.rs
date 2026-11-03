@@ -33,7 +33,7 @@ usage:
   drmanhattan --version | --help
 
 `drmanhattan <command> --help` describes a command's options. Jobs are JSON files in the inbox;
-the README describes the format and the result files written beside them.
+docs/REFERENCE.md describes the format and the result files written beside them.
 ";
 
 /// Runs the command line and returns the process exit status.

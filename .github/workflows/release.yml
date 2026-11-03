@@ -37,7 +37,7 @@ jobs:
           done
           dist/drmanhattan/drmanhattan --version | grep -qx "drmanhattan ${GITHUB_REF_NAME#v}"
           arch -x86_64 dist/drmanhattan/manhattan --version
-          cp README.md LICENSE dist/drmanhattan/
+          mkdir -p dist/drmanhattan/docs && cp README.md LICENSE dist/drmanhattan/ && cp docs/REFERENCE.md dist/drmanhattan/docs/
           name="drmanhattan-${GITHUB_REF_NAME}-macos-universal.tar.gz"
           tar -C dist -czf "$name" drmanhattan
           shasum -a 256 "$name" > "$name.sha256"
@@ -60,7 +60,7 @@ jobs:
           out=target/x86_64-unknown-linux-musl/release
           "$out/drmanhattan" --version | grep -qx "drmanhattan ${GITHUB_REF_NAME#v}"
           mkdir -p dist/drmanhattan
-          cp "$out/drmanhattan" "$out/manhattan" README.md LICENSE dist/drmanhattan/
+          mkdir -p dist/drmanhattan/docs && cp "$out/drmanhattan" "$out/manhattan" README.md LICENSE dist/drmanhattan/ && cp docs/REFERENCE.md dist/drmanhattan/docs/
           name="drmanhattan-${GITHUB_REF_NAME}-linux-x86_64.tar.gz"
           tar -C dist -czf "$name" drmanhattan
           sha256sum "$name" > "$name.sha256"
