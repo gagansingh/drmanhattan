@@ -3,6 +3,7 @@
 mod args;
 mod commands;
 mod runs;
+mod service;
 mod source;
 mod status;
 mod submit;
@@ -25,6 +26,7 @@ usage:
   drmanhattan cancel <run>                cancel a queued or running run
   drmanhattan workers [add <ssh-alias>]   the machines that run jobs for this one, over SSH
   drmanhattan machine-stats               this machine's readings, as JSON, for a dispatcher
+  drmanhattan update [--now]              install the latest release and restart the daemon
   drmanhattan stop                        stop the daemon (running jobs get a grace period)
   drmanhattan slots [N]                   show or set how many jobs may run at once
   drmanhattan paths                       where the inbox, state and data live
@@ -80,6 +82,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "follow" => runs::follow(rest),
         "cancel" => runs::cancel(rest),
         "workers" => workers::workers(rest),
+        "update" => commands::update(rest),
         "machine-stats" => crate::workers::machine_stats(rest),
         // What a dispatcher runs on a worker; not for people.
         "__dispatch-probe" => crate::workers::dispatch_probe(rest),

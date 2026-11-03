@@ -41,6 +41,9 @@ struct StatusDoc<'a> {
     daemon: Option<DaemonDoc>,
     active: usize,
     capacity: u32,
+    version: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update: Option<crate::update::Available>,
     #[serde(rename = "override")]
     capacity_override: Option<Override>,
     running: Vec<RunningDoc<'a>>,
@@ -156,6 +159,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         active: here,
         workers: super::workers::docs(paths)?,
         capacity,
+        version: crate::update::current(),
+        update: crate::update::available(paths),
         capacity_override: read_override(paths),
         running: running
             .into_iter()
@@ -190,7 +195,12 @@ fn kv(key: &str, value: impl std::fmt::Display) -> String {
 }
 
 fn print_text(doc: &StatusDoc) {
-    let mut head = vec![kv("state", doc.state), kv("active", doc.active), kv("capacity", doc.capacity)];
+    let mut head = vec![
+        kv("state", doc.state),
+        kv("active", doc.active),
+        kv("capacity", doc.capacity),
+        kv("version", doc.version),
+    ];
     if let Some(o) = &doc.capacity_override {
         head.extend([kv("override", o.slots), kv("override_until", o.until)]);
     }
@@ -199,6 +209,9 @@ fn print_text(doc: &StatusDoc) {
         head.extend(d.url.as_ref().map(|u| kv("dashboard", u)));
     }
     println!("{}", head.join(" "));
+    if let Some(u) = &doc.update {
+        println!("update available={} url={} run=`drmanhattan update`", u.version, u.url);
+    }
     for r in &doc.running {
         let mut line = vec![kv("slot", r.slot.unwrap_or(0))];
         line.extend(r.machine.map(|m| kv("machine", m)));

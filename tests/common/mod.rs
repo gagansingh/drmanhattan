@@ -64,6 +64,7 @@ impl Daemon {
             ("DRMANHATTAN_TERM_GRACE_SECONDS", "1"),
             ("DRMANHATTAN_SHUTDOWN_GRACE_SECONDS", "2"),
             ("DRMANHATTAN_POLL_MS", "50"),
+            ("DRMANHATTAN_NO_UPDATE_CHECK", "1"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

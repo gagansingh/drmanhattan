@@ -1,6 +1,5 @@
-// Cases for the dashboard's command formatter (`commandHtml` in assets/dashboard.html).
-// tests/dashboard.rs runs this with node, after the page's `esc` and formatter code, as
-// `node -e "<esc><formatter><this file>"`; it prints `ok N` or throws.
+// Cases for the dashboard's command formatter (assets/command-format.js). tests/dashboard.rs
+// runs them with node after the page's `esc` and the formatter; prints `ok N` or throws.
 
 const text = (html) => html.replace(/<br>/g, '\n').replace(/<[^>]*>/g, '').replace(/&#39;/g, "'")
   .replace(/&quot;/g, '"').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');

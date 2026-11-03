@@ -39,6 +39,7 @@ mod sources;
 mod sync;
 mod sysinfo;
 mod time;
+mod update;
 mod workers;
 
 pub use cli::run_cli;

@@ -28,6 +28,8 @@ use crate::queue::{self, Shared};
 use crate::settings::Settings;
 
 const PAGE: &str = include_str!("../../assets/dashboard.html");
+/// The page's command formatter, kept apart so it can be read and tested on its own.
+const COMMAND_FORMAT: &str = include_str!("../../assets/command-format.js");
 /// The page polls every two seconds; a few threads serve several tabs without queueing.
 const HTTP_THREADS: usize = 4;
 const LOG_TAIL_BYTES: u64 = 256 * 1024;
@@ -77,9 +79,12 @@ fn handle(req: Request, ctx: &Ctx) {
     let path = url.split('?').next().unwrap_or("/");
     match (req.method(), path) {
         (Method::Get, "/") => http::respond(req, 200, PAGE, "text/html; charset=utf-8"),
+        (Method::Get, "/command-format.js") => {
+            http::respond(req, 200, COMMAND_FORMAT, "text/javascript; charset=utf-8")
+        }
         (Method::Get, "/api/state") => http::json(req, 200, &state::build(ctx)),
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
-        (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service") => {
+        (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/update") => {
             let path = path.to_string();
             post::handle(req, &path, ctx);
         }

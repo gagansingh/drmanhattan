@@ -2,14 +2,13 @@
 //! the id of one run of it (`run_id`), and the record of that run (`record`).
 
 mod files;
+mod options;
 mod record;
 mod run_id;
 mod spec;
 
 pub(crate) use files::{classify, is_job_name, InboxFile, JobFiles, MAX_NAME};
+pub(crate) use options::{Ready, RemoteMode, SyncPath, SyncSpec, DEFAULT_READY_TIMEOUT};
 pub(crate) use record::{FileStatus, LoadStats, PrepareState, Record, RemoteRun, State};
 pub(crate) use run_id::RunId;
-pub(crate) use spec::{
-    compile_fail_patterns, CommandSpec, Job, JobSpec, Ready, RemoteMode, Source, SourceSpec, SyncPath, SyncSpec,
-    DEFAULT_READY_TIMEOUT,
-};
+pub(crate) use spec::{compile_fail_patterns, CommandSpec, Job, JobSpec, Source, SourceSpec};

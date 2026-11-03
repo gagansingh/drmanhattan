@@ -63,6 +63,25 @@ pub(super) fn serve(rest: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+const UPDATE: Spec = Spec {
+    usage: "\
+usage: drmanhattan update [--now]
+
+Installs the latest release over this one and restarts the daemon. It first waits until no
+job is running or queued (services aside; they are restarted with it); --now does not wait,
+and running jobs end when the daemon restarts. The archive's SHA-256 is checked before
+anything is replaced; a failed download or checksum leaves this version in place.
+",
+    values: &[],
+    switches: &["now"],
+    positional: 0,
+};
+
+pub(super) fn update(rest: &[String]) -> Result<i32> {
+    let Some(a) = args::parse(&UPDATE, rest)? else { return Ok(0) };
+    crate::update::update(a.has("now"))
+}
+
 const STOP: Spec = Spec {
     usage: "\
 usage: drmanhattan stop [<name>]

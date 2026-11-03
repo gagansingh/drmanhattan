@@ -33,6 +33,21 @@ With Rust 1.75 or later, `cargo install --git https://github.com/gagansingh/drma
 from a clone, `cargo build --release` and copy both binaries from `target/release` onto
 your `PATH`.
 
+## Updating
+
+```
+drmanhattan update        # waits until no job is running or queued, then updates and restarts
+drmanhattan update --now  # does not wait; running jobs end when the daemon restarts
+```
+
+`update` installs the latest release over the running one (both commands, in the directory
+the running one lives in), after checking the archive's SHA-256, and restarts the daemon:
+through launchd or systemd when it runs as a service, else by starting the new version itself.
+A failed download or checksum leaves the installed version as it was; a directory it cannot
+write to gets a hint to rerun the installer. The daemon looks for a newer release once a day
+(`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
+dashboard's footer, which shows the version, offers an Update button while the queue is idle.
+
 ## Quick start
 
 ```
@@ -49,7 +64,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.3.0 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.4.0 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70
@@ -388,7 +403,7 @@ shell operators each have a colour; hover a job's name to see its command.
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `stop [<name>]`, `slots [N]` and `paths`. Each has `--help`.
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `stop [<name>]`, `slots [N]` and `paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |
