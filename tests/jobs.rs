@@ -31,7 +31,8 @@ fn job_runs_and_reports_beside_its_file() {
     assert!(d.inbox.join("hello.json.claimed").exists() && !d.inbox.join("hello.json").exists());
     let history = fs::read_to_string(d.data.join("history.jsonl")).unwrap();
     assert!(history.contains("\"label\":\"hello\"") && history.contains("\"exit_status\":3"));
-    let archive = fs::read_dir(d.data.join("archive")).unwrap().next().unwrap().unwrap().path();
+    // The record is archived just after the result files are written.
+    let archive = wait_for(T, || fs::read_dir(d.data.join("archive")).ok()?.next()?.ok()).unwrap().path();
     assert_eq!(fs::read_dir(archive).unwrap().count(), 1);
     use std::os::unix::fs::PermissionsExt;
     assert_eq!(fs::metadata(&d.state).unwrap().permissions().mode() & 0o777, 0o700);

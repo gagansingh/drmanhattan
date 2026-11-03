@@ -40,6 +40,9 @@ pub(crate) struct DaemonInfo {
     /// The daemon's `DRMANHATTAN_SLOTS`, if set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slots_env: Option<String>,
+    /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) shell_env: Option<String>,
 }
 
 /// Takes the lock, or returns None when another daemon holds it.

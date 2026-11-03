@@ -72,6 +72,8 @@ options:
   --restart           replace the service of this name if it is already running
   --fail-pattern RE   fail the job when a line of its output matches RE, even if the
                       command exits 0 (repeatable)
+  --tty               run it under a pseudo-terminal (120x40, TERM=xterm-256color), for a
+                      command that needs one; stdin stays at EOF
 ",
     values: &[
         "inbox",
@@ -96,7 +98,7 @@ options:
         "ready-timeout",
         "ttl",
     ],
-    switches: &["priority", "wait", "sync-git", "service", "restart"],
+    switches: &["priority", "wait", "sync-git", "service", "restart", "tty"],
     positional: 0,
 };
 
@@ -185,6 +187,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         requires: a.all("requires").to_vec(),
         sync: a.all("sync").iter().map(|p| SyncSpec::Path(absolute(p))).collect(),
         sync_git: a.has("sync-git"),
+        tty: a.has("tty"),
         env_forward: Vec::new(),
         dispatched_from: None,
         dispatch_id: None,

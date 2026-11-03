@@ -94,6 +94,7 @@ It waits for a free slot, prints the output and exits with the command's exit co
 Start servers with `manhattan submit --service --ready-port <port> -- <command>` (or
 `--ready-log <regex>`), never with `--wait`: it returns once the server is ready.
 Use it too for any command you can't run directly in this environment.
+Don't wrap commands in `zsh -ic`/`bash -lc`; drmanhattan already gives jobs your shell environment.
 If it reports that drmanhattan isn't running, ask the user to start it; don't start it yourself.
 ```
 
@@ -178,11 +179,30 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `prepare` | a command run while the job waits, outside any slot (see below) |
 | `group` | a concurrency group: one of its jobs runs at a time, and only the newest waits (see below) |
 | `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
+| `tty` | `true` runs it under a pseudo-terminal (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
 `DRMANHATTAN_SLOT` (the slot it holds, from 1) set, besides its `env`.
+
+## The jobs' environment and terminal
+
+A daemon started by launchd or systemd has a bare environment. So when it starts, drmanhattan
+asks your login shell for its environment once (`$SHELL -ilc`, else zsh, else bash), under a
+terminal and with up to 10 seconds to answer, and every job starts from that: the PATH your
+shell sets up (Homebrew, nvm, pyenv, `~/.local/bin`) and your exported variables, but not the
+shell's own (`SHLVL`, `PWD`, prompts). A job's `env` overrides them. If the shell fails or does
+not answer, the daemon log says so once and jobs get the daemon's environment with
+`/opt/homebrew/bin`, `/usr/local/bin`, `~/.local/bin` and the system directories at the front
+of PATH. `drmanhattan paths` shows which (`shell_env=`); `DRMANHATTAN_SHELL_ENV=0` turns it off.
+It is read again when the daemon restarts.
+
+Jobs run with stdin at EOF and their output going to the log, not to a terminal. For a command
+that needs one, set `"tty": true` (`submit --tty`): it runs in its own session with a
+pseudo-terminal as its controlling terminal, stdout and stderr, 120 columns by 40 rows and
+`TERM=xterm-256color`; stdin stays at EOF, and cancel and timeout still end its whole process
+group.
 
 ## Workers: running jobs on other machines
 
@@ -422,6 +442,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
 | `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |
 | `DRMANHATTAN_MAX_PREPARES` | 4 | `prepare` commands that may run at once |
 | `DRMANHATTAN_SHUTDOWN_GRACE_SECONDS` | 30 | how long `stop` lets running jobs finish |

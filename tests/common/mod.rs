@@ -74,6 +74,8 @@ impl Daemon {
             ("DRMANHATTAN_SHUTDOWN_GRACE_SECONDS", "2"),
             ("DRMANHATTAN_POLL_MS", "50"),
             ("DRMANHATTAN_NO_UPDATE_CHECK", "1"),
+            // Not the developer's own shell: the shell environment tests bring a stand-in.
+            ("DRMANHATTAN_SHELL_ENV", "0"),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

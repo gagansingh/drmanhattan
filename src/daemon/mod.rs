@@ -76,6 +76,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     let live = queue.prune_memory();
     prune_files(&paths, &inbox, &live, &settings);
     sysinfo::start_sampler();
+    // Before any job starts, so every one gets the same base environment.
+    let shell_env = crate::shell_env::init(settings.shell_env, settings.shell_env_timeout);
     let reattached = queue.reattach();
     let shared: Shared = Arc::new(Mutex::new(queue));
     for admitted in reattached {
@@ -92,6 +94,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         started_at: Timestamp::now(),
         url: None,
         slots_env: settings.slots_env.clone(),
+        shell_env: Some(shell_env.summary.clone()),
     };
     if opts.dashboard {
         info.url = Some(setup::start_dashboard(&shared, &opts)?);

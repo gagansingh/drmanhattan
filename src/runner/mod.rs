@@ -21,8 +21,9 @@ use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
+use std::thread::JoinHandle;
 use std::time::Duration;
 
 pub(crate) use error_line::last_error_line;
@@ -99,8 +100,8 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         Phase::Prepare => format!("preparing {} at {now} · run {run_id}", rec.job.label),
     });
     say(&format!("in {}: {}", tilde_path(&rec.job.cwd), shell_words(&argv)));
-    let mut child = match spawn(&rec, &argv, &log, phase) {
-        Ok(child) => child,
+    let (mut child, tty_copy) = match spawn(&rec, &argv, &log, phase) {
+        Ok(spawned) => spawned,
         Err(e) => {
             let code = if e.kind() == std::io::ErrorKind::NotFound { 127 } else { 126 };
             let what = if phase == Phase::Prepare { "its prepare command " } else { "" };
@@ -122,6 +123,9 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
     }
     std::thread::spawn(move || {
         let status = child.wait().ok();
+        if let Some(copy) = tty_copy {
+            settle(&copy);
+        }
         let _ = exit_sender.send(RunEvent::Exited(status));
     });
     let typicals = queue::lock(shared).typicals.clone();
@@ -196,9 +200,12 @@ fn open_log(rec: &Record, append: bool) -> crate::error::Result<File> {
     options.create_new(true).open(path).context("create the log", path)
 }
 
-fn spawn(rec: &Record, argv: &[String], log: &File, phase: Phase) -> std::io::Result<std::process::Child> {
+/// The command, started with the shell environment under its own `env`; with `tty`, also
+/// the thread copying its terminal into the log.
+fn spawn(rec: &Record, argv: &[String], log: &File, phase: Phase) -> std::io::Result<(Child, Option<JoinHandle<()>>)> {
     let job = &rec.job;
     let mut command = Command::new(&argv[0]);
+    command.envs(crate::shell_env::vars().iter().map(|(k, v)| (k, v)));
     match phase {
         Phase::Prepare => command.env("DRMANHATTAN_PREPARE", "1"),
         Phase::Run => command.env("DRMANHATTAN_SLOT", rec.slot.unwrap_or(0).to_string()),
@@ -208,12 +215,30 @@ fn spawn(rec: &Record, argv: &[String], log: &File, phase: Phase) -> std::io::Re
         .current_dir(&job.cwd)
         .envs(&job.env)
         .env("DRMANHATTAN_RUN_ID", rec.run_id.as_str())
-        .env("DRMANHATTAN_LOG", &job.log)
+        .env("DRMANHATTAN_LOG", &job.log);
+    if job.tty {
+        let pty = crate::pty::open()?;
+        command.env("TERM", "xterm-256color");
+        pty.attach(&mut command)?; // a session of its own, so its own process group too
+        let child = command.spawn()?;
+        return Ok((child, Some(pty.copy_to(log.try_clone()?))));
+    }
+    let child = command
         .stdin(Stdio::null())
         .stdout(Stdio::from(log.try_clone()?))
         .stderr(Stdio::from(log.try_clone()?))
         .process_group(0)
-        .spawn()
+        .spawn()?;
+    Ok((child, None))
+}
+
+/// Gives the terminal copy a moment to drain once the command exits; a background process
+/// still holding the terminal must not keep the run open.
+fn settle(copy: &JoinHandle<()>) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    while !copy.is_finished() && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 /// Makes sure a run is recorded as ended exactly once, even if its runner panics.
