@@ -54,6 +54,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
         "/api/update" => start_update(req, ctx),
+        "/api/auto-update" => set_auto_update(req, body, ctx),
         _ => set_order(req, body, ctx),
     }
 }
@@ -140,6 +141,27 @@ fn start_update(req: Request, ctx: &Ctx) {
     }
     match crate::update::start_detached() {
         Ok(()) => http::json(req, 202, &json!({ "updating": true })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutoUpdateBody {
+    on: bool,
+}
+
+/// The footer's auto-update toggle.
+fn set_auto_update(req: Request, body: &str, ctx: &Ctx) {
+    let Some(AutoUpdateBody { on }) = object::<AutoUpdateBody>(body) else {
+        return http::error(req, "send {\"on\": true or false}");
+    };
+    let saved = load_config(&ctx.paths).and_then(|mut c| {
+        c.auto_update = on;
+        crate::settings::save_config(&ctx.paths, &c)
+    });
+    match saved {
+        Ok(()) => http::json(req, 200, &json!({ "auto_update": on })),
         Err(e) => http::error(req, e),
     }
 }

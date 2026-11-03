@@ -48,6 +48,13 @@ write to gets a hint to rerun the installer. The daemon looks for a newer releas
 (`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
 dashboard's footer, which shows the version, offers an Update button while the queue is idle.
 
+`drmanhattan update --auto on` (or the footer's toggle) lets the daemon install newer
+releases of the same major version by itself, once the queue has been empty for 10 minutes;
+new work restarts that wait, and it never updates mid-job. A new major version only shows the
+notice. A failed update leaves the running version and is tried again after the next daily
+check. The daemon's log then says `auto-updated 0.5.0 → 0.5.1`, and the dashboard shows a
+note you can dismiss. It is off by default; `status` shows the setting.
+
 ## Quick start
 
 ```
@@ -64,7 +71,7 @@ says where it is, then prints a line for each thing that happens, with the run's
 follow it by:
 
 ```
-drmanhattan 0.4.2 running · dashboard http://127.0.0.1:8417/
+drmanhattan 0.5.0 running · dashboard http://127.0.0.1:8417/
 watching ~/.drmanhattan/inbox · 1 slot
 
 14:52:34  queued     make test            #094a70  make · ~/project · run 1793649754-96609-094a70

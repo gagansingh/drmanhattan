@@ -278,6 +278,8 @@ footer summary { display: inline; color: var(--dim); cursor: pointer; text-decor
   color: var(--dim); font-size: 11px; line-height: 16px; cursor: pointer;
 }
 #version button:disabled { opacity: 0.5; cursor: default; }
+#version button[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
+#version .updated { color: var(--green); }
 footer details pre { margin: 8px 0 0; font: 12px/16px var(--mono); white-space: pre-wrap; color: var(--dim); }
 
 /* ---------------------------------------------------------------- the log pane */
@@ -855,7 +857,20 @@ function renderVersion(d) {
     ? ` · <a href="${esc(u.url)}" title="What is new">${esc(u.version)} available</a>`
       + `<button data-action="update" ${d.idle ? '' : 'disabled'} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
     : '';
-  put($('#version'), `drmanhattan ${esc(d.version || '')}${updating ? ' · updating…' : offer}`);
+  const auto = `<button data-action="auto-update" aria-pressed="${!!d.auto_update}" title="${d.auto_update
+    ? 'Newer releases of this major version install by themselves once the queue has been idle for 10 minutes. Click to turn off.'
+    : 'Click to install newer releases of this major version by themselves, once the queue has been idle for 10 minutes'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
+  const done = d.updated && recall('dismissed-updated') !== d.updated.to
+    ? ` · <span class="updated">${d.updated.auto ? 'auto-' : ''}updated to <a href="${esc(d.updated.url)}">${esc(d.updated.to)}</a>`
+      + `<button data-action="dismiss-updated" aria-label="Dismiss">✕</button></span>`
+    : '';
+  put($('#version'), `drmanhattan ${esc(d.version || '')}${done}${updating ? ' · updating…' : offer}${auto}`);
+}
+
+async function setAutoUpdate(on) {
+  try { await post('/api/auto-update', { on }); }
+  catch (e) { announce(`could not change auto-update: ${e.message}`); }
+  tick();
 }
 
 async function startUpdate() {
@@ -1567,6 +1582,8 @@ document.addEventListener('click', (e) => {
     else if (action === 'command') { $('#log-cmd').hidden = !$('#log-cmd').hidden; logHeading(); }
     else if (action === 'copy-command') copyCommand(control);
     else if (action === 'update') startUpdate();
+    else if (action === 'auto-update') setAutoUpdate(!(last && last.auto_update));
+    else if (action === 'dismiss-updated') { remember('dismissed-updated', last?.updated?.to || ''); render(last); }
     else if (action === 'service') serviceAction(id, value);
     else if (action === 'unit') { unit = unit === 'C' ? 'F' : 'C'; remember('unit', unit); render(last); }
     return;

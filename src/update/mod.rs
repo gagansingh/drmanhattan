@@ -6,17 +6,21 @@
 //! (`restart`). A failed download or checksum leaves the old version in place. The daemon
 //! looks for a newer release once a day (`check`).
 
+mod auto;
 mod check;
 mod release;
 mod restart;
+mod updated;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+pub(crate) use auto::start_auto_updater;
 pub(crate) use check::{available, start_checker, Available};
 pub(crate) use release::current;
 use release::{asset, download, is_newer, latest_tag, releases_url, sha256};
+pub(crate) use updated::{announce, updated, Updated};
 
 use crate::error::{invalid, Error, Result};
 use crate::job::State;
@@ -44,8 +48,10 @@ pub(crate) fn update(now: bool) -> Result<i32> {
     let swapped = stage_and_swap(&paths, &tag, &stage, &dir, now);
     let _ = std::fs::remove_dir_all(&stage);
     swapped?;
+    let to = tag.trim_start_matches('v');
+    updated::record(&paths, current(), to);
     restart::restart(&paths, &dir)?;
-    println!("updated {} → {}", current(), tag.trim_start_matches('v'));
+    println!("updated {} → {to}", current());
     Ok(0)
 }
 

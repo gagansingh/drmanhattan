@@ -66,20 +66,38 @@ pub(super) fn serve(rest: &[String]) -> Result<i32> {
 const UPDATE: Spec = Spec {
     usage: "\
 usage: drmanhattan update [--now]
+       drmanhattan update --auto on|off
 
 Installs the latest release over this one and restarts the daemon. It first waits until no
 job is running or queued (services aside; they are restarted with it); --now does not wait,
 and running jobs end when the daemon restarts. The archive's SHA-256 is checked before
 anything is replaced; a failed download or checksum leaves this version in place.
+
+--auto on lets the daemon install newer releases of this major version by itself, once the
+queue has been idle for 10 minutes; --auto off (the default) only shows the notice.
 ",
-    values: &[],
+    values: &["auto"],
     switches: &["now"],
     positional: 0,
 };
 
 pub(super) fn update(rest: &[String]) -> Result<i32> {
     let Some(a) = args::parse(&UPDATE, rest)? else { return Ok(0) };
-    crate::update::update(a.has("now"))
+    let on = match a.get("auto") {
+        None => return crate::update::update(a.has("now")),
+        Some("on") => true,
+        Some("off") => false,
+        Some(other) => return invalid(format!("--auto must be on or off, not {other:?}")),
+    };
+    let paths = Paths::from_env();
+    let mut config = load_config(&paths)?;
+    config.auto_update = on;
+    save_config(&paths, &config)?;
+    println!(
+        "auto-update {}",
+        if on { "on: newer releases of this major version install once the queue is idle" } else { "off" }
+    );
+    Ok(0)
 }
 
 const STOP: Spec = Spec {

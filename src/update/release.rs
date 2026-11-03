@@ -34,6 +34,12 @@ pub(super) fn is_newer(latest: &str, than: &str) -> bool {
     matches!((parse_version(latest), parse_version(than)), (Some(a), Some(b)) if a > b)
 }
 
+/// Whether `latest` is a newer release with the same major version as `than`: what may be
+/// installed without asking.
+pub(super) fn is_minor_update(latest: &str, than: &str) -> bool {
+    is_newer(latest, than) && parse_version(latest).map(|v| v.0) == parse_version(than).map(|v| v.0)
+}
+
 /// The latest release's tag, from where `<releases>/latest` redirects to: no API token.
 pub(super) fn latest_tag() -> Result<String> {
     let url = format!("{}/latest", releases_url());
@@ -96,5 +102,6 @@ mod tests {
         assert!(!is_newer("0.2.3", "0.2.4"));
         assert!(!is_newer("garbage", "0.2.4"));
         assert_eq!(parse_version("v1.2.3-rc1"), Some((1, 2, 3)));
+        assert!(is_minor_update("0.5.0", "0.4.2") && !is_minor_update("1.0.0", "0.4.2"));
     }
 }

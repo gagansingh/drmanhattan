@@ -83,6 +83,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     }
     workers::start_poller(paths.clone(), settings.worker_poll);
     crate::update::start_checker(paths.clone());
+    crate::update::start_auto_updater(paths.clone());
+    crate::update::announce(&paths);
 
     let mut info = DaemonInfo {
         pid: std::process::id(),

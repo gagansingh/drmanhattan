@@ -1,6 +1,8 @@
 //! Test harness: a real daemon on a private temp queue, driven through job files and HTTP.
 #![allow(dead_code)]
 
+pub mod releases;
+
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -40,11 +42,18 @@ pub struct Daemon {
     pub env: Vec<(String, String)>,
     pub child: Option<Child>,
     pub url: String,
+    /// The drmanhattan this queue runs: the built one, or a copy a test installed.
+    pub program: PathBuf,
 }
 
 impl Daemon {
     /// A fresh queue in a private temp directory, with fast timers and the given extra env.
     pub fn start(extra: &[(&str, &str)]) -> Daemon {
+        Daemon::start_with(extra, |_| bin())
+    }
+
+    /// As `start`, running the drmanhattan `program` gives for the queue's root directory.
+    pub fn start_with(extra: &[(&str, &str)], program: impl FnOnce(&Path) -> PathBuf) -> Daemon {
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("drmanhattan-test-{}-{}", std::process::id(), n));
         fs::create_dir_all(&root).unwrap();
@@ -72,13 +81,14 @@ impl Daemon {
         for (k, v) in extra {
             env.push((k.to_string(), v.to_string()));
         }
-        let mut d = Daemon { root, inbox, state, data, work, env, child: None, url: String::new() };
+        let program = program(&root);
+        let mut d = Daemon { root, inbox, state, data, work, env, child: None, url: String::new(), program };
         d.launch();
         d
     }
 
     pub fn cmd(&self, args: &[&str]) -> Command {
-        let mut c = Command::new(bin());
+        let mut c = Command::new(&self.program);
         c.args(args);
         for (k, v) in &self.env {
             c.env(k, v);
