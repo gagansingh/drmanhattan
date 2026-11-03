@@ -1,6 +1,6 @@
 [package]
 name = "drmanhattan"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 rust-version = "1.75"
 description = "A local job queue for heavy commands: a watched folder, slots with fair admission, and a live dashboard."
