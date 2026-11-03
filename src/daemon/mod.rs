@@ -197,9 +197,16 @@ fn run_loop(
         // One reload at a time; a request that arrives during one runs after it.
         let reloads = signals::reloads_received();
         if reloads > reloads_seen && reloading.as_ref().map_or(true, |t| t.is_finished()) {
-            reloads_seen = reloads;
             let (paths, timeout, info) = (scheduler.paths.clone(), settings.shell_env_timeout, info.clone());
-            reloading = Some(std::thread::spawn(move || reload_shell_env(&paths, timeout, &info)));
+            let thread = std::thread::Builder::new().name("reload-env".into());
+            match thread.spawn(move || reload_shell_env(&paths, timeout, &info)) {
+                Ok(handle) => {
+                    reloads_seen = reloads;
+                    reloading = Some(handle);
+                }
+                // Not counted as seen: the next pass tries again.
+                Err(e) => log::problem(format_args!("could not start a thread to re-read the environment: {e}")),
+            }
         }
         if signals >= 2 {
             log::notice(log::Tone::Warning, "stopping", "now: cancelling the running jobs");

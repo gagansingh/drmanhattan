@@ -11,7 +11,6 @@ use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
 use crate::settings::{load_config, read_override, save_config, standing_capacity, Settings, MAX_SLOTS};
-use crate::time::Timestamp;
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -154,26 +153,32 @@ pub(super) fn reload_env(rest: &[String]) -> Result<i32> {
     let Some(daemon) = daemon::running(&paths) else {
         return invalid("drmanhattan is not running");
     };
-    let info = daemon.info.as_ref();
-    if info.and_then(|i| i.shell_env.as_deref()) == Some("off") {
+    // The daemon publishes its info once it has read the environment the first time.
+    let Some(info) = daemon.info.as_ref() else {
+        return invalid("drmanhattan is still starting; try again in a moment");
+    };
+    if info.shell_env.as_deref() == Some("off") {
         return invalid(
             "the daemon runs with DRMANHATTAN_SHELL_ENV=0, so jobs get its own environment; nothing to read",
         );
     }
-    if info.map_or(true, |i| i.shell_env_read_at.is_none()) {
-        let version = info.and_then(|i| i.version.as_deref()).unwrap_or("before 0.6.2");
+    if info.shell_env_read_at.is_none() {
+        let version = info.version.as_deref().unwrap_or("before 0.6.2");
         return invalid(format!(
             "the running daemon ({version}) predates reload-env; `drmanhattan update`, or `drmanhattan stop` and a new start, reads the environment afresh"
         ));
     }
-    let asked = Timestamp::now();
+    let before = info.shell_env_reload.clone();
     if !process::signal_process(daemon.pid as i32, libc::SIGUSR1) {
         return invalid(format!("could not signal drmanhattan (pid {})", daemon.pid));
     }
     let deadline = Instant::now() + settings.shell_env_timeout + settings.poll + Duration::from_secs(5);
     loop {
         let info = daemon::running(&paths).filter(|d| d.pid == daemon.pid).and_then(|d| d.info);
-        if let Some(reload) = info.as_ref().and_then(|i| i.shell_env_reload.as_ref()).filter(|r| r.at >= asked) {
+        // A record other than the one seen before signalling is this request's answer.
+        if let Some(reload) =
+            info.as_ref().and_then(|i| i.shell_env_reload.as_ref()).filter(|r| Some(*r) != before.as_ref())
+        {
             return match &reload.error {
                 None => {
                     let summary = info.as_ref().and_then(|i| i.shell_env.as_deref()).unwrap_or_default();

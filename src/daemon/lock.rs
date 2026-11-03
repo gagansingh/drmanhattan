@@ -58,7 +58,8 @@ pub(crate) struct DaemonInfo {
     pub(crate) protocol: Option<u32>,
 }
 
-/// How a `reload-env` ended: when, and why it failed when it did.
+/// How the last `reload-env` ended: when, and why it failed when it did. The command that
+/// asked waits for this to change, so `at` tells two reloads apart as well as informing.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub(crate) struct ShellEnvReload {
     pub(crate) at: Timestamp,
