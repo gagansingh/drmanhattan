@@ -1,6 +1,6 @@
 //! drmanhattan: a local job queue for heavy commands. A watched folder takes JSON job files,
 //! slots with fair admission run them one (or a few) at a time, and a dashboard shows the
-//! queue. See the README for the job-file contract.
+//! queue. See docs/REFERENCE.md for the job-file contract.
 //!
 //! How the pieces fit:
 //!

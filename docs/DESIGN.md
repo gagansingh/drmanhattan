@@ -1,6 +1,6 @@
 # How drmanhattan works
 
-This is for people changing the code. The README covers using it. `src/lib.rs` maps the
+This is for people changing the code. The README and `REFERENCE.md` cover using it. `src/lib.rs` maps the
 modules.
 
 ## One process
