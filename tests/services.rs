@@ -105,7 +105,7 @@ fn a_service_not_ready_in_time_is_stopped_and_says_why() {
     );
     assert!(!out.status.success());
     let text = said(&out);
-    assert!(text.contains("booting") && text.contains("slow did not become ready: not ready within 1s"), "{text}");
+    assert!(text.contains("booting") && text.contains("slow did not become ready: not ready within 1.0s"), "{text}");
     let s = d.status_of("slow").unwrap();
     assert_eq!(s["state"], "failed");
     // One that exits first fails at once with its own status.

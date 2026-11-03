@@ -94,7 +94,7 @@ fn ctrl_c_grace_period_then_cancels_and_a_second_ctrl_c_forces() {
     let s = d.status_of("long").unwrap();
     assert_eq!(s["state"], "cancelled");
     assert!(d.inbox.join("long.exit").exists(), "no job is left half-recorded");
-    d.wait_daemon_log("1 job still running after 2s; cancelling");
+    d.wait_daemon_log("1 job still running after 2.0s; cancelling");
     // a second Ctrl-C does not wait for the grace period, however long it is
     d.env.push(("DRMANHATTAN_SHUTDOWN_GRACE_SECONDS".into(), "60".into()));
     d.launch();

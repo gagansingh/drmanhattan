@@ -52,8 +52,8 @@ pub(crate) struct Activity {
 #[derive(Serialize, Debug, PartialEq)]
 pub(crate) struct CommandView {
     pub(crate) label: String,
-    pub(crate) elapsed: u64,
-    pub(crate) typical: Option<u64>,
+    pub(crate) elapsed: f64,
+    pub(crate) typical: Option<f64>,
 }
 
 #[derive(Serialize, Debug, PartialEq)]
@@ -141,7 +141,7 @@ impl Activity {
             let label = group(&c, "label");
             let pos = self.active.iter().position(|(l, _)| l == label)?;
             let (label, started) = self.active.remove(pos);
-            return Some(StepRow { finished_at: now, label, seconds: started.until(now).as_secs() });
+            return Some(StepRow::of(label, started.until(now), now));
         } else if let Some(c) = patterns.start.as_ref().and_then(|re| re.captures(line)) {
             let label = group(&c, "label");
             if !label.is_empty() && self.active.len() < MAX_ACTIVE && !self.active.iter().any(|(l, _)| l == label) {
@@ -170,8 +170,8 @@ impl Activity {
             .iter()
             .map(|(label, started)| CommandView {
                 label: label.clone(),
-                elapsed: started.elapsed().as_secs(),
-                typical: typicals.typical(label).map(|d: Duration| d.as_secs()),
+                elapsed: started.elapsed().as_secs_f64(),
+                typical: typicals.typical(label).map(|d: Duration| d.as_secs_f64()),
             })
             .collect();
         Some(ActivityView { step: self.step.clone(), active, last: self.last.clone() })

@@ -15,7 +15,7 @@ use crate::job::{PrepareState, Record, RunId, State};
 use crate::paths::Paths;
 use crate::queue::{rank, read_records};
 use crate::settings::{effective_capacity, read_manual_order, read_override, Override};
-use crate::time::{format_elapsed, Timestamp};
+use crate::time::{human, Timestamp};
 
 const STATUS: Spec = Spec {
     usage: "\
@@ -76,7 +76,7 @@ struct RunningDoc<'a> {
     category: &'a str,
     cwd: &'a PathBuf,
     started_at: Option<Timestamp>,
-    elapsed_seconds: Option<u64>,
+    elapsed: Option<std::time::Duration>,
     expected_seconds: Option<u64>,
     log: &'a PathBuf,
     job_file: &'a PathBuf,
@@ -88,7 +88,7 @@ struct WaiterDoc<'a> {
     run_id: &'a RunId,
     label: &'a str,
     category: &'a str,
-    waited_seconds: u64,
+    waited: std::time::Duration,
     expected_seconds: Option<u64>,
     skip_after_seconds: u64,
     priority: bool,
@@ -143,7 +143,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             run_id: &r.run_id,
             label: &r.job.label,
             category: &r.job.category,
-            waited_seconds: r.queued_at.until(now).as_secs(),
+            waited: r.queued_at.until(now),
             expected_seconds: r.expected_seconds,
             skip_after_seconds: r.skip_after_seconds,
             priority: r.job.priority,
@@ -176,7 +176,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 category: &r.job.category,
                 cwd: &r.job.cwd,
                 started_at: r.started_at,
-                elapsed_seconds: r.started_at.map(|s| s.until(now).as_secs()),
+                elapsed: r.started_at.map(|s| s.until(now)),
                 expected_seconds: r.expected_seconds,
                 log: &r.job.log,
                 job_file: &r.job.job_file,
@@ -222,8 +222,8 @@ fn print_text(doc: &StatusDoc) {
             line.push(kv("service", if r.ready == Some(true) { "ready" } else { "starting" }));
         }
         line.extend([kv("run_id", r.run_id), kv("label", r.label), kv("category", r.category)]);
-        line.extend(r.elapsed_seconds.map(|s| kv("elapsed", format_elapsed(std::time::Duration::from_secs(s)))));
-        line.extend(r.expected_seconds.map(|e| kv("expected", format!("{e}s"))));
+        line.extend(r.elapsed.map(|d| kv("elapsed", human(d))));
+        line.extend(r.expected_seconds.map(|e| kv("expected", human(std::time::Duration::from_secs(e)))));
         line.push(kv("cwd", r.cwd.display()));
         println!("{}", line.join(" "));
     }
@@ -244,8 +244,11 @@ fn print_text(doc: &StatusDoc) {
             kv("run_id", w.run_id),
             kv("label", w.label),
             kv("category", w.category),
-            kv("waited", format!("{}s", w.waited_seconds)),
-            kv("expected", w.expected_seconds.map_or_else(|| "unknown".into(), |e| format!("{e}s"))),
+            kv("waited", human(w.waited)),
+            kv(
+                "expected",
+                w.expected_seconds.map_or_else(|| "unknown".into(), |e| human(std::time::Duration::from_secs(e))),
+            ),
             kv("priority", yes(w.priority)),
             kv("overdue", yes(w.overdue)),
             kv("manual", yes(w.manual)),

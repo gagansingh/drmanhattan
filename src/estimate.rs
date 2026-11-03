@@ -48,11 +48,12 @@ pub(crate) fn quantile(values: &[u64], q: f64) -> u64 {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Estimate {
+    /// Milliseconds.
     pub(crate) p50: Option<u64>,
     pub(crate) p90: Option<u64>,
     /// Which rule matched: "label+variant", "label" or "category".
     pub(crate) basis: Option<&'static str>,
-    /// The matched durations, in seconds.
+    /// The matched durations, in milliseconds.
     pub(crate) samples: Vec<u64>,
 }
 
@@ -69,7 +70,7 @@ pub(crate) fn estimate(
     let ok: Vec<&HistoryRow> =
         recent.iter().filter(|r| r.outcome == State::Succeeded && r.machine.as_deref() == machine).collect();
     let pick = |matches: &dyn Fn(&HistoryRow) -> bool, take: usize, min: usize| -> Option<Vec<u64>> {
-        let durations: Vec<u64> = ok.iter().filter(|r| matches(r)).map(|r| r.seconds).collect();
+        let durations: Vec<u64> = ok.iter().filter(|r| matches(r)).map(|r| r.millis()).collect();
         (durations.len() >= min).then(|| durations[durations.len().saturating_sub(take)..].to_vec())
     };
     let same_label = |r: &HistoryRow| r.category == category && r.label == label;
@@ -98,7 +99,7 @@ impl Estimate {
         }
     }
 
-    /// Expected seconds left after `elapsed`. Past p50 it is the median of the past runs that
+    /// Expected milliseconds left after `elapsed` milliseconds. Past p50 it is the median of the past runs that
     /// outlasted `elapsed`; None once this run has outlasted every one of them.
     pub(crate) fn remaining(&self, elapsed: u64) -> Option<u64> {
         let p50 = self.p50?;
@@ -197,6 +198,7 @@ mod tests {
             outcome,
             load: None,
             machine: None,
+            millis: None,
         }
     }
 
@@ -208,11 +210,11 @@ mod tests {
         h.push(row("make", "b", "", 100, ok));
         h.push(row("make", "c", "", 50, State::Failed)); // failures never count
         let e = estimate(&h, "make", "a", "cold", None);
-        assert_eq!((e.p50, e.basis), (Some(30), Some("label+variant")));
+        assert_eq!((e.p50, e.basis), (Some(30_000), Some("label+variant")));
         let e = estimate(&h, "make", "a", "warm", None);
-        assert_eq!((e.p50, e.basis), (Some(10), Some("label")));
+        assert_eq!((e.p50, e.basis), (Some(10_000), Some("label")));
         let e = estimate(&h, "make", "zzz", "", None);
-        assert_eq!((e.p50, e.basis), (Some(10), Some("category")));
+        assert_eq!((e.p50, e.basis), (Some(10_000), Some("category")));
         assert_eq!(estimate(&h, "other", "zzz", "", None), Estimate::default(), "unrelated runs say nothing");
         assert_eq!(
             estimate(&h, "make", "a", "", Some("air")),
@@ -226,7 +228,7 @@ mod tests {
     fn a_label_uses_its_last_ten_runs() {
         let mut h: Vec<HistoryRow> = (0..10).map(|_| row("t", "x", "", 1000, State::Succeeded)).collect();
         h.extend((0..10).map(|_| row("t", "x", "", 5, State::Succeeded)));
-        assert_eq!(estimate(&h, "t", "x", "", None).p50, Some(5));
+        assert_eq!(estimate(&h, "t", "x", "", None).p50, Some(5_000));
     }
 
     #[test]

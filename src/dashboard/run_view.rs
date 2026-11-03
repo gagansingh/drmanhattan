@@ -59,8 +59,8 @@ pub(super) struct RunView {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) group_busy: Option<bool>,
     timeout: Option<u64>,
-    typical_seconds: Option<u64>,
-    typical_p90: Option<u64>,
+    typical_seconds: Option<f64>,
+    typical_p90: Option<f64>,
     typical_basis: Option<&'static str>,
     typical_samples: usize,
     /// Set when today's load scales the estimate shown.
@@ -83,20 +83,20 @@ pub(super) struct RunView {
 pub(super) struct Timing {
     /// Queued: how long so far.
     #[serde(skip_serializing_if = "Option::is_none")]
-    waiting: Option<u64>,
+    waiting: Option<f64>,
     /// Running: how long so far, the expected time left, and whether it is past p90.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) elapsed: Option<u64>,
+    pub(super) elapsed: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub(super) remaining_estimate: Option<u64>,
+    pub(super) remaining_estimate: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     over_p90: Option<bool>,
     /// Finished: how long it ran.
     #[serde(skip_serializing_if = "Option::is_none")]
-    duration: Option<u64>,
+    duration: Option<f64>,
     /// Running or finished: how long it waited first.
     #[serde(skip_serializing_if = "Option::is_none")]
-    wait_seconds: Option<u64>,
+    wait_seconds: Option<f64>,
 }
 
 /// A waiter's estimated start.
@@ -118,7 +118,7 @@ impl RunView {
     }
 
     /// The (load-scaled) typical duration the view shows.
-    pub(super) fn typical_seconds(&self) -> Option<u64> {
+    pub(super) fn typical_seconds(&self) -> Option<f64> {
         self.typical_seconds
     }
 
@@ -165,8 +165,8 @@ impl RunView {
             ttl: job.ttl,
             group_busy: None,
             timeout: job.timeout,
-            typical_seconds: est.p50,
-            typical_p90: est.p90,
+            typical_seconds: est.p50.map(ms_to_secs),
+            typical_p90: est.p90.map(ms_to_secs),
             typical_basis: est.basis,
             typical_samples: est.samples.len(),
             load_factor: None,
@@ -179,23 +179,33 @@ impl RunView {
     }
 }
 
+/// Seconds, to the millisecond: the page shows short runs as `120ms` or `2.4s`.
+fn secs(d: std::time::Duration) -> f64 {
+    d.as_millis() as f64 / 1000.0
+}
+
+fn ms_to_secs(ms: u64) -> f64 {
+    ms as f64 / 1000.0
+}
+
 fn timing(rec: &Record, est: &Estimate, now: Timestamp) -> Timing {
-    let waited_until = |end: Timestamp| Some(rec.queued_at.until(end).as_secs());
+    let waited_until = |end: Timestamp| Some(secs(rec.queued_at.until(end)));
     match (rec.state, rec.started_at) {
         (State::Queued, _) => Timing { waiting: waited_until(now), ..Timing::default() },
         (State::Running, started) => {
             let started = started.unwrap_or(now);
-            let elapsed = started.until(now).as_secs();
+            let elapsed = started.until(now);
+            let elapsed_ms = elapsed.as_millis() as u64;
             Timing {
-                elapsed: Some(elapsed),
-                remaining_estimate: est.remaining(elapsed),
-                over_p90: Some(est.p90.is_some_and(|p| elapsed > p)),
+                elapsed: Some(secs(elapsed)),
+                remaining_estimate: est.remaining(elapsed_ms).map(ms_to_secs),
+                over_p90: Some(est.p90.is_some_and(|p| elapsed_ms > p)),
                 wait_seconds: waited_until(started),
                 ..Timing::default()
             }
         }
         (_, Some(started)) => Timing {
-            duration: Some(started.until(rec.finished_at.unwrap_or(now)).as_secs()),
+            duration: Some(secs(started.until(rec.finished_at.unwrap_or(now)))),
             wait_seconds: waited_until(started),
             ..Timing::default()
         },

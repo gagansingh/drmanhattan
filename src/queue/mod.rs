@@ -141,7 +141,7 @@ impl Queue {
     /// Queues a validated job: gives it a run id, its expected duration and its
     /// anti-starvation bound.
     pub(crate) fn enqueue(&mut self, job: Job) -> RunId {
-        let expected = self.estimate(&job).p50;
+        let expected = self.estimate(&job).p50.map(|ms| ms.div_ceil(1000));
         // Queued longer than this, the run goes ahead of shorter newcomers: twice its own
         // estimate, but never below the floor, so a tiny estimate cannot jump the queue.
         let floor = self.settings.max_skip.as_secs();

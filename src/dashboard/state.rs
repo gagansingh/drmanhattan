@@ -118,8 +118,8 @@ struct Metrics {
     runs: usize,
     /// Of those, how many started at all.
     ran: usize,
-    wait_seconds: u64,
-    run_seconds: u64,
+    wait_seconds: f64,
+    run_seconds: f64,
     waited_longer: usize,
     failures: usize,
 }
@@ -197,7 +197,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
             view
         })
         .collect();
-    running.sort_by(|a, b| a.timing.elapsed.cmp(&b.timing.elapsed).reverse());
+    running.sort_by(|a, b| b.timing.elapsed.unwrap_or(0.0).total_cmp(&a.timing.elapsed.unwrap_or(0.0)));
     let (services, running): (Vec<RunView>, Vec<RunView>) = running.into_iter().partition(RunView::is_service);
 
     let busy_groups: std::collections::HashSet<&str> =
@@ -307,10 +307,10 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
 /// When each waiter should start, shown as its estimated start.
 fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, now: Timestamp) {
     let now = now.epoch_seconds();
-    let busy = running.iter().map(|r| r.timing.remaining_estimate.map(|left| now + left as f64));
+    let busy = running.iter().map(|r| r.timing.remaining_estimate.map(|left| now + left));
     let mut free_at: Vec<Option<f64>> = busy.collect();
     free_at.resize(free_at.len().max(capacity as usize), Some(now));
-    let durations: Vec<Option<u64>> = queued.iter().map(RunView::typical_seconds).collect();
+    let durations: Vec<Option<f64>> = queued.iter().map(RunView::typical_seconds).collect();
     for (view, start) in queued.iter_mut().zip(start_times(free_at, &durations)) {
         let eta_start = start.unwrap_or(now);
         view.eta =
@@ -323,7 +323,7 @@ fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, n
 /// (a run with no estimate); a waiter with no estimate makes its slot's next time unknown.
 /// A slot with an unknown time is used only when no slot has a known one, since a known
 /// time is a bound: the waiter starts then at the latest. None means the start is unknown.
-fn start_times(mut free_at: Vec<Option<f64>>, durations: &[Option<u64>]) -> Vec<Option<f64>> {
+fn start_times(mut free_at: Vec<Option<f64>>, durations: &[Option<f64>]) -> Vec<Option<f64>> {
     let mut starts = Vec::with_capacity(durations.len());
     for duration in durations {
         let Some(slot) = (0..free_at.len()).min_by(|&a, &b| match (free_at[a], free_at[b]) {
@@ -336,7 +336,7 @@ fn start_times(mut free_at: Vec<Option<f64>>, durations: &[Option<u64>]) -> Vec<
         };
         let start = free_at[slot];
         starts.push(start);
-        free_at[slot] = start.zip(*duration).map(|(s, d)| s + d as f64);
+        free_at[slot] = start.zip(*duration).map(|(s, d)| s + d);
     }
     starts
 }
@@ -349,13 +349,13 @@ fn metrics(finished: &[Record], now: Timestamp) -> Metrics {
         m.failures += usize::from(r.state.is_failure());
         match r.started_at {
             Some(started) => {
-                let (wait, ran) = (r.queued_at.until(started).as_secs(), started.until(ended).as_secs());
+                let (wait, ran) = (r.queued_at.until(started).as_secs_f64(), started.until(ended).as_secs_f64());
                 m.ran += 1;
                 m.wait_seconds += wait;
                 m.run_seconds += ran;
                 m.waited_longer += usize::from(wait > ran);
             }
-            None => m.wait_seconds += r.queued_at.until(ended).as_secs(), // gave up while queued
+            None => m.wait_seconds += r.queued_at.until(ended).as_secs_f64(), // gave up while queued
         }
     }
     m
@@ -368,13 +368,13 @@ mod tests {
     #[test]
     fn known_slots_are_used_before_unknown_ones() {
         // Slot 1 runs a job with no estimate; slot 2 frees at 15.
-        let starts = start_times(vec![None, Some(15.0)], &[Some(40), Some(60), None, Some(5)]);
+        let starts = start_times(vec![None, Some(15.0)], &[Some(40.0), Some(60.0), None, Some(5.0)]);
         // The first waiter takes slot 2 at 15 and holds it to 55; the second follows at 55,
         // holding it to 115; the third starts at 115 but has no estimate, so after it every
         // slot's time is unknown.
         assert_eq!(starts, [Some(15.0), Some(55.0), Some(115.0), None]);
         assert_eq!(
-            start_times(vec![Some(0.0), Some(0.0)], &[Some(10), Some(10), Some(10)]),
+            start_times(vec![Some(0.0), Some(0.0)], &[Some(10.0), Some(10.0), Some(10.0)]),
             [Some(0.0), Some(0.0), Some(10.0)]
         );
     }
