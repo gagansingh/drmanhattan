@@ -208,7 +208,8 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         timeout: job.timeout.map(|t| (t + BACKSTOP) as f64),
         priority: job.priority,
         variant: job.variant.clone(),
-        env: forwarded_env(job, std::env::vars()),
+        // The jobs' shell environment, when captured, is what `env_forward` picks from.
+        env: forwarded_env(job, std::env::vars().chain(crate::shell_env::vars().iter().cloned())),
         source: job.source.clone().map(SourceSpec::Full),
         session: None,
         activity: job.activity.clone(),
@@ -227,6 +228,7 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         ready: None,
         ready_timeout: None,
         ttl: None,
+        tty: job.tty,
     }
 }
 

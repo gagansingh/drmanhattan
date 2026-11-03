@@ -93,6 +93,9 @@ pub(crate) struct JobSpec {
     /// Seconds a service may run before it is stopped.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ttl: Option<f64>,
+    /// Run under a pseudo-terminal, for commands that need one.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) tty: bool,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -180,6 +183,8 @@ pub(crate) struct Job {
     pub(crate) ready_timeout: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ttl: Option<u64>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) tty: bool,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -273,6 +278,7 @@ impl JobSpec {
             ttl: self.service.then(|| seconds("ttl", self.ttl, DEFAULT_TTL)).transpose()?,
             ready: self.ready,
             service: self.service,
+            tty: self.tty,
             claim: None,
         })
     }
@@ -452,6 +458,7 @@ mod tests {
             ready: None,
             ready_timeout: None,
             ttl: None,
+            tty: false,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

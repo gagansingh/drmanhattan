@@ -49,6 +49,10 @@ pub(crate) struct Settings {
     pub(crate) worker_poll: Duration,
     /// The most services that run at once; they take no build slots.
     pub(crate) max_services: usize,
+    /// Give jobs the user's login shell environment (`DRMANHATTAN_SHELL_ENV`, on unless `0`).
+    pub(crate) shell_env: bool,
+    /// How long that shell may take to print it.
+    pub(crate) shell_env_timeout: Duration,
 }
 
 const DAY: u64 = 86_400;
@@ -75,6 +79,8 @@ impl Settings {
                 &format!("an integer from 1 to {MAX_SLOTS}"),
             )?,
             slots_env: std::env::var("DRMANHATTAN_SLOTS").ok(),
+            shell_env: std::env::var("DRMANHATTAN_SHELL_ENV").map_or(true, |v| v.trim() != "0"),
+            shell_env_timeout: seconds_env("DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS", 10.0, 0.1)?,
             max_services: env_or("DRMANHATTAN_SERVICES", 4, |v| *v <= 64, "a whole number from 0 to 64")?,
             worker_poll: seconds_env("DRMANHATTAN_WORKER_POLL_SECONDS", 15.0, 0.1)?,
             max_prepares: env_or(

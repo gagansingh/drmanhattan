@@ -201,7 +201,9 @@ pub(super) fn paths(rest: &[String]) -> Result<i32> {
     );
     if let Some(d) = &daemon {
         let url = info.and_then(|i| i.url.as_deref()).map(|u| format!(" dashboard={u}")).unwrap_or_default();
-        println!("daemon=pid {}{url}", d.pid);
+        let shell_env =
+            info.and_then(|i| i.shell_env.as_deref()).map(|s| format!(" shell_env={s:?}")).unwrap_or_default();
+        println!("daemon=pid {}{url}{shell_env}", d.pid);
     }
     Ok(0)
 }
