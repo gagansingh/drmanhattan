@@ -602,18 +602,21 @@ function put(element, html) {
 
 const pad = (n) => String(n).padStart(2, '0');
 
-/** A duration: 45s, 3m 05s, 1h 02m. */
+/** A duration, as `human` in time.rs says it: 120ms, 2.4s, 45s, 3m 05s, 1h 02m. */
 function duration(seconds) {
   if (seconds == null) return '–';
-  const s = Math.max(0, Math.round(seconds));
+  const ms = Math.max(0, Math.floor(seconds * 1000));
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 10000) return `${Math.floor(ms / 1000)}.${Math.floor((ms % 1000) / 100)}s`;
+  const s = Math.floor(ms / 1000);
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;
   return h ? `${h}h ${pad(m)}m` : m ? `${m}m ${pad(x)}s` : `${x}s`;
 }
 
-/** A total in the unit it reads best in: 40s, 12m, 1.5h. */
+/** A total in the unit it reads best in: 120ms, 2.4s, 40s, 12m, 1.5h. */
 function total(seconds) {
   const s = seconds || 0;
-  return s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
+  return s < 10 ? duration(s) : s < 90 ? `${Math.round(s)}s` : s < 5400 ? `${Math.round(s / 60)}m` : `${(s / 3600).toFixed(1)}h`;
 }
 
 /** A time of day, in the viewer's time zone: 2:31 PM. */
@@ -731,7 +734,7 @@ function runningRow(run, now, cls = '') {
     ? `<span class="num">done ~${clock(now + run.remaining_estimate)}</span>${under(`in ~${duration(run.remaining_estimate)}`)}`
     : nothing('unknown');
   return rowStart(run, '', cls)
-    + `<td class="state" title="Started ${esc(clock(run.started_at))}, after waiting ${esc(duration(run.wait_seconds))}">${stateMark('running', `slot ${run.slot}`)}</td>`
+    + `<td class="state" title="Started ${esc(clock(run.started_at))}, ${run.wait_seconds >= 0.5 ? `after waiting ${esc(duration(run.wait_seconds))}` : 'no wait'}">${stateMark('running', `slot ${run.slot}`)}</td>`
     + runCell(run, run.machine && !run.remote_job ? `<span class="note warn" title="Its files are being mirrored to ${esc(run.machine)}">sending to ${esc(run.machine)}</span>` : '', doing(run.activity))
     + `<td class="time"><span class="num">${duration(run.elapsed)}</span>${under(against, range)}${progress}</td>`
     + `<td class="when">${when}</td>`
@@ -978,7 +981,7 @@ function summary(m) {
   let text = `In the last 24 hours, ${b(m.runs)} ${m.runs === 1 ? 'run' : 'runs'}`;
   text += m.failures ? `, <b class="bad" title="failed, timed out or abandoned">${m.failures}</b> failed.` : ', none failed.';
   if (m.ran) {
-    text += m.wait_seconds >= 1
+    text += m.wait_seconds >= 0.5
       ? ` They waited ${b(total(m.wait_seconds))} and ran ${b(total(m.run_seconds))}`
       : ` They ran ${b(total(m.run_seconds))} without waiting`;
     text += m.waited_longer ? `; ${b(m.waited_longer)} waited longer than ${m.waited_longer === 1 ? 'it' : 'they'} ran.` : '.';
@@ -994,7 +997,7 @@ function finishedRow(run, now) {
   if (usual && run.duration != null && run.state === 'succeeded') {
     pace = run.duration > (run.typical_p90 || usual) ? 'slow' : run.duration < usual * 0.6 ? 'fast' : '';
   }
-  const waited = run.wait_seconds >= 1 ? `waited ${duration(run.wait_seconds)}` : '';
+  const waited = run.wait_seconds >= 0.5 ? `waited ${duration(run.wait_seconds)}` : '';
   const load = run.load_avg != null ? `Load ${run.load_avg} on average, ${run.load_max} at peak` : '';
   return rowStart(run)
     + `<td class="state">${stateMark(run.state)}${under(exit ? `<code>${exit}</code>` : '')}</td>`

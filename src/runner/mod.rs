@@ -254,6 +254,7 @@ impl Completion<'_> {
                 label: rec.job.label.clone(),
                 variant: rec.job.variant.clone().unwrap_or_default(),
                 seconds: outcome.duration.as_secs(),
+                millis: Some(outcome.duration.as_millis() as u64),
                 exit_status: outcome.exit,
                 outcome: outcome.state,
                 load: load.map(|l| l.average),

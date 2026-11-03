@@ -81,14 +81,16 @@ impl<'de> Deserialize<'de> for Timestamp {
     }
 }
 
-/// `HH:MM:SS`, for `drmanhattan status`, whose lines are read by programs too.
-pub(crate) fn format_elapsed(d: Duration) -> String {
-    let s = d.as_secs();
-    format!("{:02}:{:02}:{:02}", s / 3600, s % 3600 / 60, s % 60)
-}
-
-/// A duration as people say it: `45s`, `3m 05s`, `1h 02m`.
+/// A duration as people say it: `120ms`, `2.4s`, `45s`, `3m 05s`, `1h 02m`. Tenths are cut,
+/// never rounded up, so 9.99 s reads `9.9s`, not `10.0s`.
 pub(crate) fn human(d: Duration) -> String {
+    let ms = d.as_millis();
+    if ms < 1000 {
+        return format!("{ms}ms");
+    }
+    if ms < 10_000 {
+        return format!("{}.{}s", ms / 1000, ms % 1000 / 100);
+    }
     let s = d.as_secs();
     match (s / 3600, s % 3600 / 60, s % 60) {
         (0, 0, x) => format!("{x}s"),
@@ -114,5 +116,14 @@ mod tests {
         assert_eq!(serde_json::from_str::<Timestamp>(&json).unwrap(), t);
         assert!(serde_json::from_str::<Timestamp>("\"yesterday\"").is_err());
         assert_eq!(t.month(), "2026-11");
+    }
+
+    #[test]
+    fn durations_read_as_people_say_them() {
+        let ms = |n| human(Duration::from_millis(n));
+        assert_eq!([ms(0), ms(120), ms(999)], ["0ms", "120ms", "999ms"]);
+        assert_eq!([ms(1000), ms(2449), ms(9999)], ["1.0s", "2.4s", "9.9s"]);
+        assert_eq!([ms(10_000), ms(59_999), ms(60_000)], ["10s", "59s", "1m 00s"]);
+        assert_eq!([ms(185_000), ms(3_600_000), ms(3_725_000)], ["3m 05s", "1h 00m", "1h 02m"]);
     }
 }

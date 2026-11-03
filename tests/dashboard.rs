@@ -48,7 +48,7 @@ fn state_reflects_runs_and_the_log_is_served() {
     let state = d.api_state();
     let running = &state["running"][0];
     assert_eq!(running["label"], "blocker");
-    assert_eq!(running["typical_seconds"], 10);
+    assert_eq!(running["typical_seconds"], 10.0);
     assert_eq!(running["slot"], 1);
     assert!(running["remaining_estimate"].is_number() && running["elapsed"].is_number());
     assert_eq!(state["slots"][0]["run_id"], running["run_id"]);
@@ -60,7 +60,7 @@ fn state_reflects_runs_and_the_log_is_served() {
     assert_eq!(done["label"], "earlier");
     assert_eq!(done["state"], "failed");
     assert_eq!(done["exit_status"], 2);
-    assert_eq!(done["duration"], 0);
+    assert!(done["duration"].as_f64().unwrap() < 1.0, "durations keep their milliseconds");
     assert_eq!(state["metrics_24h"]["runs"], 1);
     let rid = done["run_id"].as_str().unwrap();
     let (code, body) = d.get(&format!("/api/log?run_id={rid}&lines=50"));

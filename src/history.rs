@@ -20,6 +20,9 @@ pub(crate) struct HistoryRow {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub(crate) variant: String,
     pub(crate) seconds: u64,
+    /// The same in milliseconds; rows from before 0.5.1 have only `seconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) millis: Option<u64>,
     pub(crate) exit_status: i32,
     pub(crate) outcome: State,
     /// The run's average load, for the load model.
@@ -29,6 +32,13 @@ pub(crate) struct HistoryRow {
     /// own runs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) machine: Option<String>,
+}
+
+impl HistoryRow {
+    /// How long it ran, in milliseconds.
+    pub(crate) fn millis(&self) -> u64 {
+        self.millis.unwrap_or(self.seconds * 1000)
+    }
 }
 
 pub(crate) fn append(paths: &Paths, row: &HistoryRow) -> Result<()> {

@@ -22,10 +22,20 @@ pub(crate) struct StepRow {
     pub(crate) finished_at: Timestamp,
     pub(crate) label: String,
     pub(crate) seconds: u64,
+    /// The same in milliseconds; rows from before 0.5.1 have only `seconds`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) millis: Option<u64>,
+}
+
+impl StepRow {
+    pub(crate) fn of(label: String, took: Duration, finished_at: Timestamp) -> StepRow {
+        StepRow { finished_at, label, seconds: took.as_secs(), millis: Some(took.as_millis() as u64) }
+    }
 }
 
 #[derive(Default, Debug)]
 pub(crate) struct Typicals {
+    /// Milliseconds, per label.
     durations: HashMap<String, Vec<u64>>,
 }
 
@@ -48,14 +58,14 @@ impl Typicals {
 
     pub(crate) fn learn(&mut self, row: &StepRow) {
         let list = self.durations.entry(row.label.clone()).or_default();
-        list.push(row.seconds);
+        list.push(row.millis.unwrap_or(row.seconds * 1000));
         if list.len() > KEEP_PER_LABEL {
             list.remove(0);
         }
     }
 
     pub(crate) fn typical(&self, label: &str) -> Option<Duration> {
-        self.durations.get(label).filter(|v| !v.is_empty()).map(|v| Duration::from_secs(median(v)))
+        self.durations.get(label).filter(|v| !v.is_empty()).map(|v| Duration::from_millis(median(v)))
     }
 }
 
@@ -75,9 +85,9 @@ mod tests {
     fn the_typical_is_the_median_of_the_last_ten() {
         let mut t = Typicals::default();
         for seconds in [100, 100, 100, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
-            t.learn(&StepRow { finished_at: Timestamp::now(), label: "cc".into(), seconds });
+            t.learn(&StepRow::of("cc".into(), Duration::from_secs(seconds), Timestamp::now()));
         }
-        assert_eq!(t.typical("cc"), Some(Duration::from_secs(5)));
+        assert_eq!(t.typical("cc"), Some(Duration::from_millis(5500)));
         assert_eq!(t.typical("ld"), None);
     }
 }

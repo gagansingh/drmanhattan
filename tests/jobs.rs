@@ -110,7 +110,7 @@ fn timeout_terminates_the_group() {
     assert_eq!(d.wait_exit("slow", T), 124);
     let s = d.status_of("slow").unwrap();
     assert_eq!(s["state"], "timed_out");
-    assert!(d.log_of("slow").contains("timed out after 1s"));
+    assert!(d.log_of("slow").contains("timed out after 1.0s"));
     assert_eq!(d.status_json()["state"], "idle");
 }
 
