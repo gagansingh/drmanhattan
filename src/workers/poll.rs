@@ -1,9 +1,15 @@
 //! Asking each worker for its readings, every `DRMANHATTAN_WORKER_POLL_SECONDS` (15).
+//!
+//! A worker's slot count is one number wherever it is changed: the − and + here push it to
+//! the worker (`push_slots`), and a count changed on the worker comes back with its readings.
+//! Pausing a worker (0) stays here: it only says this machine sends it nothing.
 
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
+use crate::log;
 use crate::paths::Paths;
-use crate::settings::load_config;
+use crate::settings::{load_config, set_worker_slots};
 use crate::workers::host::MachineStats;
 use crate::workers::{dispatch, pool, ssh};
 
@@ -29,6 +35,7 @@ pub(crate) fn start_poller(paths: Paths, every: Duration) {
 }
 
 fn poll_one(paths: &Paths, worker: &crate::workers::WorkerConfig) {
+    let asked = Instant::now();
     let out = ssh::run(worker, &ssh::drmanhattan(worker, &["machine-stats"]), None, ANSWER_LIMIT);
     let stats: Option<MachineStats> = (out.code == 0).then(|| serde_json::from_str(out.stdout.trim()).ok()).flatten();
     let Some(stats) = stats else {
@@ -36,8 +43,31 @@ fn poll_one(paths: &Paths, worker: &crate::workers::WorkerConfig) {
         return pool().lost(paths, &worker.name, &format!("unreachable: {why}"));
     };
     let unusable = dispatch::unusable(&stats);
+    if worker.slots != 0 && stats.capacity != worker.slots && pool().may_adopt_slots(&worker.name, asked) {
+        let _ = set_worker_slots(paths, &worker.name, stats.capacity);
+    }
     pool().seen(paths, &worker.name, serde_json::to_value(&stats).unwrap_or_default());
     if let Some(why) = unusable {
         pool().polled_unavailable(paths, &worker.name, &why);
     }
+}
+
+/// Sets the worker's own slot count to the one set here, as `drmanhattan slots N` there, in
+/// the background; a failure is logged, and the worker's count comes back with the next poll.
+/// Pushes go one at a time, each with the count as it is then, so quick clicks end on the last.
+pub(crate) fn push_slots(paths: &Paths, worker: &str) {
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    pool().slots_set(worker, true);
+    let (paths, worker) = (paths.clone(), worker.to_string());
+    let _ = std::thread::Builder::new().name("worker-slots".into()).spawn(move || {
+        let _turn = crate::sync::lock(&ONE_AT_A_TIME);
+        let found = load_config(&paths).ok().and_then(|c| c.workers.into_iter().find(|w| w.name == worker));
+        let Some(w) = found.filter(|w| w.slots > 0) else { return pool().slots_set(&worker, false) };
+        let slots = w.slots;
+        let out = ssh::run(&w, &ssh::drmanhattan(&w, &["slots", &slots.to_string()]), None, ANSWER_LIMIT);
+        if out.code != 0 {
+            log::warn(format!("could not set {}'s slots to {slots}: {}", w.name, out.first_line()));
+        }
+        pool().slots_set(&w.name, false);
+    });
 }

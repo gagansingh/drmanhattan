@@ -294,7 +294,7 @@ On this machine, `config.json` in the data directory lists them:
 | --- | --- |
 | `ssh` | an alias from `~/.ssh/config`, or `user@host`; key-based auth only |
 | `name` | its name on the dashboard and in run records (default: the alias) |
-| `slots` | how many of its slots this machine may use (default 1); 0 pauses it |
+| `slots` | how many of its slots this machine may use (default 1), kept in step with the worker's own; 0 pauses it |
 | `tags` | what it offers; a job's `requires` must all be among them |
 | `check` | a command run on it before each hand-over: exit 0 means ready, else its first line of output says why not |
 | `args_path_map` | argument prefixes rewritten for it, for paths that exist only here |
@@ -352,7 +352,9 @@ What happens:
 The dashboard then shows the machines as a tree. Each machine is a node that folds away,
 with whether it answers, its slots with − and + (down to 0, which pauses a worker), its CPU,
 load, memory, temperature and battery, and why it is not taking work while that is so; under it, one
-leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+leaf per slot, holding its running job or free. A worker's slot count is one number on
+every machine: − and + here set it on the worker too, and a count changed on the worker
+shows here within a poll. Pausing stays on the machine that paused it. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
 ## Goals and loops for coding agents

@@ -73,7 +73,12 @@ fn set_capacity(req: Request, body: &str, ctx: &Ctx) {
     };
     if let Some(worker) = worker {
         return match set_worker_slots(&ctx.paths, &worker, slots) {
-            Ok(slots) => http::json(req, 200, &json!({ "worker": worker, "slots": slots })),
+            Ok(slots) => {
+                if slots > 0 {
+                    crate::workers::push_slots(&ctx.paths, &worker);
+                }
+                http::json(req, 200, &json!({ "worker": worker, "slots": slots }))
+            }
             Err(e) => http::error(req, e),
         };
     }
