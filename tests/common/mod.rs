@@ -117,13 +117,22 @@ impl Daemon {
     pub fn launch(&mut self) {
         let log =
             fs::File::create(self.root.join(format!("daemon-{}.log", self.root.read_dir().unwrap().count()))).unwrap();
-        let child = self
-            .cmd(&["serve", "--port", "0", "--no-session-links"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(log.try_clone().unwrap()))
-            .stderr(Stdio::from(log))
-            .spawn()
-            .expect("daemon starts");
+        // On Linux a binary copied a moment ago can be "busy" while another test forks with
+        // the copy's write handle still open; that clears once the fork execs.
+        let child = wait_for(Duration::from_secs(5), || {
+            let spawned = self
+                .cmd(&["serve", "--port", "0", "--no-session-links"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::from(log.try_clone().unwrap()))
+                .stderr(Stdio::from(log.try_clone().unwrap()))
+                .spawn();
+            match spawned {
+                Err(e) if e.raw_os_error() == Some(libc::ETXTBSY) => None,
+                other => Some(other),
+            }
+        })
+        .expect("the copied binary stops being busy")
+        .expect("daemon starts");
         let pid = child.id() as i64;
         self.child = Some(child);
         // Wait for *this* daemon's dashboard.json: a daemon killed with SIGKILL leaves its
