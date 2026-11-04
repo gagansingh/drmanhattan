@@ -3,9 +3,9 @@
 use crate::error::{invalid, Result};
 
 /// Shell words that say nothing about what a command does; skipped when naming a job.
-const SHELL_BOOKKEEPING: [&str; 22] = [
+const SHELL_BOOKKEEPING: [&str; 28] = [
     "cd", "echo", "printf", "set", "export", "source", ".", "true", "false", ":", "if", "then", "for", "while",
-    "until", "case", "test", "[", "eval", "exec", "exit", "return",
+    "until", "case", "test", "[", "eval", "exec", "exit", "return", "do", "done", "fi", "else", "elif", "esac",
 ];
 const SHELLS: [&str; 4] = ["sh", "bash", "zsh", "dash"];
 const INTERPRETERS: [&str; 9] = ["sh", "bash", "zsh", "dash", "python", "python3", "node", "ruby", "perl"];
@@ -87,12 +87,16 @@ fn first_command_in_script(script: &str) -> Option<String> {
 
 /// The programs a shell script runs, shell bookkeeping aside, in order. Words are scanned in
 /// order; a command starts the script and follows each `;`, `&&`, `||`, `|`, `&` or line
-/// break. Assignments before a command, redirections and quoted words are skipped.
+/// break (not one escaped with `\`). Assignments before a command, redirections, quoted words
+/// and comments are skipped.
 fn commands_in_script(script: &str) -> Vec<String> {
     let mut found = Vec::new();
-    for line in script.lines() {
+    for line in script.replace("\\\n", " ").lines() {
         let mut at_start = true;
         for raw in line.split_whitespace() {
+            if raw.starts_with('#') {
+                break; // a comment, to the end of the line
+            }
             let word = raw.trim_start_matches(['(', '{']);
             let ends_command = ["&&", "||", ";", "|", "&"].contains(&word) || word.ends_with(';');
             if at_start && !ends_command {
@@ -194,6 +198,10 @@ mod tests {
         assert_eq!(later_commands(&sh("git log | head -20")), ["head"]);
         assert_eq!(later_commands(&sh("cd repo && git pull && cargo build --release")), ["cargo"]);
         assert_eq!(later_commands(&sh("make deps\nmake build")), ["make"]);
+        assert_eq!(derive_category(&sh("set -e\n# build it\ncargo build # fast")), "cargo");
+        assert_eq!(derive_category(&sh("if [ -d x ]; then\n  echo hi\nfi\ncargo build")), "cargo");
+        assert!(later_commands(&sh("cargo build \\\n  --release")).is_empty(), "a continued line");
+        assert_eq!(derive_category(&sh("cd repo\nnpm test")), "npm");
         assert!(later_commands(&["git".into(), "status".into()]).is_empty());
     }
 
