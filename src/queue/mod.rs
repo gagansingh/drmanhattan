@@ -156,8 +156,9 @@ impl Queue {
         if let Some(from) = &job.dispatched_from {
             return Some(Lane { quick: false, reason: format!("sent here by {from}") });
         }
-        let later = crate::naming::later_commands(&job.command);
-        Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default(), &later))
+        let shape = crate::naming::script_shape(&job.command);
+        let script = shape.as_deref().map_err(String::as_str);
+        Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default(), script))
     }
 
     /// Decides the lane of every waiting run again: a run that finished may have shown a

@@ -187,11 +187,17 @@ impl HistoryIndex {
     /// 4. anything else is new here, and waits for a slot.
     ///
     /// A shell script is named after its first program, so it is judged as that program only
-    /// when every other program it runs is a read-only tool (`git log | head`); a script that
-    /// runs more (`git pull && cargo build`) waits for a slot. `later` lists those others.
-    pub(crate) fn lane(&self, category: &str, label: &str, variant: &str, later: &[String]) -> Lane {
-        if let Some(other) = later.iter().find(|c| !QUICK_TOOLS.contains(&c.as_str())) {
-            return Lane { quick: false, reason: format!("a script that also runs {other}") };
+    /// when it is plain commands and every other program it runs is a read-only tool
+    /// (`git log | head`); a script that runs more (`git pull && cargo build`), or whose
+    /// programs cannot be listed (`naming::script_shape`), waits for a slot.
+    pub(crate) fn lane(&self, category: &str, label: &str, variant: &str, script: Result<&[String], &str>) -> Lane {
+        match script {
+            Err(why) => return Lane { quick: false, reason: format!("a script that {why}") },
+            Ok(later) => {
+                if let Some(other) = later.iter().find(|c| !QUICK_TOOLS.contains(&c.as_str())) {
+                    return Lane { quick: false, reason: format!("a script that also runs {other}") };
+                }
+            }
         }
         let quick = QUICK.as_millis() as u64;
         let seconds = human(QUICK);
@@ -345,7 +351,7 @@ mod tests {
     }
 
     fn lane(h: &[HistoryRow], category: &str, label: &str) -> Lane {
-        HistoryIndex::of(h).lane(category, label, "", &[])
+        HistoryIndex::of(h).lane(category, label, "", Ok(&[]))
     }
 
     #[test]
@@ -415,19 +421,21 @@ mod tests {
         let mut h: Vec<HistoryRow> = (0..5).map(|_| row("swift", "swift build", "warm", 10, ok)).collect();
         h.extend((0..3).map(|_| row("swift", "swift build", "cold", 600, ok)));
         let index = HistoryIndex::of(&h);
-        assert!(index.lane("swift", "swift build", "warm", &[]).quick);
-        assert!(!index.lane("swift", "swift build", "cold", &[]).quick);
+        assert!(index.lane("swift", "swift build", "warm", Ok(&[])).quick);
+        assert!(!index.lane("swift", "swift build", "cold", Ok(&[])).quick);
         // Fewer than 3 of the variant's own: the label's, here 3 long runs of 8.
-        let l = index.lane("swift", "swift build", "new", &[]);
+        let l = index.lane("swift", "swift build", "new", Ok(&[]));
         assert!(!l.quick && l.reason == "3 of its last 8 runs here took 30s or more", "{l:?}");
     }
 
     #[test]
     fn a_script_is_judged_as_its_first_program_only_when_the_rest_only_read() {
         let index = HistoryIndex::of(&[]);
-        assert!(index.lane("git", "git", "", &["head".into()]).quick);
-        let l = index.lane("git", "git", "", &["cargo".into()]);
+        assert!(index.lane("git", "git", "", Ok(&["head".into()])).quick);
+        let l = index.lane("git", "git", "", Ok(&["cargo".into()]));
         assert!(!l.quick && l.reason == "a script that also runs cargo", "{l:?}");
+        let l = index.lane("git", "git", "", Err("uses for"));
+        assert!(!l.quick && l.reason == "a script that uses for", "{l:?}");
     }
 
     #[test]
