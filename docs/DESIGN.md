@@ -47,8 +47,8 @@ seconds) does not wait for a slot. In the same pass, in the same order, it start
 slots while fewer than `DRMANHATTAN_QUICK` quick runs are running, and otherwise takes a free
 slot like any waiter. Its lane is decided when it is queued and again for every waiter when
 a run finishes or the daemon recovers; the record keeps it with its reason (`quick`,
-`lane_reason`). A quick run's `DRMANHATTAN_SLOT` is the lowest number above the slots that no
-run here holds, and nothing that counts slots counts it.
+`lane_reason`). A quick run's `DRMANHATTAN_SLOT` is the lowest number above any slot there can
+be (17 up) that no run here holds, and nothing that counts slots counts it.
 
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting

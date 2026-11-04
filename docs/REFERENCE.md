@@ -54,7 +54,7 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
-`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number above the slots)
+`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 17 up)
 set, besides its `env`. No two jobs running at once share a `DRMANHATTAN_SLOT`, so it can
 name a per-slot cache or scratch directory.
 
