@@ -2,11 +2,18 @@
 
 use crate::error::{invalid, Result};
 
-/// Shell words that say nothing about what a command does; skipped when naming a job.
-const SHELL_BOOKKEEPING: [&str; 28] = [
-    "cd", "echo", "printf", "set", "export", "source", ".", "true", "false", ":", "if", "then", "for", "while",
-    "until", "case", "test", "[", "eval", "exec", "exit", "return", "do", "done", "fi", "else", "elif", "esac",
+/// Shell words that say nothing about what a command does; skipped when naming a job, with
+/// their arguments.
+const SHELL_BOOKKEEPING: [&str; 16] = [
+    "cd", "echo", "printf", "set", "export", "source", ".", "true", "false", ":", "for", "case", "test", "[", "exit",
+    "return",
 ];
+/// Shell words a command follows (`do cargo build`, `if make test`) or that only close one
+/// (`fi`, `done`): skipped, and the next word is still where a command starts.
+const SHELL_KEYWORDS: [&str; 14] =
+    ["if", "then", "else", "elif", "while", "until", "do", "exec", "time", "!", "done", "fi", "esac", "eval"];
+/// What separates one command from the next.
+const SEPARATORS: [&str; 5] = [";", "&&", "||", "|", "&"];
 const SHELLS: [&str; 4] = ["sh", "bash", "zsh", "dash"];
 const INTERPRETERS: [&str; 9] = ["sh", "bash", "zsh", "dash", "python", "python3", "node", "ruby", "perl"];
 const MAX_NAME_CHARS: usize = 40;
@@ -85,40 +92,83 @@ fn first_command_in_script(script: &str) -> Option<String> {
     commands_in_script(script).into_iter().next().map(|name| truncated(&name))
 }
 
-/// The programs a shell script runs, shell bookkeeping aside, in order. Words are scanned in
-/// order; a command starts the script and follows each `;`, `&&`, `||`, `|`, `&` or line
-/// break (not one escaped with `\`). Assignments before a command, redirections, quoted words
-/// and comments are skipped.
+/// The programs a shell script runs, shell bookkeeping aside, in order: the word where each
+/// command starts, at the start of the script and after each separator (`;`, `&&`, `||`,
+/// `|`, `&`, a line break) or keyword (`do`, `then`, ...). Assignments before a command,
+/// redirections and quoted words are not programs.
 fn commands_in_script(script: &str) -> Vec<String> {
     let mut found = Vec::new();
-    for line in script.replace("\\\n", " ").lines() {
-        let mut at_start = true;
-        for raw in line.split_whitespace() {
-            if raw.starts_with('#') {
-                break; // a comment, to the end of the line
-            }
-            let word = raw.trim_start_matches(['(', '{']);
-            let ends_command = ["&&", "||", ";", "|", "&"].contains(&word) || word.ends_with(';');
-            if at_start && !ends_command {
-                let is_assignment = word.contains('=') && !word.starts_with('=');
-                if !is_assignment {
-                    let name = basename(word.trim_end_matches(';'));
-                    let not_a_program = name.is_empty()
-                        || name.starts_with(['>', '<', '$', '"', '\'', '`'])
-                        || name.starts_with(|c: char| c.is_ascii_digit())
-                        || SHELL_BOOKKEEPING.contains(&name);
-                    if !not_a_program {
-                        found.push(name.to_string());
-                    }
-                    at_start = false;
-                }
-            }
-            if ends_command {
-                at_start = true;
-            }
+    let mut at_start = true;
+    for word in script_words(script) {
+        if SEPARATORS.contains(&word.as_str()) {
+            at_start = true;
+            continue;
         }
+        if !at_start {
+            continue;
+        }
+        let word = word.trim_start_matches(['(', '{']).trim_end_matches([')', '}']);
+        let is_assignment = word.contains('=') && !word.starts_with(['=', '"', '\'']);
+        let name = basename(word);
+        if is_assignment || name.is_empty() || SHELL_KEYWORDS.contains(&name) {
+            continue;
+        }
+        let not_a_program = name.starts_with(['>', '<', '$', '"', '\'', '`'])
+            || name.starts_with(|c: char| c.is_ascii_digit())
+            || SHELL_BOOKKEEPING.contains(&name);
+        if !not_a_program {
+            found.push(name.to_string());
+        }
+        at_start = false;
     }
     found
+}
+
+/// A shell script's words, with each separator a word of its own and a line break as `;`.
+/// Quoted text stays in its word, quotes and all; a `#` that starts a word outside quotes
+/// begins a comment; a backslash-newline joins two lines.
+fn script_words(script: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = script.chars().peekable();
+    while let Some(c) = chars.next() {
+        if let Some(q) = quote {
+            word.push(c);
+            if c == q {
+                quote = None;
+            } else if c == '\\' && q == '"' {
+                word.extend(chars.next());
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                quote = Some(c);
+                word.push(c);
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                next => {
+                    word.push(c);
+                    word.extend(next);
+                }
+            },
+            '#' if word.is_empty() => while chars.next_if(|n| *n != '\n').is_some() {},
+            ';' | '\n' | '&' | '|' => {
+                words.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
+                let mut op = if c == '\n' { ";".to_string() } else { c.to_string() };
+                if matches!(c, '&' | '|') && chars.next_if_eq(&c).is_some() {
+                    op.push(c);
+                }
+                words.push(op);
+            }
+            c if c.is_whitespace() => words.extend((!word.is_empty()).then(|| std::mem::take(&mut word))),
+            c => word.push(c),
+        }
+    }
+    words.extend((!word.is_empty()).then_some(word));
+    words
 }
 
 /// For `sh -c '<script>'`: the programs the script runs after its first, which names the
@@ -202,6 +252,14 @@ mod tests {
         assert_eq!(derive_category(&sh("if [ -d x ]; then\n  echo hi\nfi\ncargo build")), "cargo");
         assert!(later_commands(&sh("cargo build \\\n  --release")).is_empty(), "a continued line");
         assert_eq!(derive_category(&sh("cd repo\nnpm test")), "npm");
+        assert_eq!(later_commands(&sh("git pull && for d in a b; do cargo build -p $d; done")), ["cargo"]);
+        assert_eq!(later_commands(&sh("git status && if [ -f x ]; then cargo build; fi")), ["cargo"]);
+        assert_eq!(derive_category(&sh("if cargo test; then echo ok; fi")), "cargo");
+        assert_eq!(later_commands(&sh("git commit -m \"fix #12\" && cargo build")), ["cargo"]);
+        assert_eq!(later_commands(&sh("git commit -m 'a; b | c' && git push")), ["git"]);
+        assert_eq!(derive_category(&sh("FOO=1 BAR='x y' make test")), "make");
+        assert_eq!(derive_category(&sh("(cd app && npm test)")), "npm");
+        assert_eq!(later_commands(&sh("echo a#b; git log | head -3")), ["head"]);
         assert!(later_commands(&["git".into(), "status".into()]).is_empty());
     }
 
