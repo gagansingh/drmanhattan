@@ -50,8 +50,8 @@ pub(crate) struct SyncPath {
 }
 
 /// Sync entries as absolute paths: `~/…` is under the home directory; anything else must be
-/// absolute. They need not exist yet; a dispatch checks them.
-pub(super) fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
+/// absolute. They need not exist yet; a dispatch checks them. `field` names them in errors.
+pub(super) fn resolve_sync(field: &str, entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
     entries
         .into_iter()
         .map(|entry| {
@@ -62,7 +62,9 @@ pub(super) fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
             sync.path = match sync.path.strip_prefix("~/") {
                 Some(rest) => paths::home().join(rest).to_string_lossy().into_owned(),
                 None if sync.path.starts_with('/') => sync.path,
-                None => return invalid(format!("sync paths must be absolute or start with ~/, not {:?}", sync.path)),
+                None => {
+                    return invalid(format!("{field} paths must be absolute or start with ~/, not {:?}", sync.path))
+                }
             };
             if sync.exclude.iter().any(|e| e.is_empty() || e.contains(['\n', '\0'])) {
                 return invalid(format!("sync.exclude for {} has an empty or multi-line pattern", sync.path));

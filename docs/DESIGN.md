@@ -150,7 +150,9 @@ process-group handling apply unchanged.
   for the start. Just before the submit it records `remote_run`, so a restart knows where
   the job went. A failure puts the run back in the queue with `remote_fallback` set.
 - Then it follows the worker's log into the local one, counting bytes so a reconnect
-  resumes with `follow --from`, until the worker's status says the job is over.
+  resumes with `follow --from`, until the worker's status says the job is over. A job that
+  succeeded there has its `sync_back` paths copied back (`mirror::copy_back`) before the
+  run completes, so a waiter sees them; a copy that fails fails the run.
 - Recovery leaves a running run with `remote_run` running and starts a runner for it that
   follows it again; one still being handed over (no `remote_run`) is queued again.
 - A poller thread asks each worker for `machine-stats` every 15 s (`workers::poll`) and

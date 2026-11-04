@@ -69,6 +69,9 @@ pub(crate) struct JobSpec {
     /// Mirror the git metadata of synced checkouts too.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) sync_git: bool,
+    /// Paths copied back from the worker once the job succeeds there: its products.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sync_back: Vec<String>,
     /// The daemon's environment variables, by name or `PREFIX_*`, that go with it to a worker.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) env_forward: Vec<String>,
@@ -167,6 +170,9 @@ pub(crate) struct Job {
     pub(crate) sync: Vec<SyncPath>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) sync_git: bool,
+    /// Absolute paths, copied back from a worker after the job succeeds there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) sync_back: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) env_forward: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -266,8 +272,12 @@ impl JobSpec {
             group: text_field("group", self.group)?,
             remote: self.remote,
             requires: self.requires,
-            sync: resolve_sync(self.sync)?,
+            sync: resolve_sync("sync", self.sync)?,
             sync_git: self.sync_git,
+            sync_back: resolve_sync("sync_back", self.sync_back.into_iter().map(SyncSpec::Path).collect())?
+                .into_iter()
+                .map(|s| s.path)
+                .collect(),
             env_forward: self.env_forward,
             dispatched_from: text_field("dispatched_from", self.dispatched_from)?,
             dispatch_id: text_field("dispatch_id", self.dispatch_id)?,
@@ -423,6 +433,7 @@ mod tests {
             (r#"{"command": ["true"], "service": true, "ready": {"pid": 1}}"#, "unknown variant"),
             (r#"{"command": ["true"], "service": true, "ttl": -1}"#, "ttl must be"),
             (r#"{"command": ["true"], "sync": ["relative/path"]}"#, "sync paths must be absolute"),
+            (r#"{"command": ["true"], "sync_back": ["build"]}"#, "sync_back paths must be absolute"),
             (r#"{"command": ["true"], "sync": [{"path": "/a", "exclud": []}]}"#, "each sync entry"),
         ] {
             let e = resolve(job).unwrap_err().to_string();
@@ -451,6 +462,7 @@ mod tests {
             requires: Vec::new(),
             sync: Vec::new(),
             sync_git: false,
+            sync_back: Vec::new(),
             env_forward: Vec::new(),
             dispatched_from: None,
             dispatch_id: None,

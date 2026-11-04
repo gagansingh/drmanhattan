@@ -395,3 +395,33 @@ fn remote_only_waits_for_any_worker_and_never_runs_here() {
     assert_eq!(p.here.wait_exit("only", T), 0);
     assert_eq!(p.here.status_of("only").unwrap()["machine"], "w1");
 }
+
+#[test]
+fn sync_back_brings_the_products_here_before_the_run_finishes() {
+    let p = pair(json!({}));
+    let proj = project(&p.home, "proj");
+    // What the worker sees is under the fake's root (see `fake_ssh`): the job writes its
+    // product there, as a build on the worker would.
+    let there = p.fake.join("root").join(proj.strip_prefix("/").unwrap());
+    let products = proj.join("build/Products");
+    fs::create_dir_all(&products).unwrap();
+    fs::write(products.join("stale.txt"), "old").unwrap();
+    let command = format!(
+        "mkdir -p {d}/build/Products/App.app && echo built > {d}/build/Products/App.app/binary",
+        d = there.display()
+    );
+    p.here.submit("build", json!({"command": command, "cwd": proj, "remote": "only", "sync_back": [products]}));
+    assert_eq!(p.here.wait_exit("build", T), 0, "{}", p.here.log_of("build"));
+    let s = p.here.status_of("build").unwrap();
+    assert_eq!((&s["state"], &s["machine"]), (&json!("succeeded"), &json!("w1")), "{s}");
+    assert_eq!(fs::read_to_string(products.join("App.app/binary")).unwrap(), "built\n", "it is here once finished");
+    assert!(!products.join("stale.txt").exists(), "here it is as the worker left it");
+    assert!(p.here.log_of("build").contains(&format!("copied back {} from w1", products.display())));
+    // A path the job did not make fails the run, saying so.
+    let missing = proj.join("build/Missing");
+    p.here.submit("nothing", json!({"command": "true", "cwd": proj, "remote": "only", "sync_back": [missing]}));
+    assert_ne!(p.here.wait_exit("nothing", T), 0);
+    let s = p.here.status_of("nothing").unwrap();
+    assert_eq!(s["state"], "failed", "{s}");
+    assert!(s["failure_reason"].as_str().unwrap().contains("could not copy back"), "{s}");
+}

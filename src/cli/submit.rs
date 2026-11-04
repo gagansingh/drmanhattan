@@ -65,6 +65,8 @@ options:
   --requires TAG      a tag the worker must have (repeatable)
   --sync PATH         a path to mirror to the worker (repeatable; default: --cwd)
   --sync-git          mirror the git metadata of synced checkouts too
+  --sync-back PATH    a path copied back from the worker once the job succeeds there
+                      (repeatable): its products, such as an Xcode build's Build/Products
   --service           a server that keeps running: submit returns once it is ready (with
                       --ready-port or --ready-log) and it takes no build slot
   --ready-port N      the service is ready once 127.0.0.1:N accepts connections
@@ -95,6 +97,7 @@ options:
         "remote",
         "requires",
         "sync",
+        "sync-back",
         "ready-port",
         "ready-log",
         "ready-timeout",
@@ -191,6 +194,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         requires: a.all("requires").to_vec(),
         sync: a.all("sync").iter().map(|p| SyncSpec::Path(absolute(p))).collect(),
         sync_git: a.has("sync-git"),
+        sync_back: a.all("sync-back").iter().map(|p| absolute(p)).collect(),
         tty: a.has("tty"),
         env_forward: Vec::new(),
         dispatched_from: None,

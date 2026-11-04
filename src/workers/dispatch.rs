@@ -227,6 +227,7 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         requires: Vec::new(),
         sync: job.sync.iter().map(|s| SyncSpec::Path(s.path.clone())).collect(),
         sync_git: false,
+        sync_back: Vec::new(),
         env_forward: Vec::new(),
         dispatched_from: Some(me.to_string()),
         dispatch_id: Some(rec.run_id.to_string()),

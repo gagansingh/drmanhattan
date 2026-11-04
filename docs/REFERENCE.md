@@ -317,9 +317,10 @@ A job says whether it may go to a worker:
 | `requires` | tags the worker must have |
 | `sync` | paths to mirror to the worker, at the same absolute paths: strings, or `{"path": …, "exclude": [rsync patterns]}`; default: the job's `cwd` |
 | `sync_git` | `true` also mirrors the git metadata of the synced checkouts, so `HEAD`, branches and commits resolve there |
+| `sync_back` | paths copied back here once the job succeeds there, before the run is finished: its products (see What comes back from a worker) |
 | `env_forward` | the daemon's environment variables, by name or `PREFIX_*`, that go too; the job's `env` always does |
 
-`submit` takes `--remote`, `--requires`, `--sync` and `--sync-git`.
+`submit` takes `--remote`, `--requires`, `--sync`, `--sync-git` and `--sync-back`.
 
 What happens:
 
@@ -376,8 +377,9 @@ does not say (no `remote`) runs only on the route's workers. It waits in the que
 free slot there, however many slots are free here, and starts as soon as one frees. These
 still run here:
 
-- jobs with `remote: "never"`: say so for a job whose results are needed on this machine
-  (an app built for this machine's simulator, a deploy);
+- jobs with `remote: "never"`: say so for a job that must run on this machine (a deploy
+  that needs secrets kept here); a build whose products are needed here can name them in
+  `sync_back` instead;
 - services, which other things reach on `127.0.0.1`;
 - quick runs (see Quick commands): they start at once, and would spend longer being sent;
 - jobs whose `requires` tags none of the route's workers has: tag the worker
@@ -427,22 +429,33 @@ as clean builds. Its estimates are kept apart from this machine's, and start emp
 
 ### What comes back from a worker
 
-Only the log. The job's output streams into its log here, and its exit status, notes and
-error line come back with it, but files it writes stay on the worker: build products,
-DerivedData, `.xcresult` bundles, coverage. Mirroring is one way, here to the worker (and
-it leaves out what git ignores, so a product here is never overwritten there either).
+The job's output streams into its log here, and its exit status, notes and error line come
+back with it. Files it writes stay on the worker, unless the job names them in
+`sync_back`: once it succeeds there, each of those paths is copied back with
+`rsync -a --delete`, before the run is marked finished, so `wait` and anything waiting on
+the run find them here. Each path arrives as the job left it on the worker (files only here
+inside it are removed), with a line in the log (`copied back … from air in 3s`). A path
+the worker does not have fails the run (`could not copy back …`). Paths must lie inside the
+home directory, at the same path on the worker or the one its `args_path_map` gives (with
+the same last component). A run that fails, or one that runs here, copies nothing.
 
-So a job whose files are used here afterwards should say `remote: "never"`, which also
-keeps it here under a route: an `xcodebuild` for this machine's simulator (its
-`-destination id=` is a simulator here, and the `.app` is installed here next), a build
-whose products are signed or uploaded here. Builds and tests whose result is their exit
-status and log are what workers are for.
+For an Xcode build, name the products, not all of DerivedData:
 
-A `sync_back` field is the way to lift this, and is not built yet: paths (inside the job's
-`sync` paths, or mapped by `args_path_map`) copied back from the worker with `rsync -a`
-once the job succeeds, before the run is marked finished, so a `wait` returns only once
-they are here. For an Xcode build that would be its `-derivedDataPath`'s
-`Build/Products`, which is far smaller than all of DerivedData.
+```json
+{"command": ["xcodebuild", "build", "-scheme", "App",
+             "-destination", "generic/platform=iOS Simulator",
+             "-derivedDataPath", "/Users/me/dd/app"],
+ "cwd": "/Users/me/code/app", "remote": "allowed",
+ "sync_back": ["/Users/me/dd/app/Build/Products/Debug-iphonesimulator"]}
+```
+
+Build for `generic/platform=iOS Simulator` rather than one simulator's `id=`: a UDID names
+a device on one machine only, and the product installs on any simulator either way.
+Products copied back into a git-ignored folder, or outside the job's `sync` paths (as
+DerivedData usually is), are not sent to the worker again by the next mirror.
+
+Jobs whose effects belong to this machine itself (a deploy that needs secrets kept here, a
+command that drives this machine's simulator) should still say `remote: "never"`.
 
 ## Goals and loops for coding agents
 

@@ -151,12 +151,38 @@ pub(super) fn run(shared: &Shared, admitted: Admitted) {
         log_from: remote.log_base,
         on_ready: &|| {},
     };
-    let outcome = follow(&worker, &rec, &remote, &watch, &exit_sender);
+    let mut outcome = follow(&worker, &rec, &remote, &watch, &exit_sender);
     if outcome.state == State::Failed && outcome.failure_reason.as_deref().is_some_and(|r| r.starts_with("worker lost"))
     {
         pool().unavailable(&paths, &name, "it stopped answering while running a job");
     }
+    if outcome.state == State::Succeeded {
+        if let Err(why) = copy_back(&worker, &rec) {
+            (outcome.state, outcome.exit, outcome.failure_reason) = (State::Failed, 1, Some(why));
+        }
+    }
     completion.complete(&rec, &outcome);
+}
+
+/// Copies the job's `sync_back` paths back from the worker, before the run is marked
+/// finished, with a line in its log for each. The first that fails fails the run: what
+/// waits for it would find the products missing.
+fn copy_back(worker: &WorkerConfig, rec: &Record) -> Result<(), String> {
+    let log = open_log(rec, true).ok();
+    let say = |text: &str| {
+        if let Some(mut log) = log.as_ref() {
+            let _ = log.write_all(format!("{OWN_LINE_PREFIX}{text}\n").as_bytes());
+        }
+    };
+    for path in &rec.job.sync_back {
+        let started = Instant::now();
+        if let Err(why) = workers::copy_back(worker, path) {
+            say(&why);
+            return Err(why);
+        }
+        say(&format!("copied back {path} from {} in {}", worker.name, human(started.elapsed())));
+    }
+    Ok(())
 }
 
 /// Follows the job on the worker until it ends there, or the worker is lost.
