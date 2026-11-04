@@ -252,6 +252,12 @@ html.dragging, html.dragging * { cursor: grabbing !important; user-select: none;
 #filters button:hover { color: var(--fg); }
 #filters button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--fg); }
 #filters button span { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* Search is rarely used: a magnifier until it is opened, and while it holds nothing. */
+#search-open {
+  display: inline-flex; padding: 3px; border: 0; background: none; color: var(--faint); cursor: pointer;
+}
+#search-open:hover { color: var(--fg); }
+#search-open[aria-expanded="true"] { display: none; }
 #search {
   width: 168px; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px;
   background: none; color: var(--fg); font: 12px/18px var(--sans);
@@ -429,7 +435,8 @@ html.log-open #log { display: flex; }
   td.state .word, td.state .n { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .time { width: 104px; }
   #finished-section .head { flex-wrap: wrap; row-gap: 8px; }
-  #search { order: 1; width: 100%; }
+  #search-box:has(#search:not([hidden])) { order: 1; width: 100%; }
+  #search { width: 100%; box-sizing: border-box; }
 }
 @media (prefers-reduced-motion: reduce) {
   .progress i { transition: none; }
@@ -496,7 +503,10 @@ html.log-open #log { display: flex; }
     <div class="head">
       <h2 id="finished-heading" tabindex="-1">Finished<span class="count" id="finished-count"></span></h2>
       <span class="spring"></span>
-      <input id="search" type="search" placeholder="Search" aria-label="Search finished runs by name, command or folder" autocomplete="off" spellcheck="false" hidden>
+      <span id="search-box" hidden>
+        <button id="search-open" type="button" aria-label="Search finished runs" aria-expanded="false" title="Search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 10l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+        <input id="search" type="search" placeholder="Search" aria-label="Search finished runs by name, command or folder" autocomplete="off" spellcheck="false" hidden>
+      </span>
       <div id="filters" role="group" aria-label="Show"></div>
     </div>
     <div class="subhead"><p id="summary"></p><div id="pager" class="aside" role="group" aria-label="Pages of finished runs"></div></div>
@@ -1016,6 +1026,9 @@ function goTo(from) {
   page.from = from || null;
   page.held = false;
   page.moved = true;
+  // A poll on its way asked for the old page: drop it rather than wait for it.
+  if (inFlight) polling?.abort();
+  $('#finished-section').setAttribute('aria-busy', 'true');
   tick();
 }
 
@@ -1042,6 +1055,22 @@ $('#finished-section').addEventListener('mouseenter', updateHold);
 $('#finished-section').addEventListener('mouseleave', updateHold);
 document.addEventListener('focusin', updateHold);
 document.addEventListener('focusout', () => setTimeout(updateHold));
+
+function openSearch(open) {
+  $('#search').hidden = !open;
+  $('#search-open').setAttribute('aria-expanded', String(open));
+  if (open) $('#search').focus();
+}
+$('#search-open').addEventListener('click', () => openSearch(true));
+$('#search').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  $('#search').value = '';
+  $('#search').dispatchEvent(new Event('input'));
+  openSearch(false);
+  $('#search-open').focus();
+});
+// Left empty, it folds back to the magnifier.
+$('#search').addEventListener('blur', () => { if (!$('#search').value.trim()) openSearch(false); });
 
 let searchTimer = null;
 $('#search').addEventListener('input', () => {
@@ -1104,7 +1133,7 @@ function pager(f, shown, total) {
 
 function renderFinished(d) {
   const f = d.finished, total = f.counts[filter] ?? f.counts.all;
-  $('#search').hidden = !f.counts.all && !search;
+  $('#search-box').hidden = !f.counts.all && !search;
   put($('#finished-count'), f.counts.all ? `<span class="sr">, </span>${count(f.counts.all)}` : '');
   put($('#filters'), f.counts.all || search ? FILTERS.map(([key, name]) =>
     `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${count(f.counts[key])}</span></button>`).join('') : '');
@@ -1116,6 +1145,7 @@ function renderFinished(d) {
   put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(esc(empty)));
   if (page.moved) {
     page.moved = false;
+    $('#finished-section').removeAttribute('aria-busy');
     if (!$('#finished-section').contains(document.activeElement)) $('#finished-heading').focus();
     announce(d.done.length ? `Finished runs ${f.newer + 1} to ${f.newer + d.done.length} of ${total}.` : empty);
   }
@@ -1782,7 +1812,7 @@ function favicon(token) {
 }
 
 // Polls every two seconds, one request at a time, and not at all while the tab is hidden.
-let timer = null, inFlight = false, again = false, lastOk = 0;
+let timer = null, inFlight = false, again = false, lastOk = 0, polling = null;
 function schedule() { clearTimeout(timer); timer = setTimeout(() => { if (!document.hidden) tick(); }, 2000); }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
@@ -1807,7 +1837,8 @@ async function poll() {
   const changesBefore = changes;
   try {
     const asked = stateUrl();
-    const response = await fetch(asked);
+    polling = new AbortController();
+    const response = await fetch(asked, { signal: polling.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const d = await response.json();
     if (d.error) throw new Error(d.error);
@@ -1825,6 +1856,7 @@ async function poll() {
     status.title = '';
     status.lastElementChild.textContent = `live · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
   } catch (e) {
+    if (e.name === 'AbortError') { again = true; return; }
     if (status.className !== 'offline') announce('Lost the connection to drmanhattan. Retrying.');
     status.className = 'offline';
     status.title = String(e);
