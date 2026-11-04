@@ -1,5 +1,10 @@
 //! `/api/state`: the whole dashboard as one JSON document, built on every poll.
 //!
+//! Finished runs come a page at a time, so the document stays small however many runs are
+//! kept: `/api/state?filter=failed&search=cargo&from=<run id>` lists the `PAGE` runs that
+//! match, starting at that run (at the newest, without `from`). A page that starts at a run
+//! holds still as newer runs finish. `open=<run id>` adds that run, for the log pane.
+//!
 //! The queue lock is held only to copy out the records and estimates (`Snapshot::take`);
 //! reading the other tools' session files, the settings and the machine readings, and
 //! building the document, all happen after it is released.
@@ -11,9 +16,9 @@ use serde::Serialize;
 
 use crate::activity::{Activity, Typicals};
 use crate::dashboard::run_view::{Eta, RunView};
-use crate::dashboard::Ctx;
+use crate::dashboard::{http, Ctx};
 use crate::estimate::{Estimate, LoadModel};
-use crate::job::{Record, State};
+use crate::job::{Record, RunId, State};
 use crate::process;
 use crate::queue::{self, rank};
 use crate::settings::{effective_capacity, load_config, read_manual_order, MAX_SLOTS};
@@ -22,8 +27,10 @@ use crate::sysinfo;
 use crate::time::Timestamp;
 use crate::workers;
 
-/// Finished runs listed under "recent".
-const RECENT_SHOWN: usize = 40;
+/// Finished runs on a page.
+const PAGE: usize = 20;
+/// The newest runs to finish, whatever the page shows, so the page can say what finished.
+const LATEST: usize = 20;
 /// Estimates are scaled for load only when that changes them by at least this much.
 const MIN_LOAD_EFFECT: f64 = 0.05;
 const DAY_SECONDS: u64 = 86_400;
@@ -43,7 +50,11 @@ pub(super) struct StateDoc {
     /// Services running or starting: they take no slot, so they are listed apart.
     services: Vec<RunView>,
     queued: Vec<RunView>,
+    /// A page of finished runs: those the query asks for, newest first.
     done: Vec<RunView>,
+    finished: FinishedView,
+    /// The run the query's `open` names, wherever it is.
+    open: Option<RunView>,
     #[serde(flatten)]
     machine: sysinfo::Snapshot,
     load: Option<[f64; 3]>,
@@ -105,6 +116,103 @@ struct ModelView {
     factor: f64,
 }
 
+/// Which finished runs the page asks for, from the query string.
+#[derive(Default)]
+pub(super) struct Query {
+    filter: Filter,
+    /// Lowercase; matched against each run's name, category, folder, command and worker.
+    search: String,
+    /// The run the page starts at; None for the newest.
+    from: Option<RunId>,
+    open: Option<RunId>,
+}
+
+impl Query {
+    pub(super) fn parse(url: &str) -> Query {
+        let id = |key| http::query_param(url, key).and_then(|id| id.parse().ok());
+        Query {
+            filter: http::query_param(url, "filter").map_or(Filter::All, |f| Filter::parse(&f)),
+            search: http::query_param(url, "search").unwrap_or_default().trim().to_lowercase(),
+            from: id("from"),
+            open: id("open"),
+        }
+    }
+
+    fn matches(&self, r: &Record) -> bool {
+        let search = self.search.as_str();
+        let has = |text: &str| text.to_lowercase().contains(search);
+        search.is_empty()
+            || has(&r.job.label)
+            || has(&r.job.category)
+            || has(&r.job.cwd.to_string_lossy())
+            || has(r.run_id.as_str())
+            || r.job.command.iter().any(|word| has(word))
+            || r.machine.as_deref().is_some_and(has)
+    }
+}
+
+/// The page's outcome filters.
+#[derive(Default, Clone, Copy)]
+enum Filter {
+    #[default]
+    All,
+    Failed,
+    Succeeded,
+    Cancelled,
+}
+
+impl Filter {
+    fn parse(text: &str) -> Filter {
+        match text {
+            "failed" => Filter::Failed,
+            "succeeded" => Filter::Succeeded,
+            "cancelled" => Filter::Cancelled,
+            _ => Filter::All,
+        }
+    }
+
+    fn keeps(self, state: State) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Failed => state.is_failure(),
+            Filter::Succeeded => state == State::Succeeded,
+            Filter::Cancelled => state == State::Cancelled,
+        }
+    }
+}
+
+/// Where the page of finished runs is among all of them.
+#[derive(Serialize, Default)]
+struct FinishedView {
+    /// The finished runs kept that match the search, by what each filter would show.
+    counts: Counts,
+    /// How many runs the filter shows are newer than this page: none on the newest page.
+    newer: usize,
+    /// The run the next older page starts at; None on the oldest page.
+    older_from: Option<RunId>,
+    /// The run the next newer page starts at; None when that page is the newest.
+    newer_from: Option<RunId>,
+    /// The newest runs to finish, whatever the query.
+    latest: Vec<Outcome>,
+}
+
+#[derive(Serialize, Default)]
+struct Counts {
+    all: usize,
+    failed: usize,
+    succeeded: usize,
+    cancelled: usize,
+}
+
+/// How a run ended, in brief.
+#[derive(Serialize)]
+struct Outcome {
+    run_id: RunId,
+    label: String,
+    state: State,
+    exit_status: Option<i32>,
+}
+
 /// The last day: runs that ended, how long they waited against how long they ran, failures.
 #[derive(Serialize, Default, Debug, PartialEq)]
 struct Metrics {
@@ -119,21 +227,21 @@ struct Metrics {
 
 /// What a poll copies out under the queue lock. Running runs' activity is shared with their
 /// runners, which hold its lock while they read their logs, so it is read after the queue
-/// lock is released, never under it.
+/// lock is released, never under it. Of the finished runs, only the page is copied.
 struct Snapshot {
     running: Vec<(Record, Estimate, Arc<Mutex<Activity>>)>,
     queued: Vec<(Record, Estimate)>,
-    /// The newest finished runs, as many as the page lists.
-    recent: Vec<(Record, Estimate)>,
-    /// Runs that finished in the last day, for the metrics.
-    last_day: Vec<Record>,
+    page: Vec<(Record, Estimate)>,
+    finished: FinishedView,
+    open: Option<(Record, Estimate)>,
+    metrics_24h: Metrics,
     history_count: usize,
     model: LoadModel,
     typicals: Arc<Mutex<Typicals>>,
 }
 
 impl Snapshot {
-    fn take(ctx: &Ctx) -> Snapshot {
+    fn take(ctx: &Ctx, query: &Query, now: Timestamp) -> Snapshot {
         let q = queue::lock(&ctx.shared);
         let with_estimate = |r: &Record| (r.clone(), q.estimate(&r.job));
         let running = q
@@ -146,13 +254,16 @@ impl Snapshot {
             })
             .collect();
         let mut finished: Vec<&Record> = q.runs.values().map(|e| &e.rec).filter(|r| r.state.is_terminal()).collect();
-        finished.sort_by_key(|r| std::cmp::Reverse(r.last_event()));
-        let in_last_day = |r: &&&Record| r.finished_at.is_some_and(|f| f.elapsed().as_secs() <= DAY_SECONDS);
+        finished.sort_by(|a, b| order(b).cmp(&order(a)));
+        let (page, mut view) = page(&finished, query);
+        view.latest = finished.iter().take(LATEST).map(|r| outcome(r)).collect();
         Snapshot {
             running,
             queued: q.records(State::Queued).map(with_estimate).collect(),
-            recent: finished.iter().take(RECENT_SHOWN).map(|r| with_estimate(r)).collect(),
-            last_day: finished.iter().filter(in_last_day).map(|r| (*r).clone()).collect(),
+            page: page.into_iter().map(with_estimate).collect(),
+            finished: view,
+            open: query.open.as_ref().and_then(|id| q.runs.get(id)).map(|e| with_estimate(&e.rec)),
+            metrics_24h: metrics(finished.iter().copied(), now),
             history_count: q.history.len(),
             model: q.model.clone(),
             typicals: q.typicals.clone(),
@@ -160,9 +271,52 @@ impl Snapshot {
     }
 }
 
-pub(super) fn build(ctx: &Ctx) -> StateDoc {
+/// The order of finished runs, oldest first: by when they ended, then by id.
+fn order(r: &Record) -> (Timestamp, &RunId) {
+    (r.last_event(), &r.run_id)
+}
+
+fn outcome(r: &Record) -> Outcome {
+    Outcome { run_id: r.run_id.clone(), label: r.job.label.clone(), state: r.state, exit_status: r.exit_status }
+}
+
+/// The page the query asks for, from the finished runs newest first, and where it is. A
+/// page starts at its `from` run, or where that run would be, so it holds still as runs
+/// finish above it. A run no longer kept starts an empty page past the oldest, from which
+/// the newer pages can still be reached.
+fn page<'a>(finished: &[&'a Record], query: &Query) -> (Vec<&'a Record>, FinishedView) {
+    let mut counts = Counts::default();
+    let mut shown = Vec::new();
+    for &r in finished.iter().filter(|r| query.matches(r)) {
+        counts.all += 1;
+        counts.failed += usize::from(Filter::Failed.keeps(r.state));
+        counts.succeeded += usize::from(Filter::Succeeded.keeps(r.state));
+        counts.cancelled += usize::from(Filter::Cancelled.keeps(r.state));
+        if query.filter.keeps(r.state) {
+            shown.push(r);
+        }
+    }
+    let start = match &query.from {
+        None => 0,
+        Some(id) => match finished.iter().find(|r| &r.run_id == id) {
+            Some(anchor) => shown.partition_point(|r| order(r) > order(anchor)),
+            None => shown.len(),
+        },
+    };
+    let end = shown.len().min(start + PAGE);
+    let view = FinishedView {
+        counts,
+        newer: start,
+        older_from: shown.get(end).map(|r| r.run_id.clone()),
+        newer_from: start.checked_sub(PAGE).filter(|&n| n > 0).map(|n| shown[n].run_id.clone()),
+        latest: Vec::new(),
+    };
+    (shown[start..end].to_vec(), view)
+}
+
+pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
     let now = Timestamp::now();
-    let snap = Snapshot::take(ctx);
+    let snap = Snapshot::take(ctx, query, now);
     let sessions = Sessions::read(ctx.session_links);
     let cpus = process::cpu_count();
     let factor = snap.model.factor(process::load_now(), cpus);
@@ -223,7 +377,8 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
     let slots = (1..=top)
         .map(|n| SlotView { slot: n, run_id: used.iter().find(|(slot, _)| *slot == n).map(|(_, id)| (*id).clone()) })
         .collect();
-    let done = snap.recent.iter().map(|(r, e)| RunView::new(r, e, &sessions, now)).collect();
+    let done = snap.page.iter().map(|(r, e)| RunView::new(r, e, &sessions, now)).collect();
+    let open = snap.open.as_ref().map(|(r, e)| RunView::new(r, e, &sessions, now));
     let machines = machines(ctx, &snap, capacity);
     StateDoc {
         now: now.epoch_seconds(),
@@ -236,6 +391,8 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         services,
         queued,
         done,
+        finished: snap.finished,
+        open,
         machine: sysinfo::snapshot(),
         load: process::load_averages().map(|l| l.map(|x| (x * 10.0).round() / 10.0)),
         ncpu: cpus,
@@ -250,7 +407,7 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         home: crate::paths::home(),
         state_dir: ctx.paths.state.clone(),
         history_count: snap.history_count,
-        metrics_24h: metrics(&snap.last_day, now),
+        metrics_24h: snap.metrics_24h,
         load_model: ModelView { model: snap.model, factor: (factor * 100.0).round() / 100.0 },
         machines,
     }
@@ -345,7 +502,7 @@ fn start_times(mut free_at: Vec<Option<f64>>, durations: &[Option<f64>]) -> Vec<
     starts
 }
 
-fn metrics(finished: &[Record], now: Timestamp) -> Metrics {
+fn metrics<'a>(finished: impl Iterator<Item = &'a Record>, now: Timestamp) -> Metrics {
     let mut m = Metrics::default();
     for r in finished {
         let Some(ended) = r.finished_at.filter(|f| f.until(now).as_secs() <= DAY_SECONDS) else { continue };

@@ -252,9 +252,16 @@ html.dragging, html.dragging * { cursor: grabbing !important; user-select: none;
 #filters button:hover { color: var(--fg); }
 #filters button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--fg); }
 #filters button span { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
-/* The last day in one sentence, above the runs it describes. */
-#summary { margin: 0 0 8px; color: var(--dim); font-size: 12px; line-height: 16px; }
-#summary:empty { display: none; }
+#search {
+  width: 168px; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px;
+  background: none; color: var(--fg); font: 12px/18px var(--sans);
+}
+#search::placeholder { color: var(--faint); }
+/* The last day in one sentence, above the runs it describes; the page of runs beside it. */
+.subhead { display: flex; align-items: baseline; gap: 16px; margin-bottom: 8px; }
+.subhead:has(#summary:empty):has(#pager:empty) { display: none; }
+#summary { flex: 1; margin: 0; color: var(--dim); font-size: 12px; line-height: 16px; }
+#pager { margin-left: auto; gap: 12px; white-space: nowrap; font-variant-numeric: tabular-nums; }
 #summary b { color: var(--fg); font-weight: 600; font-variant-numeric: tabular-nums; }
 #summary b.bad { color: var(--red); }
 
@@ -421,6 +428,8 @@ html.log-open #log { display: flex; }
   td.state .under { display: none; }
   td.state .word, td.state .n { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .time { width: 104px; }
+  #finished-section .head { flex-wrap: wrap; row-gap: 8px; }
+  #search { order: 1; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) {
   .progress i { transition: none; }
@@ -483,13 +492,14 @@ html.log-open #log { display: flex; }
     <p class="sr" id="grip-help">Press the up or down arrow key to move this job in the queue.</p>
   </section>
 
-  <section aria-labelledby="finished-heading">
+  <section aria-labelledby="finished-heading" id="finished-section">
     <div class="head">
       <h2 id="finished-heading" tabindex="-1">Finished<span class="count" id="finished-count"></span></h2>
       <span class="spring"></span>
+      <input id="search" type="search" placeholder="Search" aria-label="Search finished runs by name, command or folder" autocomplete="off" spellcheck="false" hidden>
       <div id="filters" role="group" aria-label="Show"></div>
     </div>
-    <p id="summary"></p>
+    <div class="subhead"><p id="summary"></p><div id="pager" class="aside" role="group" aria-label="Pages of finished runs"></div></div>
     <div class="card">
       <table aria-labelledby="finished-heading">
         <thead><tr><th scope="col" class="state"><span class="sr">Outcome</span></th><th scope="col"><span class="sr">Run</span></th><th scope="col" class="time"><span class="sr">Ran for</span></th><th scope="col" class="when"><span class="sr">Finished</span></th><th scope="col" class="source"><span class="sr">Source</span></th></tr></thead>
@@ -971,13 +981,72 @@ function renderQueue(d) {
 
 /* ---------------------------------------------------------------- finished */
 
-const FILTERS = [
-  ['all', 'all', () => true],
-  ['failed', 'failed', (run) => FAILED.includes(run.state)],
-  ['succeeded', 'passed', (run) => run.state === 'succeeded'],
-  ['cancelled', 'cancelled', (run) => run.state === 'cancelled'],
-];
-let filter = recall('filter') || 'all';
+/* The server sends one page of finished runs (see state.rs), so a poll stays small however
+   many runs are kept. `page.from` is the run the page starts at: null for the newest page,
+   which is live. While the pointer is over the section, keyboard focus is in it, or the log
+   of one of its runs is open, the newest page holds still instead: it starts at its top run,
+   and runs that finish meanwhile wait above it, counted, until the hold ends or they are
+   asked for. Rows never move under the pointer or out from under an open log. */
+
+const FILTERS = [['all', 'all'], ['failed', 'failed'], ['succeeded', 'passed'], ['cancelled', 'cancelled']];
+let filter = FILTERS.some(([key]) => key === recall('filter')) ? recall('filter') : 'all';
+let search = '';
+const page = { from: null, held: false, moved: false };
+
+/** What the page asks of `/api/state`, apart from where the page starts. */
+const query = () => JSON.stringify([filter, search]);
+
+function stateUrl() {
+  const params = new URLSearchParams();
+  if (filter !== 'all') params.set('filter', filter);
+  if (search) params.set('search', search);
+  if (page.from) params.set('from', page.from);
+  if (view) params.set('open', view.id);
+  return `/api/state${params.toString() ? `?${params}` : ''}`;
+}
+
+/** Shows the page starting at `from` (null: the newest, live). */
+function goTo(from) {
+  page.from = from || null;
+  page.held = false;
+  page.moved = true;
+  tick();
+}
+
+function holding() {
+  const section = $('#finished-section'), focus = document.activeElement;
+  return section.matches(':hover')
+    || (section.contains(focus) && focus !== $('#search') && focus.matches(':focus-visible'))
+    || Boolean(view && last?.done.some((run) => run.run_id === view.id));
+}
+
+/** Starts or ends the newest page's hold. It starts only on rows asked for as now. */
+function updateHold() {
+  if (!last) return;
+  if (!page.from && holding() && last.query === query() && last.done.length) {
+    page.from = last.done[0].run_id;
+    page.held = true;
+  } else if (page.held && !holding()) {
+    page.from = null;
+    page.held = false;
+    tick();
+  }
+}
+$('#finished-section').addEventListener('mouseenter', updateHold);
+$('#finished-section').addEventListener('mouseleave', updateHold);
+document.addEventListener('focusin', updateHold);
+document.addEventListener('focusout', () => setTimeout(updateHold));
+
+let searchTimer = null;
+$('#search').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    const value = $('#search').value.trim();
+    if (value === search) return;
+    search = value;
+    goTo(null);
+  }, 250);
+});
 
 /** The last day as a sentence: how many runs, how many failed, and whether the queue cost
  *  time. Clauses that would only say zero are left out. */
@@ -1014,16 +1083,36 @@ function finishedRow(run, now) {
     + '</tr>';
 }
 
+const count = (n) => n.toLocaleString();
+
+/** "1–20 of 3,412", with buttons to the newer and older pages; nothing when one page holds them all. */
+function pager(f, shown, total) {
+  if (!f.newer && !f.older_from) return '';
+  const [newer, spoken] = page.held
+    ? [`↑ ${count(f.newer)} new`, `Show the ${plural(f.newer, 'run', 'runs')} that finished since`]
+    : ['‹ newer', 'Newer runs'];
+  return (f.newer ? `<button class="link" data-id="pager" data-action="newer" aria-label="${spoken}">${newer}</button>` : '')
+    + `<span>${shown ? `${count(f.newer + 1)}–${count(f.newer + shown)}` : 'none'} of ${count(total)}</span>`
+    + (f.older_from ? '<button class="link" data-id="pager" data-action="older" aria-label="Older runs">older ›</button>' : '');
+}
+
 function renderFinished(d) {
-  put($('#finished-count'), d.done.length ? `<span class="sr">, </span>${d.done.length}` : '');
-  put($('#filters'), d.done.length ? FILTERS.map(([key, name, keep]) =>
-    `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${d.done.filter(keep).length}</span></button>`).join('') : '');
+  const f = d.finished, total = f.counts[filter] ?? f.counts.all;
+  $('#search').hidden = !f.counts.all && !search;
+  put($('#finished-count'), f.counts.all ? `<span class="sr">, </span>${count(f.counts.all)}` : '');
+  put($('#filters'), f.counts.all || search ? FILTERS.map(([key, name]) =>
+    `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${count(f.counts[key])}</span></button>`).join('') : '');
   put($('#summary'), summary(d.metrics_24h));
-  const keep = (FILTERS.find(([key]) => key === filter) || FILTERS[0])[2];
-  const rows = d.done.filter(keep);
-  put($('#finished'), rows.length
-    ? rows.map((run) => finishedRow(run, d.now)).join('')
-    : emptyRow(d.done.length ? 'No runs match this filter.' : 'Nothing has finished yet.'));
+  put($('#pager'), pager(f, d.done.length, total));
+  const empty = f.newer ? 'No older runs.'
+    : total ? '' : search ? `No runs match “${esc(search)}”.` : f.counts.all ? 'No runs match this filter.' : 'Nothing has finished yet.';
+  put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(empty));
+  if (page.moved) {
+    page.moved = false;
+    if (!$('#finished-section').contains(document.activeElement)) $('#finished-heading').focus();
+    announce(d.done.length ? `Finished runs ${f.newer + 1} to ${f.newer + d.done.length} of ${total}.` : empty);
+  }
+  updateHold();
 }
 
 /* ================================================================ the machine (header) */
@@ -1108,7 +1197,7 @@ function renderMachine(d) {
 /* ================================================================ first visit */
 
 function welcome(d) {
-  if (d.running.length || d.queued.length || d.done.length || d.metrics_24h.runs) return '';
+  if (d.running.length || d.queued.length || d.finished.latest.length || d.metrics_24h.runs) return '';
   const example = JSON.stringify({ command: 'make test', cwd: '/path/to/project', label: 'tests' });
   return `<div class="card welcome">
       <h3>No jobs yet</h3>
@@ -1135,13 +1224,14 @@ function announce(message) {
 }
 
 function announceChanges(d) {
-  const states = new Map([...d.running, ...d.queued, ...d.done].map((run) => [run.run_id, run.state]));
+  // Runs that finished come from `latest`, which lists the newest whatever page is shown.
+  const states = new Map([...d.running, ...d.queued, ...d.finished.latest].map((run) => [run.run_id, run.state]));
   if (knownStates) {
     const said = [];
     for (const run of d.running) {
       if (knownStates.get(run.run_id) !== 'running') said.push(`${run.label} started.`);
     }
-    for (const run of d.done) {
+    for (const run of d.finished.latest) {
       const before = knownStates.get(run.run_id);
       if (before && before !== run.state) {
         const exit = run.state === 'failed' && run.exit_status ? `, exit ${run.exit_status}` : '';
@@ -1263,7 +1353,8 @@ function formatLog(raw) {
 // The job's error lines, which the error button steps through (drmanhattan's notes are not lines).
 const ERROR_LINES = '.ln.err';
 const atBottom = () => text.scrollHeight - text.scrollTop - text.clientHeight < 24;
-const allRuns = () => (last ? [...last.running, ...(last.services || []), ...last.queued, ...last.done] : []);
+// The open run comes with every poll (`open`), whatever page of finished runs is shown.
+const allRuns = () => (last ? [...last.running, ...(last.services || []), ...last.queued, ...last.done, ...(last.open ? [last.open] : [])] : []);
 const findRun = (id) => allRuns().find((run) => run.run_id === id) || null;
 
 function paint() {
@@ -1600,7 +1691,9 @@ document.addEventListener('click', (e) => {
     if (action === 'open') openLog(id);
     else if (action === 'up') moveBy(id, -1, 'up');
     else if (action === 'down') moveBy(id, 1, 'down');
-    else if (action === 'filter') { filter = value; remember('filter', value); render(last); }
+    else if (action === 'filter') { filter = value; remember('filter', value); if (last) render(last); goTo(null); }
+    else if (action === 'older') goTo(last.finished.older_from);
+    else if (action === 'newer') goTo(page.held ? null : last.finished.newer_from); // a hold's "new" are the newest
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
     else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
@@ -1631,6 +1724,7 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   if (e.key !== 'Escape') return;
+  if (e.target.id === 'search' && e.target.value) return; // Esc clears the search first
   if (drag) endDrag(false); // Esc during a drag cancels it, and only that
   else if (view) closeLog();
 });
@@ -1705,13 +1799,17 @@ async function poll() {
   const status = $('#status');
   const changesBefore = changes;
   try {
-    const response = await fetch('/api/state');
+    const asked = stateUrl();
+    const response = await fetch(asked);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const d = await response.json();
     if (d.error) throw new Error(d.error);
     // A change made, or still on its way, while this was asked: its answer may predate it.
     // Every change asks again once it is answered.
     if (changes !== changesBefore || pending) return;
+    // Another page of finished runs was asked for meanwhile: this one is not shown.
+    if (stateUrl() !== asked) { again = true; return; }
+    d.query = query();
     if (status.className === 'offline') announce('Connected to drmanhattan again.');
     render(d);
     refreshLog();

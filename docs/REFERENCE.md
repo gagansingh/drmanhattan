@@ -389,6 +389,15 @@ memory, temperature and battery (amber at 20% on battery, when it says to plug i
 `drmanhattan slots N` does, and it stays until changed (unless `DRMANHATTAN_SLOTS` is set
 for the daemon, which then decides); drag a waiting job to reorder it.
 
+Finished runs are listed 20 at a time, newest first, with "‹ newer" and "older ›" to step
+through every run still kept (`DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
+passed, cancelled) and the search box (a run's name, command, folder or worker) count and page
+through all of them, not only the runs on screen. The newest page follows runs as they finish,
+except while the pointer is over the section, the keyboard is in it, or one of its runs' logs is
+open: then it holds still, and "↑ N new" shows the runs that finished meanwhile. Older pages
+always hold still. `/api/state?filter=failed&search=cargo&from=<run id>` asks for such a page;
+`finished` says where it is.
+
 Commands are shown as a person reads them: the program and its subcommand stand out, wrappers
 (`env`, `xcrun`, `nice`, `time`, a script that runs `-- <command>`) are dimmed or folded into a
 `via` tag, the job's folder is `.` and the home folder `~`, and flags, settings, quoted strings and

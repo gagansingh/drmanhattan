@@ -247,3 +247,65 @@ fn drmanhattan_slots_in_the_environment_decides_and_the_page_says_so() {
     let st = d.api_state();
     assert_eq!((&st["capacity"], &st["capacity_fixed"]), (&json!(3), &json!("DRMANHATTAN_SLOTS=3")));
 }
+
+#[test]
+fn finished_runs_come_a_page_at_a_time() {
+    let d = Daemon::start(&[("DRMANHATTAN_SLOTS", "4")]);
+    for i in 0..30 {
+        d.submit(&format!("ok{i}"), json!({"command": "true", "cwd": d.work, "label": format!("ok {i}")}));
+    }
+    for i in 0..5 {
+        d.submit(&format!("bad{i}"), json!({"command": "exit 1", "cwd": d.work, "label": format!("bad {i}")}));
+    }
+    let state = |query: &str| {
+        let (code, body) = d.get(&format!("/api/state?{query}"));
+        assert_eq!(code, 200, "{body}");
+        serde_json::from_str::<Value>(&body).unwrap()
+    };
+    let ids = |state: &Value| -> Vec<String> {
+        state["done"].as_array().unwrap().iter().map(|r| r["run_id"].as_str().unwrap().to_string()).collect()
+    };
+    common::wait_for(Duration::from_secs(60), || (state("")["finished"]["counts"]["all"] == 35).then_some(()))
+        .expect("all 35 finished");
+
+    let first = state("");
+    let view = &first["finished"];
+    assert_eq!(view["counts"], json!({"all": 35, "failed": 5, "succeeded": 30, "cancelled": 0}));
+    assert_eq!((&view["newer"], &view["newer_from"]), (&json!(0), &Value::Null));
+    assert_eq!(view["latest"].as_array().unwrap().len(), 20);
+    let page1 = ids(&first);
+    assert_eq!(page1.len(), 20);
+    let older = view["older_from"].as_str().expect("an older page");
+
+    let second = state(&format!("from={older}"));
+    let page2 = ids(&second);
+    assert_eq!((page2.len(), page2[0].as_str()), (15, older));
+    assert_eq!(second["finished"]["newer"], 20);
+    assert_eq!((&second["finished"]["older_from"], &second["finished"]["newer_from"]), (&Value::Null, &Value::Null));
+    let all: std::collections::HashSet<_> = page1.iter().chain(&page2).collect();
+    assert_eq!(all.len(), 35, "the pages neither overlap nor skip");
+
+    let failed = state("filter=failed");
+    assert!(failed["done"].as_array().unwrap().iter().all(|r| r["state"] == "failed"));
+    assert_eq!((ids(&failed).len(), &failed["finished"]["counts"]["all"]), (5, &json!(35)));
+    let search = state("search=BAD+3");
+    assert_eq!(search["finished"]["counts"]["all"], 1);
+    assert_eq!(search["done"][0]["label"], "bad 3");
+
+    // A page that starts at a run holds still as others finish, and counts them.
+    let top = &page1[0];
+    d.submit("late", json!({"command": "true", "cwd": d.work, "label": "late"}));
+    d.wait_exit("late", T);
+    let held = state(&format!("from={top}"));
+    assert_eq!(ids(&held), page1);
+    assert_eq!((&held["finished"]["newer"], &held["finished"]["newer_from"]), (&json!(1), &Value::Null));
+    assert_eq!(state("")["done"][0]["label"], "late");
+
+    // The log pane's run comes along whatever the page; a run no longer kept starts an
+    // empty page, from which the newer pages can still be reached.
+    let old = &page2[14];
+    assert_eq!(state(&format!("open={old}"))["open"]["run_id"], json!(old));
+    let gone = state("from=1-2-abcdef");
+    assert_eq!((ids(&gone).len(), &gone["finished"]["newer"]), (0, &json!(36)));
+    assert!(gone["finished"]["newer_from"].is_string());
+}
