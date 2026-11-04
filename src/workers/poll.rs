@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use crate::log;
 use crate::paths::Paths;
-use crate::settings::{load_config, set_worker_slots};
+use crate::settings::{load_config, update_config, MAX_SLOTS};
 use crate::workers::host::MachineStats;
 use crate::workers::WorkerConfig;
 use crate::workers::{dispatch, pool, ssh};
@@ -45,12 +45,23 @@ fn poll_one(paths: &Paths, worker: &WorkerConfig) {
     };
     let unusable = dispatch::unusable(&stats);
     if worker.slots != 0 && stats.capacity != worker.slots && pool().may_adopt_slots(&worker.name, asked) {
-        let _ = set_worker_slots(paths, &worker.name, stats.capacity);
+        adopt_slots(paths, worker, stats.capacity);
     }
     pool().seen(paths, &worker.name, serde_json::to_value(&stats).unwrap_or_default());
     if let Some(why) = unusable {
         pool().polled_unavailable(paths, &worker.name, &why);
     }
+}
+
+/// Takes the worker's own slot count, unless the count here changed since the poll read it:
+/// a pause (0) set meanwhile must not be undone by an answer to an earlier question.
+fn adopt_slots(paths: &Paths, worker: &WorkerConfig, slots: u32) {
+    let _ = update_config(paths, |config| {
+        if let Some(w) = config.workers.iter_mut().find(|w| w.name == worker.name && w.slots == worker.slots) {
+            w.slots = slots.min(MAX_SLOTS);
+        }
+        Ok(())
+    });
 }
 
 /// Sets the worker's own slot count to the one set here, as `drmanhattan slots N` there, in
