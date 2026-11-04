@@ -42,6 +42,14 @@ A free slot goes to:
 A waiter whose `group` already has a run in a slot is passed over, and a newer waiter in a
 group cancels the older one when it is queued (`superseded_by`).
 
+A quick waiter (`HistoryIndex::lane`: a command whose runs here nearly always took under 30
+seconds) does not wait for a slot. In the same pass, in the same order, it starts beside the
+slots while fewer than `DRMANHATTAN_QUICK` quick runs are running, and otherwise takes a free
+slot like any waiter. Its lane is decided when it is queued and again for every waiter when
+a run finishes or the daemon recovers; the record keeps it with its reason (`quick`,
+`lane_reason`). A quick run's `DRMANHATTAN_SLOT` is the lowest number above any slot there can
+be (17 up) that no run here holds, and nothing that counts slots counts it.
+
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting
 forever behind a stream of short ones.
@@ -49,7 +57,8 @@ forever behind a stream of short ones.
 ## Estimates
 
 A job's expected duration is the median of past successful runs like it, taken from the
-first of these that has history:
+first of these that has history (an index over all of `history.jsonl`, each key keeping its
+own last 20 runs, so a build's history survives any number of small commands):
 
 1. same category, label and variant, if there are at least 3 such runs (the last 10);
 2. same category and label (the last 10);

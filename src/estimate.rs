@@ -179,7 +179,7 @@ impl HistoryIndex {
     /// Whether a job with this category, label and variant is quick on this machine:
     ///
     /// 1. its own runs (label and variant, else label), when there are at least 3: quick if 9
-    ///    in 10 of the last 10 took under 30 s;
+    ///    in 10 of the last 10 took under 30 s (all of them, while there are fewer than 10);
     /// 2. else its category's, when there are at least 3: quick only if every one of the last
     ///    20 did, since a new label may be the category's heavy work (`cargo build` among
     ///    `cargo fmt`s);
