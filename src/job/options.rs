@@ -19,15 +19,17 @@ pub(crate) enum Ready {
 pub(crate) const DEFAULT_READY_TIMEOUT: u64 = 120;
 pub(crate) const DEFAULT_TTL: u64 = 8 * 3600;
 
-/// Where a job may run: here only (the default), on a worker when every slot here is busy,
-/// or on a worker first.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Where a job may run: here only, on a worker when every slot here is busy, on a worker
+/// first, or on a worker only. While `config.json`'s `route` is on, `allowed`, `prefer` and
+/// a job that does not say run only on its workers; with no route, one that does not say
+/// runs here.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RemoteMode {
-    #[default]
     Never,
     Allowed,
     Prefer,
+    Only,
 }
 
 /// A path to mirror to a worker: a path, or `{"path": …, "exclude": […]}`.

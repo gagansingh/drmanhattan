@@ -86,7 +86,8 @@ fn handle(req: Request, ctx: &Ctx) {
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
         (
             Method::Post,
-            "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/pause" | "/api/update" | "/api/auto-update",
+            "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/pause" | "/api/route" | "/api/update"
+            | "/api/auto-update",
         ) => {
             let path = path.to_string();
             post::handle(req, &path, ctx);

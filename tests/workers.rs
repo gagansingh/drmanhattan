@@ -316,3 +316,82 @@ fn a_worker_paused_from_either_machine_takes_nothing_until_resumed() {
     assert_eq!(p.here.wait_exit("pref2", T), 0);
     assert_eq!(p.here.status_of("pref2").unwrap()["machine"], "w1");
 }
+
+#[test]
+fn a_route_sends_jobs_to_its_worker_only_and_they_wait_for_it() {
+    let p = pair(json!({}));
+    let proj = project(&p.home, "proj");
+    let out = p.here.cmd(&["route", "w1"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("route=w1"), "{out:?}");
+    let config =
+        || -> Value { serde_json::from_str(&fs::read_to_string(p.here.data.join("config.json")).unwrap()).unwrap() };
+    assert_eq!(config()["route"], json!(["w1"]));
+    // With the worker paused, a job that does not say where to run waits for it, though a
+    // slot here is free, and says why.
+    let (code, body) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 0}"#, WRITE_HEADERS);
+    assert_eq!(code, 200, "{body}");
+    p.here.submit("routed", json!({"command": "echo routed", "cwd": proj}));
+    // `allowed` would take the free slot here; the route makes it wait for w1 too.
+    p.here.submit("allowed", json!({"command": "echo allowed", "cwd": proj, "remote": "allowed"}));
+    // These still run here: an explicit never, a quick run, and a job the worker lacks a tag for.
+    p.here.submit("never", json!({"command": "echo here", "cwd": proj, "remote": "never"}));
+    p.here.submit("quick", json!({"command": "git --version", "cwd": proj}));
+    p.here.submit("needs", json!({"command": "echo here", "cwd": proj, "requires": ["postgres"]}));
+    for name in ["never", "quick", "needs"] {
+        assert_eq!(p.here.wait_exit(name, T), 0, "{name}");
+        assert!(p.here.status_of(name).unwrap()["machine"].is_null(), "{name} ran here");
+    }
+    for name in ["routed", "allowed"] {
+        let r = p.here.status_of(name).unwrap();
+        assert_eq!(r["state"], "queued", "it waits for w1: {r}");
+    }
+    let status = p.here.status_json();
+    assert_eq!(status["route"], json!(["w1"]));
+    let waits = status["waiters"][0]["waits_for"].as_str().unwrap_or_default().to_string();
+    assert!(waits.contains("the route: waits for w1 (paused)"), "{status}");
+    let text = String::from_utf8_lossy(&p.here.cmd(&["status"]).output().unwrap().stdout).to_string();
+    assert!(text.contains("route=w1") && text.contains("waits_for="), "{text}");
+    let st = p.here.api_state();
+    assert_eq!((&st["route"], &st["machines"][1]["routed"]), (&json!(["w1"]), &json!(true)));
+    assert!(st["queued"][0]["waits_for"].as_str().is_some(), "{st}");
+    // Resumed, it goes there.
+    let (code, _) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 1}"#, WRITE_HEADERS);
+    assert_eq!(code, 200);
+    for name in ["routed", "allowed"] {
+        assert_eq!(p.here.wait_exit(name, T), 0, "{name}");
+        assert_eq!(p.here.status_of(name).unwrap()["machine"], "w1", "{name}");
+    }
+    // The dashboard turns it off; a job runs here again.
+    let (code, body) = p.here.post("/api/route", r#"{"route": ["nope"]}"#, WRITE_HEADERS);
+    assert_eq!(code, 400, "{body}");
+    let (code, body) = p.here.post("/api/route", r#"{"route": []}"#, WRITE_HEADERS);
+    assert_eq!(code, 200, "{body}");
+    assert!(config().get("route").is_none());
+    p.here.submit("after", json!({"command": "echo after", "cwd": proj}));
+    assert_eq!(p.here.wait_exit("after", T), 0);
+    assert!(p.here.status_of("after").unwrap()["machine"].is_null());
+    // Removing the worker takes it off the route too.
+    assert!(p.here.cmd(&["route", "w1"]).output().unwrap().status.success());
+    let out = p.here.cmd(&["workers", "remove", "w1"]).output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("route=local"), "{out:?}");
+    let c = config();
+    assert!(c.get("workers").is_none() && c.get("route").is_none(), "{c}");
+    assert!(!p.here.cmd(&["workers", "remove", "w1"]).output().unwrap().status.success());
+}
+
+#[test]
+fn remote_only_waits_for_any_worker_and_never_runs_here() {
+    let p = pair(json!({"slots": 0}));
+    let proj = project(&p.home, "proj");
+    p.here.submit("only", json!({"command": "echo far", "cwd": proj, "remote": "only"}));
+    let w = wait_for(T, || {
+        let s = p.here.status_json();
+        s["waiters"][0]["waits_for"].as_str().map(String::from)
+    })
+    .expect("it says what it waits for");
+    assert!(w.contains("remote: only: waits for w1 (paused)"), "{w}");
+    let (code, _) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 1}"#, WRITE_HEADERS);
+    assert_eq!(code, 200);
+    assert_eq!(p.here.wait_exit("only", T), 0);
+    assert_eq!(p.here.status_of("only").unwrap()["machine"], "w1");
+}

@@ -24,7 +24,8 @@ usage:
                                           wait for a run to start or finish
   drmanhattan follow <run> [--from BYTES] print a run's log as it grows, until it finishes
   drmanhattan cancel <run>                cancel a queued or running run
-  drmanhattan workers [add <ssh-alias>]   the machines that run jobs for this one, over SSH
+  drmanhattan workers [add|remove ...]    the machines that run jobs for this one, over SSH
+  drmanhattan route [<worker>... | local] send jobs to those workers only, or run them here
   drmanhattan machine-stats               this machine's readings, as JSON, for a dispatcher
   drmanhattan update [--now]              install the latest release and restart the daemon
   drmanhattan reload-env                  read your login shell's environment again for later jobs
@@ -84,6 +85,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "follow" => runs::follow(rest),
         "cancel" => runs::cancel(rest),
         "workers" => workers::workers(rest),
+        "route" => workers::route(rest),
         "update" => commands::update(rest),
         "machine-stats" => crate::workers::machine_stats(rest),
         // What a dispatcher runs on a worker; not for people.

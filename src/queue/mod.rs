@@ -29,7 +29,7 @@ use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
-pub(crate) use admit::Admitted;
+pub(crate) use admit::{waits_for, Admitted};
 pub(crate) use inbox::{claim_job, scan_inbox};
 pub(crate) use persist::read_records;
 pub(crate) use prune::prune_files;
@@ -150,7 +150,7 @@ impl Queue {
         if job.service {
             return None;
         }
-        if job.remote != RemoteMode::Never {
+        if job.remote.is_some_and(|m| m != RemoteMode::Never) {
             return Some(Lane { quick: false, reason: "it may run on a worker".into() });
         }
         if let Some(from) = &job.dispatched_from {

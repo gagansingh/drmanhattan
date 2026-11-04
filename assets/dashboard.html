@@ -114,6 +114,7 @@ h2:focus { outline: none; }
 }
 .pause:hover { border-color: var(--dim); color: var(--fg); }
 .pause[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
+.route[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
 /* One bar per machine above its runs, once there are workers. */
 tr.machine td { padding: 8px 16px; background: var(--raised); border-top: 1px solid var(--line); }
 tr.machine:first-child td { border-top: 0; }
@@ -799,6 +800,17 @@ function pauseButton(paused, worker) {
     + ` aria-pressed="${paused}" title="${title}" aria-label="${paused ? 'Resume' : 'Pause'} ${whom}">${paused ? 'paused · resume' : 'pause'}</button>`;
 }
 
+/** A worker's route button: on, jobs that may run on a worker (or do not say) go only to
+ *  the workers on the route; off takes it off the route (none left: as they say again). */
+function routeButton(m, d) {
+  const on = (d.route || []).includes(m.name);
+  const title = on
+    ? `Routed: jobs that may run on a worker go only to ${esc(d.route.join(' or '))}, and wait for it. Click to take ${esc(m.name)} off the route.`
+    : `Route jobs to ${esc(m.name)}: every job that may run on a worker, or does not say, waits for it instead of running here (services, quick runs and remote: never still run here)`;
+  return `<button class="pause route" data-action="route" data-worker="${esc(m.name)}" aria-pressed="${on}" title="${title}"`
+    + ` aria-label="${on ? 'Stop routing jobs to' : 'Route jobs to'} ${esc(m.name)}">${on ? 'routed · end' : 'route'}</button>`;
+}
+
 /** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
  *  worker), its CPU, memory and temperature, and why it is not taking work. */
 function machineBar(m, d, open) {
@@ -813,13 +825,15 @@ function machineBar(m, d, open) {
   const slots = `<span class="slots"><span><b>${m.running}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'}${m.paused ? ' · <b class="warn">paused</b>' : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${fixed || cap <= min ? 'disabled' : ''} title="${esc(fewer)}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
     + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button>`
-    + (m.local ? (d.serves_others ? pauseButton(d.paused) : '') : pauseButton(m.paused_there, m.name)) + '</span>';
+    + (m.local ? (d.serves_others ? pauseButton(d.paused) : '') : pauseButton(m.paused_there, m.name) + routeButton(m, d)) + '</span>';
   const figures = online === 'offline' ? ''
     : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals)) + batteryFigure(s.battery);
   const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
   const reason = m.reason
     ? `<span class="reason" title="${m.reason_until ? `Tried again after ${esc(clock(m.reason_until))}` : ''}">not taking work: ${esc(m.reason)}</span>`
-    : '';
+    : m.local && d.route && d.route.length
+      ? `<span class="reason" title="Set with drmanhattan route, or a worker's route button. Services, quick runs and jobs with remote: never still run here.">routed: jobs go to ${esc(d.route.join(' or '))}</span>`
+      : '';
   const name = m.local ? 'this machine' : m.name;
   const here = d.running.filter((run) => (run.machine || 'local') === m.name);
   const summary = !open && here.length
@@ -986,6 +1000,7 @@ function queuedRow(run, i, d) {
     succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
   const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
     + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">${run.stays_here ? 'runs here' : 'bounced'}</span>` : '')
+    + (run.waits_for ? `<span class="note warn" title="${esc(run.waits_for)}">waits for a worker</span>` : '')
     + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (run.quick ? `<span class="note" title="Starts without waiting for a slot once a quick place frees: ${esc(run.lane_reason || '')}">quick</span>` : '')
@@ -993,7 +1008,9 @@ function queuedRow(run, i, d) {
   const why = !run.quick && run.lane_reason ? `\nWaits for a slot: ${run.lane_reason}` : '';
   const range = usualRange(run) + why;
   const expected = run.typical_seconds ? `<span class="num" title="${esc(range)}">~${duration(run.typical_seconds)}</span>` : nothing('no estimate', range);
-  const when = run.eta_start && !run.eta_open_ended
+  const when = run.waits_for
+    ? nothing('on a worker', run.waits_for)
+    : run.eta_start && !run.eta_open_ended
     ? `<span class="num">starts ~${clock(run.eta_start)}</span>${under(`in ${duration(run.eta_wait)}`)}`
     : nothing('unknown', 'A job ahead of it has no estimate');
   return rowStart(run, ` data-movable="${movable ? 1 : 0}"`)
@@ -1716,6 +1733,18 @@ async function setCapacity(value, worker) {
   tick();
 }
 
+/** Puts a worker on the route, or takes it off. Shown at once. */
+async function toggleRoute(worker) {
+  if (!last) return;
+  const route = (last.route || []).includes(worker)
+    ? last.route.filter((w) => w !== worker) : [...(last.route || []), worker];
+  last.route = route;
+  render(last);
+  try { await post('/api/route', { route }); capacityError = ''; }
+  catch (e) { capacityError = `could not change the route: ${e.message}`; announce(capacityError); }
+  tick();
+}
+
 /** Pauses or resumes this machine for others, or a worker. Shown at once; a worker's own
  *  answer follows within a second or so. */
 async function setPaused(paused, worker) {
@@ -1766,6 +1795,7 @@ document.addEventListener('click', (e) => {
     else if (action === 'newer') goTo(page.held ? null : last.finished.newer_from); // a hold's "new" are the newest
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
     else if (action === 'pause') setPaused(value === '1', control.dataset.worker);
+    else if (action === 'route') toggleRoute(control.dataset.worker);
     else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
     else if (action === 'command') { $('#log-cmd').hidden = !$('#log-cmd').hidden; logHeading(); }

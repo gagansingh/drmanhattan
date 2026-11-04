@@ -139,6 +139,12 @@ process-group handling apply unchanged.
 
 - Admission places a run on a worker (`queue::admit::place`); the run's record says which
   (`machine`), and its slot number is that worker's.
+- The route (`config.json`'s `route`) is read with the workers on each pass, as a `routed`
+  flag on each one (`workers::Slots`). It is applied at placement only (`remote_mode`):
+  a waiter whose `remote` lets it go to a worker, or does not say, is placed as `only` on
+  the routed workers. Nothing is rewritten in the run's record, so turning the route off
+  takes effect on the next pass. `status` and the page compute the same placement to say
+  what a waiter waits for (`queue::waits_for`).
 - Its runner (`runner::remote`) dispatches (`workers::dispatch`), holding the worker's
   dispatch lock: probe and housekeeping (`__dispatch-probe`), `check`, mirror, submit, wait
   for the start. Just before the submit it records `remote_run`, so a restart knows where

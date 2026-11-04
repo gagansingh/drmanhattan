@@ -13,9 +13,10 @@ use crate::daemon;
 use crate::error::Result;
 use crate::job::{PrepareState, Record, RunId, State};
 use crate::paths::Paths;
-use crate::queue::{rank, read_records};
-use crate::settings::{effective_capacity, read_manual_order};
+use crate::queue::{rank, read_records, waits_for};
+use crate::settings::{effective_capacity, load_config, read_manual_order};
 use crate::time::{human, Timestamp};
+use crate::workers;
 
 const STATUS: Spec = Spec {
     usage: "\
@@ -56,6 +57,10 @@ struct StatusDoc<'a> {
     update: Option<crate::update::Available>,
     running: Vec<RunningDoc<'a>>,
     waiters: Vec<WaiterDoc<'a>>,
+    /// The workers that jobs which may run on a worker go to, and only to (`drmanhattan
+    /// route`); empty when the route is off.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    route: Vec<String>,
     /// The workers in config.json (see `drmanhattan workers`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workers: Vec<serde_json::Value>,
@@ -119,6 +124,10 @@ struct WaiterDoc<'a> {
     quick: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     lane_reason: Option<&'a str>,
+    /// For a run that may only run on a worker (the route, or `remote: only`): which, and
+    /// what each is doing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    waits_for: Option<String>,
     job_file: &'a PathBuf,
 }
 
@@ -147,6 +156,9 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     let by_id: HashMap<&RunId, &Record> = records.iter().map(|r| (&r.run_id, r)).collect();
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
     let here = running.iter().filter(|r| r.machine.is_none() && r.holds_slot()).count();
+    let config = load_config(paths)?;
+    let workers = workers::slots_read(paths, &config);
+    let running_on = |w: &str| running.iter().filter(|r| r.machine.as_deref() == Some(w) && r.holds_slot()).count();
     let quick = running.iter().filter(|r| r.quick).count();
     let state = match &daemon {
         None => "stopped",
@@ -174,6 +186,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             group: r.job.group.as_deref(),
             quick: r.quick,
             lane_reason: r.lane_reason.as_deref(),
+            waits_for: r.is_ready().then(|| waits_for(r, &workers, running_on)).flatten(),
             job_file: &r.job.job_file,
         })
         .collect();
@@ -191,7 +204,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             .unwrap_or_else(|| crate::settings::Settings::from_env().map_or(0, |s| s.max_quick)),
         version,
         installed,
-        auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
+        auto_update: config.auto_update,
+        route: config.route,
         auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
         running: running
@@ -252,6 +266,9 @@ fn print_text(doc: &StatusDoc) {
     if doc.auto_update {
         head.push(kv("auto_update_state", &doc.auto_update_state));
     }
+    if !doc.route.is_empty() {
+        head.push(kv("route", doc.route.join(",")));
+    }
     if let Some(d) = &doc.daemon {
         head.push(kv("daemon_pid", d.pid));
         head.extend(d.url.as_ref().map(|u| kv("dashboard", u)));
@@ -303,6 +320,7 @@ fn print_text(doc: &StatusDoc) {
         line.extend(w.group.map(|g| kv("group", g)));
         line.push(kv("lane", if w.quick { "quick" } else { "slot" }));
         line.extend(w.lane_reason.map(|r| kv("reason", r)));
+        line.extend(w.waits_for.as_ref().map(|r| kv("waits_for", r)));
         println!("{}", line.join(" "));
     }
 }

@@ -157,8 +157,9 @@ pub(crate) struct Job {
     pub(crate) prepare: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) group: Option<String>,
-    #[serde(default)]
-    pub(crate) remote: RemoteMode,
+    /// None: the job did not say: it follows the route when one is on, else runs here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) remote: Option<RemoteMode>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) requires: Vec<String>,
     /// Absolute paths; empty means the job's `cwd`.
@@ -263,7 +264,7 @@ impl JobSpec {
             fail_patterns: self.fail_patterns,
             prepare,
             group: text_field("group", self.group)?,
-            remote: self.remote.unwrap_or_default(),
+            remote: self.remote,
             requires: self.requires,
             sync: resolve_sync(self.sync)?,
             sync_git: self.sync_git,

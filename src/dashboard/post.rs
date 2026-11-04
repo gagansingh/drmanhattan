@@ -1,5 +1,6 @@
 //! What the dashboard can change: the manual queue order (dragging a queued run), the slots
-//! (the − and + buttons, kept in config.json), a service (stop, restart), and updates.
+//! (the − and + buttons, kept in config.json), pausing, the route to workers, a service
+//! (stop, restart), and updates.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -12,7 +13,7 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{set_paused, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
+use crate::settings::{set_paused, set_route, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
@@ -50,6 +51,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
         "/api/pause" => set_pause(req, body, ctx),
+        "/api/route" => set_route_to(req, body, ctx),
         "/api/update" => start_update(req, ctx),
         "/api/auto-update" => set_auto_update(req, body, ctx),
         _ => set_order(req, body, ctx),
@@ -113,6 +115,25 @@ fn set_pause(req: Request, body: &str, ctx: &Ctx) {
     };
     match done {
         Ok(paused) => http::json(req, 200, &json!({ "paused": paused, "worker": worker })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteBody {
+    /// Workers; empty turns the route off.
+    route: Vec<String>,
+}
+
+/// A worker's route button: the workers that jobs which may run on a worker go to, and
+/// only to, as `drmanhattan route` sets them.
+fn set_route_to(req: Request, body: &str, ctx: &Ctx) {
+    let Some(RouteBody { route }) = object::<RouteBody>(body) else {
+        return http::error(req, "send {\"route\": [worker names]}, or [] to turn it off");
+    };
+    match set_route(&ctx.paths, &route) {
+        Ok(route) => http::json(req, 200, &json!({ "route": route })),
         Err(e) => http::error(req, e),
     }
 }

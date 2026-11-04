@@ -304,7 +304,8 @@ On this machine, `config.json` in the data directory lists them:
 
 `drmanhattan workers add <ssh-alias> [--slots N] [--tag T]` checks the machine (it answers
 with its key alone, speaks the same worker protocol, confirmed and running) and adds it.
-`drmanhattan workers` lists them with their state. Machines work together whatever their
+`drmanhattan workers` lists them with their state, and `drmanhattan workers remove <name>`
+takes one out (and off the route). Machines work together whatever their
 versions as long as their protocols match; the protocol changes only when the hand-off does,
 and a worker whose protocol differs is listed with the machine to update.
 
@@ -312,7 +313,7 @@ A job says whether it may go to a worker:
 
 | field | meaning |
 | --- | --- |
-| `remote` | `"never"` (the default), `"allowed"` (only while every slot here is busy) or `"prefer"` (a free worker before a slot here) |
+| `remote` | `"never"`, `"allowed"` (only while every slot here is busy), `"prefer"` (a free worker before a slot here) or `"only"` (a worker, never here: it waits for one). Without it the job runs here, unless a route is on (below) |
 | `requires` | tags the worker must have |
 | `sync` | paths to mirror to the worker, at the same absolute paths: strings, or `{"path": …, "exclude": [rsync patterns]}`; default: the job's `cwd` |
 | `sync_git` | `true` also mirrors the git metadata of the synced checkouts, so `HEAD`, branches and commits resolve there |
@@ -333,10 +334,11 @@ What happens:
   for it to start. Paths must lie inside the home directory, and both machines must use the
   same user and home path. A job's `prepare` runs here while it waits and again on the worker
   before its command.
-- **Fallback.** If any of that fails, the job runs here, with one line in its log
-  (`worker air unavailable: <reason>; running here`) and `remote_fallback` in its status. A
-  failure of the worker's keeps it out of admission for two minutes, with the reason on the
-  dashboard.
+- **Fallback.** If any of that fails, the job goes back in the queue, with one line in its
+  log (`worker air unavailable: <reason>; …`) and `remote_fallback` in its status. A failure
+  of the worker's keeps it out of admission for two minutes, with the reason on the
+  dashboard; the job may then run here, or, under a route or `remote: "only"`, waits for a
+  worker. A failure of the job's own (a path that cannot be mirrored) runs it here.
 - **While it runs.** The worker's log streams into the job's own log here, so `follow`,
   `wait`, the dashboard and the error line work as usual. Cancel and timeout here stop it
   there. A dropped connection is retried every five seconds; a worker silent for three
@@ -362,6 +364,85 @@ uses it. Each says the same thing to the worker, so every dashboard shows it pau
 worker takes no jobs from other machines; what it already runs for them finishes, and its own
 jobs run as usual. `drmanhattan resume` (or the button again) ends it. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
+
+### Routing jobs to a worker
+
+`drmanhattan route <worker>…` sends jobs to those workers and nowhere else, until
+`drmanhattan route local` turns it off. It is kept in `config.json` as `"route": ["air"]`,
+and each worker's row on the dashboard has a route button that does the same.
+
+While a route is on, every job that may run on a worker (`remote` `allowed` or `prefer`) or
+does not say (no `remote`) runs only on the route's workers. It waits in the queue for a
+free slot there, however many slots are free here, and starts as soon as one frees. These
+still run here:
+
+- jobs with `remote: "never"`: say so for a job whose results are needed on this machine
+  (an app built for this machine's simulator, a deploy);
+- services, which other things reach on `127.0.0.1`;
+- quick runs (see Quick commands): they start at once, and would spend longer being sent;
+- jobs whose `requires` tags none of the route's workers has: tag the worker
+  (`workers add … --tag xcode-27`) to have them sent;
+- runs a worker failed for a reason of the job's own.
+
+Jobs with `remote: "only"` go to any worker, route or not.
+
+`status` shows `route=air` and, on each waiting run, `waits_for='the route: waits for air
+(busy, 2 of 2 slot(s))'`: each worker it could go to, and whether it is free, busy, paused
+or unavailable (with why). The dashboard says `routed: jobs go to air` on this machine's
+row and marks such a run `waits for a worker`. A worker that stops answering keeps its jobs
+waiting rather than sending them back here; `drmanhattan route local` runs them here.
+
+### A rented machine as the worker
+
+A machine rented by the hour can take every job while you work, and be dropped after. For
+Swift and Xcode jobs it must be a Mac (hourly Apple-silicon Mac hosts rent them); Linux
+boxes suit Linux toolchains. It needs the same user name and home path as this machine (the
+mirrors land at the same absolute paths), your SSH key in its `authorized_keys`, an alias for
+it in `~/.ssh/config` (here `rented`), and the toolchains your jobs use (Xcode, its
+simulator runtimes, Homebrew packages).
+
+```sh
+# On the rented machine, over ssh from this one: install, then start the daemon confirmed.
+ssh rented 'curl -fsSL https://github.com/gagansingh/drmanhattan/releases/latest/download/install.sh | sh'
+ssh rented 'nohup env DRMANHATTAN_ACCEPT=1 ~/.local/bin/drmanhattan --no-dashboard >/dev/null 2>&1 &'
+
+# Here: add it (as many slots as it has cores to spare, and the tags your jobs require),
+# then send it everything.
+drmanhattan workers add rented --slots 8 --tag xcode-27 --drmanhattan "$HOME/.local/bin/drmanhattan"
+drmanhattan route rented
+
+# When you are done with it:
+drmanhattan workers remove rented     # also ends the route: jobs run here again
+```
+
+`--drmanhattan` is needed because `~/.local/bin` is not on the `PATH` ssh gives a command;
+installing into a directory that is (`sh -s -- /usr/local/bin`) works too. To keep the
+daemon across the machine's restarts, install the launchd unit there instead (see Running
+as a service). `workers remove` leaves the mirrors on the machine; a runner still following
+a job there carries on until it ends.
+
+A new machine starts cold: the first job mirrors the whole of its `sync` paths (later ones
+send only what changed), and it has no build caches, so the first builds there take as long
+as clean builds. Its estimates are kept apart from this machine's, and start empty.
+
+### What comes back from a worker
+
+Only the log. The job's output streams into its log here, and its exit status, notes and
+error line come back with it, but files it writes stay on the worker: build products,
+DerivedData, `.xcresult` bundles, coverage. Mirroring is one way, here to the worker (and
+it leaves out what git ignores, so a product here is never overwritten there either).
+
+So a job whose files are used here afterwards should say `remote: "never"`, which also
+keeps it here under a route: an `xcodebuild` for this machine's simulator (its
+`-destination id=` is a simulator here, and the `.app` is installed here next), a build
+whose products are signed or uploaded here. Builds and tests whose result is their exit
+status and log are what workers are for.
+
+A `sync_back` field is the way to lift this, and is not built yet: paths (inside the job's
+`sync` paths, or mapped by `args_path_map`) copied back from the worker with `rsync -a`
+once the job succeeds, before the run is marked finished, so a `wait` returns only once
+they are here. For an Xcode build that would be its `-derivedDataPath`'s
+`Build/Products`, which is far smaller than all of DerivedData.
 
 ## Goals and loops for coding agents
 
@@ -414,8 +495,8 @@ shell operators each have a colour; hover a job's name to see its command.
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `pause`, `resume` and
-`paths`. Each has `--help`.
+`cancel`, `workers [add|remove]`, `route`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`,
+`pause`, `resume` and `paths`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |

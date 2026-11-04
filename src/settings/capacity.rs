@@ -67,6 +67,16 @@ pub(crate) fn set_paused(paths: &Paths, paused: bool) -> Result<bool> {
     })
 }
 
+/// Sets the route in `config.json`: the workers that jobs which may run on a worker, or do
+/// not say, go to and only to; empty turns it off. Each must be a configured worker.
+pub(crate) fn set_route(paths: &Paths, route: &[String]) -> Result<Vec<String>> {
+    update_config(paths, |config| {
+        crate::workers::validate_route(route, &config.workers)?;
+        config.route = route.to_vec();
+        Ok(config.route.clone())
+    })
+}
+
 /// The capacity admission honours: the standing count.
 pub(crate) fn effective_capacity(paths: &Paths, slots_env: Option<&str>) -> Result<u32> {
     standing_capacity(paths, slots_env).map(|(slots, _)| slots)
