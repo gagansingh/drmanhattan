@@ -97,6 +97,12 @@ fn first_command_in_script(script: &str) -> Option<String> {
 /// `|`, `&`, a line break) or keyword (`do`, `then`, ...). Assignments before a command,
 /// redirections and quoted words are not programs.
 fn commands_in_script(script: &str) -> Vec<String> {
+    scan_script(script, false)
+}
+
+/// `commands_in_script`, or with `unnamed`, also the command words it cannot name (`$CARGO`,
+/// `"$bin"`, a backquoted command): what a script may run, for deciding whether it is quick.
+fn scan_script(script: &str, unnamed: bool) -> Vec<String> {
     let mut found = Vec::new();
     let mut at_start = true;
     for word in script_words(script) {
@@ -107,19 +113,35 @@ fn commands_in_script(script: &str) -> Vec<String> {
         if !at_start {
             continue;
         }
-        let word = word.trim_start_matches(['(', '{']).trim_end_matches([')', '}']);
+        let word = word.trim_start_matches(['(', '{']).trim_end_matches([')', '}', '`']);
         let is_assignment = word.contains('=') && !word.starts_with(['=', '"', '\'']);
         let name = basename(word);
         if is_assignment || name.is_empty() || SHELL_KEYWORDS.contains(&name) {
             continue;
         }
-        let not_a_program = name.starts_with(['>', '<', '$', '"', '\'', '`'])
+        let unnamed_word = name.starts_with(['$', '"', '\'', '`']);
+        let not_a_program = (unnamed_word && !unnamed)
+            || name.starts_with(['>', '<'])
             || name.starts_with(|c: char| c.is_ascii_digit())
             || SHELL_BOOKKEEPING.contains(&name);
         if !not_a_program {
-            found.push(name.to_string());
+            found.push(if unnamed_word { word.to_string() } else { name.to_string() });
         }
         at_start = false;
+    }
+    found
+}
+
+/// The programs run inside a script's command substitutions (`$(...)`, backquotes), wherever
+/// they appear, nested ones included.
+fn substituted_commands(script: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for word in script_words(script) {
+        let mut rest = word.as_str();
+        while let Some(at) = rest.find("$(").map(|i| i + 2).or_else(|| rest.find('`').map(|i| i + 1)) {
+            rest = &rest[at..];
+            found.extend(scan_script(rest, true));
+        }
     }
     found
 }
@@ -171,16 +193,21 @@ fn script_words(script: &str) -> Vec<String> {
     words
 }
 
-/// For `sh -c '<script>'`: the programs the script runs after its first, which names the
-/// job. Empty for any other command, which is one program.
+/// For `sh -c '<script>'`: what the script may run besides the program that names the job,
+/// including what runs in command substitutions and command words that cannot be named
+/// (`$CARGO build`). Empty for any other command, which is one program.
 pub(crate) fn later_commands(command: &[String]) -> Vec<String> {
     let words = without_env(command);
-    match words {
-        [shell, flag, script, ..] if SHELLS.contains(&basename(shell)) && flag == "-c" => {
-            commands_in_script(script).into_iter().skip(1).collect()
-        }
-        _ => Vec::new(),
+    let [shell, flag, script, ..] = words else { return Vec::new() };
+    if !SHELLS.contains(&basename(shell)) || flag != "-c" {
+        return Vec::new();
     }
+    let mut all = scan_script(script, true);
+    all.extend(substituted_commands(script));
+    if let Some(at) = first_command_in_script(script).and_then(|first| all.iter().position(|c| *c == first)) {
+        all.remove(at);
+    }
+    all
 }
 
 /// A label made safe for a file name: letters, digits, `_`, `.` and `-`, not starting with
@@ -260,6 +287,13 @@ mod tests {
         assert_eq!(derive_category(&sh("FOO=1 BAR='x y' make test")), "make");
         assert_eq!(derive_category(&sh("(cd app && npm test)")), "npm");
         assert_eq!(later_commands(&sh("echo a#b; git log | head -3")), ["head"]);
+        // What runs in a substitution, or cannot be named, counts too.
+        assert_eq!(later_commands(&sh("git fetch && echo \"$(swift build 2>&1 | tail -1)\"")), ["swift", "tail"]);
+        assert_eq!(later_commands(&sh("git log -1 && `make`")), ["`make`", "make"]);
+        assert_eq!(later_commands(&sh("git status && x=$(cargo build)")), ["cargo"]);
+        assert_eq!(later_commands(&sh("git status && $CARGO build")), ["$CARGO"]);
+        assert_eq!(derive_category(&sh("VERSION=$(git describe) && cargo build")), "cargo");
+        assert_eq!(later_commands(&sh("VERSION=$(git describe) && cargo build")), ["git"]);
         assert!(later_commands(&["git".into(), "status".into()]).is_empty());
     }
 
