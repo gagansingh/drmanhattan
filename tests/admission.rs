@@ -230,7 +230,7 @@ fn quick_jobs_start_beside_a_busy_slot_and_say_why() {
     d.submit("script", json!({"command": "git --version && make --version", "cwd": d.work}));
     let lint = d.wait_state("lint", "running", T);
     assert_eq!(lint["quick"], true);
-    assert!(lint["slot"].as_u64().unwrap() >= 2, "its DRMANHATTAN_SLOT is above the slots: {lint}");
+    assert!(lint["slot"].as_u64().unwrap() > 16, "its DRMANHATTAN_SLOT is above any slot: {lint}");
     assert_eq!(d.wait_exit("git", T), 0);
     assert_eq!(d.status_of("git").unwrap()["quick"], true);
     let st = d.status_json();
@@ -276,4 +276,25 @@ fn the_quick_lane_has_its_own_limit_and_can_be_turned_off() {
     assert!(w.get("quick").is_none() && w["lane_reason"].as_str().unwrap().contains("off"), "{w}");
     assert_eq!(d.wait_exit("q", T), 0);
     assert!(started(&d, "q") >= epoch(&d.status_of("blocker").unwrap()["finished_at"]) - 0.5);
+}
+
+#[test]
+fn a_quick_job_takes_a_free_slot_when_the_quick_lane_is_full() {
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "1"), ("DRMANHATTAN_SLOTS", "2")]);
+    d.seed_history(&[("t", "t", 1), ("t", "t", 1), ("t", "t", 1)]);
+    let job = || json!({"command": ["sh", "-c", "sleep 5"], "cwd": d.work, "label": "t", "category": "t"});
+    d.submit("q1", job());
+    let q1 = d.wait_state("q1", "running", T);
+    assert_eq!(q1["quick"], true);
+    d.submit("q2", job());
+    let q2 = d.wait_state("q2", "running", T);
+    assert!(q2.get("quick").is_none(), "it took a slot: {q2}");
+    assert!(q2["slot"].as_u64().unwrap() <= 2, "{q2}");
+    assert_eq!(d.status_json()["active"], 1);
+    // A worker reports only what holds its slots: a quick run, or a service, leaves them free.
+    let stats = d.cmd(&["machine-stats"]).output().unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["running"], 1, "{stats}");
+    d.wait_exit("q1", T);
+    d.wait_exit("q2", T);
 }

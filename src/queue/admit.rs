@@ -63,8 +63,9 @@ impl Queue {
             busy_groups.extend(waiter.job.group.clone());
             let slot = match (service, quick) {
                 (true, _) => None,
-                // Above the slots, so `DRMANHATTAN_SLOT` stays unique among the runs here.
-                (false, true) => Some(self.free_number(None, capacity + 1)),
+                // Above any slot there can be, so `DRMANHATTAN_SLOT` stays unique among the
+                // runs here whatever the capacity becomes.
+                (false, true) => Some(self.free_number(None, MAX_SLOTS + 1)),
                 (false, false) => Some(self.free_slot(machine.as_deref())),
             };
             let default_patterns = self.default_patterns.clone();
