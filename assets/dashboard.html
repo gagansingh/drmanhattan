@@ -584,12 +584,16 @@ function patchChildren(target, source) {
   // detaches it, and focus inside it would be lost.
   const kept = new Set([...source.childNodes].map(keyOf).filter((key) => key != null));
   for (const child of [...target.childNodes]) if (keyOf(child) != null && !kept.has(keyOf(child))) child.remove();
+  // Controls can share a key (a service's stop and restart): those match in order.
   const keyed = new Map();
-  for (const child of target.childNodes) if (keyOf(child) != null) keyed.set(keyOf(child), child);
+  for (const child of target.childNodes) {
+    const key = keyOf(child);
+    if (key != null) keyed.set(key, [...(keyed.get(key) || []), child]);
+  }
   [...source.childNodes].forEach((node, i) => {
     const here = target.childNodes[i];
     // The element this one updates: the one with its key, wherever it is, else the one here.
-    const old = keyOf(node) != null ? keyed.get(keyOf(node)) : here && keyOf(here) == null ? here : null;
+    const old = keyOf(node) != null ? keyed.get(keyOf(node))?.shift() : here && keyOf(here) == null ? here : null;
     if (old && sameNode(old, node)) {
       if (old !== here) target.insertBefore(old, here || null);
       if (node.nodeType === 3) { if (old.nodeValue !== node.nodeValue) old.nodeValue = node.nodeValue; }
@@ -598,6 +602,8 @@ function patchChildren(target, source) {
       target.insertBefore(node, here || null);
     }
   });
+  // A keyed element no new child took (a duplicate) would otherwise linger mid-list.
+  for (const rest of keyed.values()) for (const child of rest) child.remove();
   // Everything after the new children is gone from the markup.
   while (target.childNodes.length > wanted) target.lastChild.remove();
 }
