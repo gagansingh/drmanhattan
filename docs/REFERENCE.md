@@ -429,6 +429,18 @@ waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt 
 After an update the daemon's log says `auto-updated 0.6.1 → 0.6.2`, and the dashboard shows
 a note you can dismiss. It is off by default; `status` shows the setting.
 
+On macOS, privacy grants such as access to removable volumes belong to a binary's signature,
+so an unsigned update asks for them again. With `sign` in `config.json`, every update is signed
+before it replaces the installed commands, and one that cannot be signed leaves them as they
+were:
+
+```json
+"sign": {"identity": "Apple Development: Your Name (TEAMID)", "identifier": "com.example.drmanhattan"}
+```
+
+`identity` is a code-signing identity in the login keychain (`security find-identity -p
+codesigning`); `identifier` is optional. Keep both the same from one update to the next.
+
 ## Disk use
 
 drmanhattan cleans up after itself, so it can run for months:

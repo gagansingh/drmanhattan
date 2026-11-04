@@ -3,14 +3,16 @@
 //! `drmanhattan update [--now]` finds the latest release (`release`), waits until no job is
 //! running or queued (`--now` does not), downloads this platform's archive, checks its
 //! SHA-256, replaces both commands beside the running executable, and restarts the daemon
-//! (`restart`). A failed download or checksum leaves the old version in place. The daemon
-//! looks for a newer release every 4 hours (`check`) and may install it itself (`auto`).
+//! (`restart`); with `sign` in `config.json` it signs them first (`sign`). A failed download,
+//! checksum or signature leaves the old version in place. The daemon looks for a newer
+//! release every 4 hours (`check`) and may install it itself (`auto`).
 
 mod auto;
 mod check;
 mod installed;
 mod release;
 mod restart;
+mod sign;
 mod updated;
 
 use std::path::{Path, PathBuf};
@@ -22,12 +24,16 @@ pub(crate) use check::{available, start_checker, Available};
 pub(crate) use installed::{daemon_behind, installed_version};
 pub(crate) use release::current;
 use release::{asset, download, is_newer, latest_tag, releases_url, sha256};
+pub(crate) use sign::SignConfig;
 pub(crate) use updated::{announce, updated, Updated};
 
 use crate::error::{invalid, Error, Result};
 use crate::job::State;
 use crate::paths::Paths;
 use crate::queue::read_records;
+
+/// The commands a release holds.
+const PROGRAMS: [&str; 2] = ["drmanhattan", "manhattan"];
 
 /// A whole number of seconds from the environment, for tests to shorten a wait.
 fn seconds_env(name: &str, default: u64) -> Duration {
@@ -87,12 +93,16 @@ fn stage_and_swap(paths: &Paths, tag: &str, stage: &Path, dir: &Path, now: bool)
     if !unpacked.is_ok_and(|s| s.success()) || !new_dir.join("drmanhattan").is_file() {
         return invalid(format!("{name} is not a drmanhattan archive; the installed version is unchanged"));
     }
+    if let Some(config) = crate::settings::load_config(paths)?.sign {
+        let programs: Vec<&str> = PROGRAMS.into_iter().filter(|p| new_dir.join(p).is_file()).collect();
+        sign::sign(&config, &new_dir, &programs)?;
+    }
     if !now {
         wait_until_idle(paths);
     } else if !idle(paths) {
         crate::log::warn(format_args!("updating now: running jobs end when the daemon restarts"));
     }
-    for program in ["drmanhattan", "manhattan"] {
+    for program in PROGRAMS {
         let (from, to) = (new_dir.join(program), dir.join(program));
         if from.is_file() {
             std::fs::rename(&from, &to)
