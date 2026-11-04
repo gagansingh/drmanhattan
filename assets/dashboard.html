@@ -1089,7 +1089,7 @@ const count = (n) => n.toLocaleString();
 function pager(f, shown, total) {
   if (!f.newer && !f.older_from) return '';
   const [newer, spoken] = page.held
-    ? [`↑ ${count(f.newer)} new`, `Show the ${plural(f.newer, 'run', 'runs')} that finished since`]
+    ? [`↑ ${count(f.newer)} new`, `${count(f.newer)} new: show the ${plural(f.newer, 'run', 'runs')} that finished since`]
     : ['‹ newer', 'Newer runs'];
   return (f.newer ? `<button class="link" data-id="pager" data-action="newer" aria-label="${spoken}">${newer}</button>` : '')
     + `<span>${shown ? `${count(f.newer + 1)}–${count(f.newer + shown)}` : 'none'} of ${count(total)}</span>`
@@ -1104,9 +1104,10 @@ function renderFinished(d) {
     `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${count(f.counts[key])}</span></button>`).join('') : '');
   put($('#summary'), summary(d.metrics_24h));
   put($('#pager'), pager(f, d.done.length, total));
+  // Said as text, and shown as HTML (the search escaped).
   const empty = f.newer ? 'No older runs.'
-    : total ? '' : search ? `No runs match “${esc(search)}”.` : f.counts.all ? 'No runs match this filter.' : 'Nothing has finished yet.';
-  put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(empty));
+    : total ? '' : search ? `No runs match “${search}”.` : f.counts.all ? 'No runs match this filter.' : 'Nothing has finished yet.';
+  put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(esc(empty)));
   if (page.moved) {
     page.moved = false;
     if (!$('#finished-section').contains(document.activeElement)) $('#finished-heading').focus();

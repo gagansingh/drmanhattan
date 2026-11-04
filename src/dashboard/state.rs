@@ -5,9 +5,10 @@
 //! match, starting at that run (at the newest, without `from`). A page that starts at a run
 //! holds still as newer runs finish. `open=<run id>` adds that run, for the log pane.
 //!
-//! The queue lock is held only to copy out the records and estimates (`Snapshot::take`);
-//! reading the other tools' session files, the settings and the machine readings, and
-//! building the document, all happen after it is released.
+//! The queue lock is held to pick out the page's records (a filter and a search over the
+//! kept runs, which allocate nothing for an ASCII search) and copy them and the estimates
+//! (`Snapshot::take`); reading the other tools' session files, the settings and the machine
+//! readings, and building the document, all happen after it is released.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -140,7 +141,7 @@ impl Query {
 
     fn matches(&self, r: &Record) -> bool {
         let search = self.search.as_str();
-        let has = |text: &str| text.to_lowercase().contains(search);
+        let has = |text: &str| contains_folded(text, search);
         search.is_empty()
             || has(&r.job.label)
             || has(&r.job.category)
@@ -148,6 +149,17 @@ impl Query {
             || has(r.run_id.as_str())
             || r.job.command.iter().any(|word| has(word))
             || r.machine.as_deref().is_some_and(has)
+    }
+}
+
+/// Whether `text` contains `needle` (already lowercase), ignoring case. An ASCII needle, the
+/// usual case, is compared in place: this runs for every kept run under the queue lock.
+fn contains_folded(text: &str, needle: &str) -> bool {
+    if needle.is_ascii() {
+        let needle = needle.as_bytes();
+        text.len() >= needle.len() && text.as_bytes().windows(needle.len()).any(|w| w.eq_ignore_ascii_case(needle))
+    } else {
+        text.to_lowercase().contains(needle)
     }
 }
 
@@ -538,5 +550,15 @@ mod tests {
             start_times(vec![Some(0.0), Some(0.0)], &[Some(10.0), Some(10.0), Some(10.0)]),
             [Some(0.0), Some(0.0), Some(10.0)]
         );
+    }
+}
+
+#[cfg(test)]
+mod search_tests {
+    #[test]
+    fn search_ignores_case_without_allocating_for_ascii() {
+        assert!(super::contains_folded("Cargo Build", "cargo b"));
+        assert!(!super::contains_folded("cargo", "cargo build"));
+        assert!(super::contains_folded("Größe", "größe"));
     }
 }
