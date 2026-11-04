@@ -54,8 +54,9 @@ Run builds, tests and other long or heavy commands through drmanhattan:
 
 It waits for a free slot, prints the output and exits with the command's
 exit code. If your own tool times out while waiting, don't submit again:
-`manhattan wait <name>`, with the name `submit` printed, waits for the
-same run. `manhattan status` shows what is running and waiting.
+the run carries on, and `manhattan follow <name>` (the name after `as` in
+the line `submit` printed) prints its output and exits with its exit code.
+`manhattan status` shows what is running and waiting.
 
 Start dev servers and databases as services, never with `--wait`:
 
@@ -69,11 +70,14 @@ again returns the running one: add `--restart` to replace it, and run
 For commands that must never overlap and where only the latest run matters,
 such as deploys, add `--group <name>`.
 
-Jobs already get your shell environment: don't wrap commands in `zsh -ic`
-or `bash -lc`. Jobs get no stdin: pass input as a file or an argument,
-never by piping into `manhattan submit`. Use drmanhattan too for any command
-you can't run directly in this environment. If it reports that drmanhattan
-isn't running, ask the user to start it; don't start it yourself.
+Jobs already get the user's login shell environment: don't wrap commands
+in `zsh -ic` or `bash -lc`. They don't get variables set in this session;
+pass those with `--env KEY=VALUE`. Jobs get no stdin: pass input as a file
+or an argument, never by piping into `manhattan submit`.
+
+Use drmanhattan too for any command you can't run directly in this
+environment. If it reports that drmanhattan isn't running, ask the user to
+start it; don't start it yourself.
 ```
 
 Agents sharing a machine then run their builds one after another. When the queue is not
