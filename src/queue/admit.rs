@@ -27,8 +27,10 @@ pub(crate) struct Admitted {
 impl Queue {
     /// Admits waiters, in rank order, into free slots: this machine's while fewer than
     /// `capacity` run here, and the workers' while fewer than each one's capacity run there.
-    /// The caller starts a runner thread for each. Lowering a capacity stops admissions
-    /// there until enough runs finish; raising it admits more on this pass.
+    /// A quick waiter starts beside the slots while fewer than `max_quick` quick runs do, and
+    /// takes a free slot when the quick lane is full. The caller starts a runner thread for
+    /// each. Lowering a capacity stops admissions there until enough runs finish; raising it
+    /// admits more on this pass.
     pub(crate) fn admit(&mut self, capacity: u32, workers: &[workers::Slots], manual: &ManualOrder) -> Vec<Admitted> {
         let now = Timestamp::now();
         let order = rank(self.records(State::Queued), manual, now);
@@ -44,17 +46,27 @@ impl Queue {
             if waiter.job.group.as_ref().is_some_and(|g| busy_groups.contains(g)) {
                 continue; // another of its group is running
             }
-            // A service takes none of the build slots, only one of its own few.
+            // A service takes none of the build slots, only one of its own few; so does a
+            // quick run, while the quick lane has room.
             let service = waiter.job.service;
+            let quick =
+                waiter.quick && self.records(State::Running).filter(|r| r.quick).count() < self.settings.max_quick;
             let machine = if service {
                 let running = self.records(State::Running).filter(|r| r.job.service).count();
                 (running < self.settings.max_services).then_some(None)
+            } else if quick {
+                Some(None)
             } else {
                 self.place(waiter, capacity, workers)
             };
             let Some(machine) = machine else { continue };
             busy_groups.extend(waiter.job.group.clone());
-            let slot = (!service).then(|| self.free_slot(machine.as_deref()));
+            let slot = match (service, quick) {
+                (true, _) => None,
+                // Above the slots, so `DRMANHATTAN_SLOT` stays unique among the runs here.
+                (false, true) => Some(self.free_number(None, capacity + 1)),
+                (false, false) => Some(self.free_slot(machine.as_deref())),
+            };
             let default_patterns = self.default_patterns.clone();
             let Some(entry) = self.runs.get_mut(&next.run_id) else { continue };
             let (control, events) = mpsc::channel();
@@ -63,6 +75,7 @@ impl Queue {
             let rec = &mut entry.rec;
             rec.state = State::Running;
             rec.slot = slot;
+            rec.quick = quick;
             let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
             rec.machine = machine;
             rec.started_at = Some(now);
@@ -73,7 +86,14 @@ impl Queue {
                 "started",
                 &rec.job.label,
                 Some(&rec.run_id),
-                &[slot.map_or_else(|| "a service".to_string(), |s| format!("slot {s}{on}")), waited],
+                &[
+                    match slot {
+                        None => "a service".to_string(),
+                        Some(_) if quick => "quick".to_string(),
+                        Some(s) => format!("slot {s}{on}"),
+                    },
+                    waited,
+                ],
             );
             let record = rec.clone();
             self.persist(&next.run_id);
@@ -120,7 +140,7 @@ impl Queue {
     /// a failure; a run that a worker could not take stays here.
     fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
         let running_on = |m: Option<&str>| {
-            self.records(State::Running).filter(|r| r.machine.as_deref() == m && !r.job.service).count()
+            self.records(State::Running).filter(|r| r.machine.as_deref() == m && r.holds_slot()).count()
         };
         // A worker's dispatcher may grant more of its slots than it would use itself.
         let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
@@ -144,12 +164,18 @@ impl Queue {
 
     /// The lowest slot number no running run on `machine` (None: this one) holds.
     fn free_slot(&self, machine: Option<&str>) -> u32 {
+        self.free_number(machine, 1).min(MAX_SLOTS)
+    }
+
+    /// The lowest number from `from` up that no running run on `machine` holds, quick runs
+    /// included, so every run there has its own `DRMANHATTAN_SLOT`.
+    fn free_number(&self, machine: Option<&str>, from: u32) -> u32 {
         let used: HashSet<u32> = self
             .records(State::Running)
             .filter(|r| r.machine.as_deref() == machine && !r.job.service)
             .filter_map(|r| r.slot)
             .collect();
-        (1..=MAX_SLOTS).find(|n| !used.contains(n)).unwrap_or(MAX_SLOTS)
+        (from..).find(|n| !used.contains(n)).unwrap_or(from)
     }
 
     /// Runs on a worker that were running when the daemon last stopped: their runners pick

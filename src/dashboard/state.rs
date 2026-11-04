@@ -271,7 +271,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
         return Vec::new();
     }
     let running_on =
-        |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && !r.job.service).count();
+        |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && r.holds_slot()).count();
     let override_view = |o: crate::settings::Override| OverrideView { slots: o.slots, until: o.until.epoch_seconds() };
     let mut out = vec![MachineView {
         name: "local".into(),
@@ -310,14 +310,19 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
     out
 }
 
-/// When each waiter should start, shown as its estimated start.
+/// When each waiter should start, shown as its estimated start. A quick waiter starts as
+/// soon as the quick lane has room, so it is left out of the slots' reckoning.
 fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, now: Timestamp) {
     let now = now.epoch_seconds();
-    let busy = running.iter().map(|r| r.timing.remaining_estimate.map(|left| now + left));
+    let busy = running.iter().filter(|r| !r.is_quick()).map(|r| r.timing.remaining_estimate.map(|left| now + left));
     let mut free_at: Vec<Option<f64>> = busy.collect();
     free_at.resize(free_at.len().max(capacity as usize), Some(now));
-    let durations: Vec<Option<f64>> = queued.iter().map(RunView::typical_seconds).collect();
-    for (view, start) in queued.iter_mut().zip(start_times(free_at, &durations)) {
+    let (quick, slot): (Vec<&mut RunView>, Vec<&mut RunView>) = queued.iter_mut().partition(|v| v.is_quick());
+    for view in quick {
+        view.eta = Some(Eta { eta_start: now, eta_wait: 0, eta_open_ended: false });
+    }
+    let durations: Vec<Option<f64>> = slot.iter().map(|v| v.typical_seconds()).collect();
+    for (view, start) in slot.into_iter().zip(start_times(free_at, &durations)) {
         let eta_start = start.unwrap_or(now);
         view.eta =
             Some(Eta { eta_start, eta_wait: (eta_start - now).max(0.0) as u64, eta_open_ended: start.is_none() });

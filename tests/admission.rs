@@ -51,7 +51,7 @@ fn started(d: &Daemon, name: &str) -> f64 {
 
 #[test]
 fn shortest_expected_first() {
-    let mut d = Daemon::start(&[]);
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "0")]);
     d.seed_history(&[
         ("sleep", "long", 100),
         ("sleep", "long", 100),
@@ -78,7 +78,7 @@ fn shortest_expected_first() {
 
 #[test]
 fn priority_goes_ahead_of_shorter_waiters() {
-    let mut d = Daemon::start(&[]);
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "0")]);
     d.seed_history(&[
         ("sleep", "short", 5),
         ("sleep", "short", 5),
@@ -105,7 +105,7 @@ fn priority_goes_ahead_of_shorter_waiters() {
 
 #[test]
 fn manual_order_puts_listed_waiters_first() {
-    let mut d = Daemon::start(&[]);
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "0")]);
     d.seed_history(&[
         ("sleep", "long", 100),
         ("sleep", "long", 100),
@@ -136,7 +136,7 @@ fn manual_order_puts_listed_waiters_first() {
 #[test]
 fn overdue_waiter_is_admitted_ahead_of_shorter_newcomers() {
     // bound = max(floor 0, 2 x expected) = 4 s for `long`, 2 s for `short`
-    let mut d = Daemon::start(&[("DRMANHATTAN_MAX_SKIP_SECONDS", "0")]);
+    let mut d = Daemon::start(&[("DRMANHATTAN_MAX_SKIP_SECONDS", "0"), ("DRMANHATTAN_QUICK", "0")]);
     d.seed_history(&[
         ("sleep", "long", 2),
         ("sleep", "long", 2),
@@ -211,29 +211,69 @@ fn lower_capacity_lands_under_load() {
 }
 
 #[test]
-fn status_says_which_waiters_are_quick_and_why() {
-    let mut d = Daemon::start(&[]);
+fn quick_jobs_start_beside_a_busy_slot_and_say_why() {
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "2")]);
     d.seed_history(&[("make", "make lint", 2), ("make", "make lint", 3), ("make", "make lint", 2)]);
     d.submit("blocker", d.job("sleep 30"));
     d.wait_state("blocker", "running", T);
-    d.submit("lint", json!({"command": ["make", "lint"], "cwd": d.work, "label": "make lint"}));
+    // A command whose runs here were quick, and a read-only tool: both start at once.
+    d.submit(
+        "lint",
+        json!({"command": ["sh", "-c", "sleep 2"], "cwd": d.work, "label": "make lint", "category": "make"}),
+    );
     d.submit("git", json!({"command": ["git", "--version"], "cwd": d.work, "label": "git"}));
+    // New here, and a script that runs more than a read-only tool: both wait for the slot.
     d.submit(
         "build",
         json!({"command": ["make", "build"], "cwd": d.work, "label": "make build", "category": "make-build"}),
     );
-    d.wait_state("build", "queued", T);
+    d.submit("script", json!({"command": "git --version && make --version", "cwd": d.work}));
+    let lint = d.wait_state("lint", "running", T);
+    assert_eq!(lint["quick"], true);
+    assert!(lint["slot"].as_u64().unwrap() >= 2, "its DRMANHATTAN_SLOT is above the slots: {lint}");
+    assert_eq!(d.wait_exit("git", T), 0);
+    assert_eq!(d.status_of("git").unwrap()["quick"], true);
     let st = d.status_json();
-    let lane = |label: &str| {
-        let w = st["waiters"].as_array().unwrap().iter().find(|w| w["label"] == label).unwrap().clone();
+    assert_eq!(st["active"], 1, "the quick run holds no slot: {st}");
+    let waiter = |label: &str| {
+        let w = st["waiters"].as_array().unwrap().iter().find(|w| w["label"] == label).cloned();
+        let w = w.unwrap_or_else(|| panic!("{label} is not waiting: {st}"));
         (w["quick"].as_bool().unwrap(), w["lane_reason"].as_str().unwrap_or_default().to_string())
     };
-    assert_eq!(lane("make lint"), (true, "3 of its last 3 runs here took under 30s".into()));
-    assert_eq!(lane("git"), (true, "git usually takes seconds".into()));
-    let (quick, reason) = lane("make build");
+    let (quick, reason) = waiter("make build");
     assert!(!quick && reason.starts_with("new here"), "{reason}");
+    let (quick, reason) = waiter("script");
+    assert!(!quick && reason == "a script that also runs make", "{reason}");
+    assert!(d.log_of("lint").contains("started at once (quick)"), "{}", d.log_of("lint"));
     fs::write(d.inbox.join("blocker.cancel"), "").unwrap();
-    for name in ["lint", "git", "build"] {
+    for name in ["lint", "build", "script"] {
         d.wait_exit(name, T);
     }
+}
+
+#[test]
+fn the_quick_lane_has_its_own_limit_and_can_be_turned_off() {
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "1")]);
+    d.seed_history(&[("t", "t", 1), ("t", "t", 1), ("t", "t", 1)]);
+    d.submit("blocker", d.job("sleep 30"));
+    d.wait_state("blocker", "running", T);
+    let job = || json!({"command": ["sh", "-c", "sleep 3"], "cwd": d.work, "label": "t", "category": "t"});
+    d.submit("q1", job());
+    d.submit("q2", job());
+    d.wait_state("q1", "running", T);
+    assert_eq!(d.status_of("q2").unwrap()["state"], "queued", "one quick place: q2 waits for q1");
+    assert_eq!(d.wait_exit("q2", T), 0);
+    assert!(started(&d, "q2") >= epoch(&d.status_of("q1").unwrap()["finished_at"]) - 0.5);
+    fs::write(d.inbox.join("blocker.cancel"), "").unwrap();
+    d.wait_exit("blocker", T);
+
+    let mut d = Daemon::start(&[("DRMANHATTAN_QUICK", "0")]);
+    d.seed_history(&[("t", "t", 1), ("t", "t", 1), ("t", "t", 1)]);
+    d.submit("blocker", d.job("sleep 3"));
+    d.wait_state("blocker", "running", T);
+    d.submit("q", job());
+    let w = d.wait_state("q", "queued", T);
+    assert!(w.get("quick").is_none() && w["lane_reason"].as_str().unwrap().contains("off"), "{w}");
+    assert_eq!(d.wait_exit("q", T), 0);
+    assert!(started(&d, "q") >= epoch(&d.status_of("blocker").unwrap()["finished_at"]) - 0.5);
 }
