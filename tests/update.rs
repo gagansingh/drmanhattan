@@ -177,3 +177,39 @@ fn status_and_the_dashboard_say_when_the_daemon_runs_an_older_version() {
     fs::rename(&replacement, &d.program).unwrap(); // as an update swaps it in
     assert_eq!(d.api_state()["installed"], "9.9.9");
 }
+
+#[cfg(target_os = "macos")]
+fn signature(program: &Path) -> String {
+    let out = std::process::Command::new("codesign").arg("-dv").arg(program).output().unwrap();
+    String::from_utf8_lossy(&out.stderr).to_string()
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn sign_signs_both_commands_before_installing_them() {
+    let mut d = Daemon::start(&[]);
+    d.kill_daemon();
+    // `-` is an ad-hoc signature: no keychain needed.
+    common::write_config(&d, serde_json::json!({"sign": {"identity": "-", "identifier": "test.drmanhattan"}}));
+    let r = releases(&d.root, "v99.0.0", true);
+    let dir = installed(&d.root);
+    let out = update(&d, &dir, &r, &[]);
+    assert!(out.status.success(), "{}", said(&out));
+    for program in ["drmanhattan", "manhattan"] {
+        assert!(signature(&dir.join(program)).contains("Identifier=test.drmanhattan"), "{program} is signed");
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_failed_signature_keeps_the_installed_version() {
+    let mut d = Daemon::start(&[]);
+    d.kill_daemon();
+    common::write_config(&d, serde_json::json!({"sign": {"identity": "No Such Identity"}}));
+    let r = releases(&d.root, "v99.0.0", true);
+    let dir = installed(&d.root);
+    let out = update(&d, &dir, &r, &[]);
+    assert_eq!(out.status.code(), Some(2));
+    assert!(said(&out).contains("could not sign") && said(&out).contains("unchanged"), "{}", said(&out));
+    assert_eq!(version_of(&dir), format!("drmanhattan {CURRENT}"));
+}

@@ -55,6 +55,9 @@ pub(crate) fn start_auto_updater(paths: Paths) {
     let _ = std::thread::Builder::new().name("auto-update".into()).spawn(move || {
         let idle_wait = seconds_env("DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS", 300);
         let retry = seconds_env("DRMANHATTAN_AUTO_UPDATE_RETRY_SECONDS", 3600);
+        // Whatever the last daemon was doing is over; an `updating` left by the update that
+        // restarted it most of all.
+        let _ = std::fs::remove_file(file(&paths));
         let mut phase: Option<Phase> = None;
         let mut idle_since: Option<Timestamp> = None;
         loop {

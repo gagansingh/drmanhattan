@@ -1,5 +1,6 @@
-//! `config.json` in the data directory: the standing slot count (`drmanhattan slots N`) and
-//! the daemon-wide activity patterns. Unknown keys are kept when the file is rewritten.
+//! `config.json` in the data directory: the standing slot count (`drmanhattan slots N`), the
+//! daemon-wide activity patterns, workers, and how updates are installed. Unknown keys are
+//! kept when the file is rewritten.
 
 use std::collections::BTreeMap;
 
@@ -9,6 +10,7 @@ use crate::activity::PatternConfig;
 use crate::error::{invalid, IoContext, Result};
 use crate::fsutil;
 use crate::paths::Paths;
+use crate::update::SignConfig;
 use crate::workers::WorkerConfig;
 
 #[derive(Serialize, Deserialize, Default, Debug)]
@@ -23,6 +25,9 @@ pub(crate) struct Config {
     /// Install newer releases of this major version by itself, once the queue is idle.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto_update: bool,
+    /// Sign each update with this identity before installing it (macOS).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) sign: Option<SignConfig>,
     #[serde(flatten)]
     pub(crate) other: BTreeMap<String, serde_json::Value>,
 }

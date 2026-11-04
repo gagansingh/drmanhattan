@@ -166,3 +166,14 @@ mod tempdir {
         N.fetch_add(1, Ordering::Relaxed)
     }
 }
+
+#[test]
+fn a_restarted_daemon_drops_the_last_ones_phase() {
+    let (mut d, _dir) = queue(&format!("v{CURRENT}"), true);
+    auto(&d, "on");
+    d.kill_daemon();
+    // What the update that restarted it leaves behind.
+    fs::write(d.data.join("auto-update.json"), r#"{"phase":"updating","version":"9.9.9"}"#).unwrap();
+    d.launch();
+    wait_for(T, || auto_state(&d).starts_with("up to date").then_some(())).expect("not stuck on updating");
+}
