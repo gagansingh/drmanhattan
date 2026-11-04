@@ -761,16 +761,14 @@ function machineBar(m, d, open) {
   const s = m.local ? { load: d.load, ncpu: d.ncpu, cpu_pct: d.cpu_pct, memory: d.memory, thermals: d.thermals } : (m.stats || {});
   const online = m.local || m.online === true ? 'online' : m.online === false ? 'offline' : 'not asked yet';
   const dot = online === 'online' ? '' : online === 'offline' ? ' off' : ' unknown';
-  const cap = m.capacity, min = m.local ? 1 : 0, max = Math.max(d.capacity_ui_max || 4, m.capacity_default);
+  const cap = m.capacity, min = m.local ? 1 : 0, max = d.capacity_max || 256;
   const who = m.local ? '' : ` data-worker="${esc(m.name)}"`;
-  const ov = m.capacity_override;
-  const override = ov
-    ? `<span class="warn" title="Back to ${m.capacity_default} at ${esc(stamp(ov.until))}">until ${clock(ov.until)}</span><button class="link" data-action="capacity" data-value="reset"${who}>reset</button>`
-    : '';
-  const fewer = !m.local && cap === 1 ? 'Pause it for the next 4 hours: what runs there finishes, nothing new is sent' : 'One slot fewer for the next 4 hours';
+  const fixed = m.local && d.capacity_fixed;
+  const fewer = fixed ? `Set by ${fixed}` : !m.local && cap === 1 ? 'Pause it: what runs there finishes, nothing new is sent' : 'One slot fewer';
+  const more = fixed ? `Set by ${fixed}` : 'One slot more';
   const slots = `<span class="slots"><span><b>${m.running}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'}${m.paused ? ' · <b class="warn">paused</b>' : ''}</span>`
-    + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${cap <= min ? 'disabled' : ''} title="${fewer}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
-    + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${cap >= max ? 'disabled' : ''} title="One slot more for the next 4 hours" aria-label="More slots on ${esc(m.name)}">+</button>${override}</span>`;
+    + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${fixed || cap <= min ? 'disabled' : ''} title="${esc(fewer)}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button></span>`;
   const figures = online === 'offline' ? ''
     : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals));
   const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
@@ -789,16 +787,12 @@ function machineBar(m, d, open) {
 
 function renderRunning(d) {
   if (d.machines && d.machines.length) return renderMachines(d);
-  const cap = d.capacity, max = d.capacity_ui_max || 4, ov = d.capacity_override;
+  const cap = d.capacity, max = d.capacity_max || 256, fixed = d.capacity_fixed;
   const busy = d.running.filter((run) => !run.quick).length, quick = d.running.length - busy;
-  const override = ov
-    ? `<span class="warn" title="Back to ${d.capacity_default} at ${esc(stamp(ov.until))}">until ${clock(ov.until)}</span><button class="link" data-action="capacity" data-value="reset">reset</button>`
-    : '';
   put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
     + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use${quick ? ` · <b>${quick}</b> quick` : ''}</span>`
-    + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${cap <= 1 ? 'disabled' : ''} title="One slot fewer for the next 4 hours" aria-label="Fewer slots">−</button>`
-    + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${cap >= max ? 'disabled' : ''} title="One slot more for the next 4 hours: more jobs at once, each slower" aria-label="More slots">+</button>`
-    + override);
+    + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${fixed || cap <= 1 ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot fewer')}" aria-label="Fewer slots">−</button>`
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${fixed || cap >= max ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot more: more jobs at once, each slower')}" aria-label="More slots">+</button>`);
   const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
   put($('#running'), d.running.length ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
 }
@@ -1546,16 +1540,13 @@ async function resetOrder() {
   tick();
 }
 
-/** − and + set the number of slots for four hours; back at the standing number, the
- *  override is simply removed. */
+/** − and + set the number of slots in config.json, as `drmanhattan slots N` does: it stays
+ *  until it is changed again. */
 async function setCapacity(value, worker) {
   if (!last) return;
   const machine = worker && (last.machines || []).find((m) => m.name === worker);
   if (worker && !machine) return;
-  const standing = machine ? machine.capacity_default : last.capacity_default || 1;
-  const max = Math.max(last.capacity_ui_max || 4, standing);
-  const n = value === 'reset' ? standing : Number(value);
-  const slots = n === standing ? null : Math.max(machine ? 0 : 1, Math.min(max, n));
+  const slots = Math.max(machine ? 0 : 1, Math.min(last.capacity_max || 256, Number(value)));
   try { await post('/api/capacity', machine ? { worker, slots } : { slots }); capacityError = ''; }
   catch (e) { capacityError = `could not change the slots: ${e.message}`; announce(capacityError); }
   tick();

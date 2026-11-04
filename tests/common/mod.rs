@@ -282,17 +282,10 @@ impl Daemon {
         self.launch();
     }
 
-    pub fn write_override(&self, slots: Option<u32>) {
-        let path = self.state.join("capacity-override");
-        match slots {
-            None => {
-                let _ = fs::remove_file(path);
-            }
-            Some(n) => {
-                let until = chrono::Utc::now() + chrono::Duration::hours(1);
-                fs::write(path, format!("{n} {}\n", until.to_rfc3339())).unwrap();
-            }
-        }
+    /// `drmanhattan slots N`: the standing count, which the daemon picks up at once.
+    pub fn set_slots(&self, slots: u32) {
+        let out = self.cmd(&["slots", &slots.to_string()]).output().unwrap();
+        assert!(out.status.success(), "{out:?}");
     }
 
     pub fn write_manual_order(&self, run_ids: &[&str]) {

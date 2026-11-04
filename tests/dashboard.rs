@@ -101,7 +101,7 @@ fn post_guards() {
         .0,
         403
     );
-    assert!(!d.state.join("capacity-override").exists());
+    assert_eq!(d.status_json()["capacity"], 1, "none of those changed it");
     // the page itself
     let origin = format!("http://127.0.0.1:{port}");
     let (code, resp) = d.post(
@@ -111,15 +111,16 @@ fn post_guards() {
     );
     assert_eq!(code, 200, "{resp}");
     let v: Value = serde_json::from_str(&resp).unwrap();
-    assert_eq!(v["override"]["slots"], 2);
-    assert!(d.state.join("capacity-override").exists());
+    assert_eq!(v["slots"], 2);
     assert_eq!(d.status_json()["capacity"], 2);
-    assert_eq!(d.post("/api/capacity", r#"{"slots": 99}"#, WRITE_HEADERS).0, 400);
+    let config: Value = serde_json::from_str(&fs::read_to_string(d.data.join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["slots"], 2, "it stays: the standing count, as `slots 2` sets it");
+    assert_eq!(d.post("/api/capacity", r#"{"slots": 99}"#, WRITE_HEADERS).0, 200, "no ceiling below the guard");
+    assert_eq!(d.post("/api/capacity", r#"{"slots": 257}"#, WRITE_HEADERS).0, 400);
+    assert_eq!(d.post("/api/capacity", r#"{"slots": 0}"#, WRITE_HEADERS).0, 400);
     assert_eq!(d.post("/api/capacity", r#"{"slots": "2"}"#, WRITE_HEADERS).0, 400);
     assert_eq!(d.post("/api/capacity", r#"[1]"#, WRITE_HEADERS).0, 400);
-    let (code, _) = d.post("/api/capacity", r#"{"slots": null}"#, WRITE_HEADERS);
-    assert_eq!(code, 200);
-    assert!(!d.state.join("capacity-override").exists());
+    assert_eq!(d.post("/api/capacity", r#"{"slots": null}"#, WRITE_HEADERS).0, 400);
     assert_eq!(d.post("/api/other", "{}", WRITE_HEADERS).0, 404);
 }
 
@@ -235,4 +236,14 @@ fn the_pane_shows_a_runs_command_once() {
     );
     let out = std::process::Command::new("node").arg("-e").arg(program).output().unwrap();
     assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+}
+
+#[test]
+fn drmanhattan_slots_in_the_environment_decides_and_the_page_says_so() {
+    let d = Daemon::start(&[("DRMANHATTAN_SLOTS", "3")]);
+    let (code, body) = d.post("/api/capacity", r#"{"slots": 4}"#, WRITE_HEADERS);
+    assert_eq!(code, 400);
+    assert!(body.contains("DRMANHATTAN_SLOTS=3"), "{body}");
+    let st = d.api_state();
+    assert_eq!((&st["capacity"], &st["capacity_fixed"]), (&json!(3), &json!("DRMANHATTAN_SLOTS=3")));
 }

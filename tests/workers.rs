@@ -212,7 +212,7 @@ fn the_worker_is_on_the_dashboard_with_its_readings_and_slots() {
     })
     .expect("the worker's readings arrive");
     assert_eq!((&m[0]["name"], &m[0]["local"]), (&json!("local"), &json!(true)));
-    assert_eq!((&m[1]["name"], &m[1]["capacity"], &m[1]["capacity_default"]), (&json!("w1"), &json!(1), &json!(1)));
+    assert_eq!((&m[1]["name"], &m[1]["capacity"]), (&json!("w1"), &json!(1)));
     // − to 0 pauses it.
     let (code, body) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 0}"#, WRITE_HEADERS);
     assert_eq!(code, 200, "{body}");
@@ -222,9 +222,12 @@ fn the_worker_is_on_the_dashboard_with_its_readings_and_slots() {
     assert!(p.here.status_of("pref").unwrap()["machine"].is_null(), "a paused worker takes nothing");
     let st = p.here.api_state();
     assert_eq!((&st["machines"][1]["capacity"], &st["machines"][1]["paused"]), (&json!(0), &json!(true)));
-    let (code, _) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": null}"#, WRITE_HEADERS);
+    let config: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(p.here.data.join("config.json")).unwrap()).unwrap();
+    assert_eq!(config["workers"][0]["slots"], 0, "it stays paused, in config.json: {config}");
+    let (code, _) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 1}"#, WRITE_HEADERS);
     assert_eq!(code, 200);
-    assert_eq!(p.here.api_state()["machines"][1]["capacity"], 1, "reset returns it to its default");
+    assert_eq!(p.here.api_state()["machines"][1]["capacity"], 1);
     let (code, _) = p.here.post("/api/capacity", r#"{"worker": "nope", "slots": 1}"#, WRITE_HEADERS);
     assert_eq!(code, 400);
 }

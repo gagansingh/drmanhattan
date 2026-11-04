@@ -193,13 +193,8 @@ fn a_name_that_is_still_live_waits_its_turn() {
 #[test]
 fn symlinked_state_files_are_refused() {
     let d = Daemon::start(&[]);
-    // A valid override, but behind a symlink: ignored.
     let evil = d.root.join("evil");
-    let until = chrono::Utc::now() + chrono::Duration::hours(1);
-    fs::write(&evil, format!("4 {}\n", until.to_rfc3339())).unwrap();
-    std::os::unix::fs::symlink(&evil, d.state.join("capacity-override")).unwrap();
-    assert_eq!(d.status_json()["capacity"], 1);
-    // A manual order behind a symlink is ignored too: the waiters keep the automatic order.
+    // A manual order behind a symlink is ignored: the waiters keep the automatic order.
     d.submit("blocker", d.job("sleep 30"));
     d.wait_state("blocker", "running", T);
     d.submit("first", d.job("true"));

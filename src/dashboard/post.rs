@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 use std::io::Read;
-use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::json;
@@ -13,18 +12,15 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{load_config, standing_capacity, write_manual_order, write_override, write_worker_override};
+use crate::settings::{load_config, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
-/// How long the − and + buttons' capacity lasts.
-const OVERRIDE_LASTS: Duration = Duration::from_secs(4 * 3600);
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CapacityBody {
-    /// None clears the override.
-    slots: Option<u32>,
+    slots: u32,
     /// A worker's slots rather than this machine's; 0 pauses it.
     #[serde(default)]
     worker: Option<String>,
@@ -67,35 +63,25 @@ fn object<T: serde::de::DeserializeOwned>(body: &str) -> Option<T> {
     }
 }
 
+/// The − and + buttons: the standing count in `config.json`, which stays until changed.
 fn set_capacity(req: Request, body: &str, ctx: &Ctx) {
-    if let Some(CapacityBody { slots, worker: Some(worker) }) = object::<CapacityBody>(body) {
-        return set_worker_capacity(req, &worker, slots, ctx);
-    }
-    let standing = standing_capacity(&ctx.paths, ctx.settings.slots_env.as_deref()).map_or(1, |(s, _)| s);
-    let ceiling = ctx.settings.capacity_ceiling(standing);
-    let slots = match object::<CapacityBody>(body) {
-        Some(CapacityBody { slots, worker: None }) if slots.map_or(true, |s| (1..=ceiling).contains(&s)) => slots,
-        _ => return http::error(req, format!("send {{\"slots\": 1 to {ceiling}}}, or {{\"slots\": null}} to clear")),
+    let Some(CapacityBody { slots, worker }) = object::<CapacityBody>(body) else {
+        return http::error(
+            req,
+            format!("send {{\"slots\": 1 to {MAX_SLOTS}}}, with \"worker\" for a worker's (0 pauses it)"),
+        );
     };
-    match write_override(&ctx.paths, slots, OVERRIDE_LASTS) {
-        Ok(o) => http::json(req, 200, &json!({ "override": o })),
-        Err(e) => http::error(req, e),
+    if let Some(worker) = worker {
+        return match set_worker_slots(&ctx.paths, &worker, slots) {
+            Ok(slots) => http::json(req, 200, &json!({ "worker": worker, "slots": slots })),
+            Err(e) => http::error(req, e),
+        };
     }
-}
-
-/// A worker's override: 0 (paused) up to the dashboard's ceiling, or null to go back to its
-/// `slots` in config.json.
-fn set_worker_capacity(req: Request, worker: &str, slots: Option<u32>, ctx: &Ctx) {
-    let workers = load_config(&ctx.paths).map(|c| c.workers).unwrap_or_default();
-    let Some(w) = workers.iter().find(|w| w.name == worker) else {
-        return http::error(req, format!("no worker is named {worker:?}"));
-    };
-    let ceiling = ctx.settings.capacity_ceiling(w.slots);
-    if slots.is_some_and(|s| s > ceiling) {
-        return http::error(req, format!("send {{\"worker\": …, \"slots\": 0 to {ceiling}}}, or null to clear"));
+    if let Some(raw) = &ctx.settings.slots_env {
+        return http::error(req, format!("DRMANHATTAN_SLOTS={raw} is set for the daemon, and it decides the slots"));
     }
-    match write_worker_override(&ctx.paths, &w.name, slots, OVERRIDE_LASTS) {
-        Ok(o) => http::json(req, 200, &json!({ "worker": w.name, "override": o })),
+    match set_slots(&ctx.paths, slots) {
+        Ok(slots) => http::json(req, 200, &json!({ "slots": slots })),
         Err(e) => http::error(req, e),
     }
 }

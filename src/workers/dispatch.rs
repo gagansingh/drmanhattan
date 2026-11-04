@@ -18,7 +18,6 @@ use std::time::Duration;
 use crate::fsutil;
 use crate::job::{CommandSpec, Job, JobSpec, Record, SourceSpec, SyncSpec};
 use crate::paths::Paths;
-use crate::settings::worker_capacity;
 use crate::workers::host::{hostname, MachineStats, ProbeRequest, PROTOCOL};
 use crate::workers::{mirror, ssh, WorkerConfig};
 
@@ -118,7 +117,7 @@ pub(crate) fn dispatch(
     if let Some(why) = unusable(&stats) {
         return Err(worker_fails(why));
     }
-    let granted = worker_capacity(paths, worker);
+    let granted = worker.slots;
     if stats.running >= granted as usize {
         return Err(worker_fails(format!("busy: {} job(s) running there", stats.running)));
     }

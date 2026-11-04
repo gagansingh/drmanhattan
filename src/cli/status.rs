@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::job::{PrepareState, Record, RunId, State};
 use crate::paths::Paths;
 use crate::queue::{rank, read_records};
-use crate::settings::{effective_capacity, read_manual_order, read_override, Override};
+use crate::settings::{effective_capacity, read_manual_order};
 use crate::time::{human, Timestamp};
 
 const STATUS: Spec = Spec {
@@ -54,8 +54,6 @@ struct StatusDoc<'a> {
     auto_update_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     update: Option<crate::update::Available>,
-    #[serde(rename = "override")]
-    capacity_override: Option<Override>,
     running: Vec<RunningDoc<'a>>,
     waiters: Vec<WaiterDoc<'a>>,
     /// The workers in config.json (see `drmanhattan workers`).
@@ -196,7 +194,6 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
-        capacity_override: read_override(paths),
         running: running
             .into_iter()
             .map(|r| RunningDoc {
@@ -254,9 +251,6 @@ fn print_text(doc: &StatusDoc) {
     }
     if doc.auto_update {
         head.push(kv("auto_update_state", &doc.auto_update_state));
-    }
-    if let Some(o) = &doc.capacity_override {
-        head.extend([kv("override", o.slots), kv("override_until", o.until)]);
     }
     if let Some(d) = &doc.daemon {
         head.push(kv("daemon_pid", d.pid));

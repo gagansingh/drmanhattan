@@ -71,6 +71,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     let patterns = Patterns::compile(&load_config(&paths)?.activity.unwrap_or_default())
         .map_err(|e| Error::Invalid(format!("{} has invalid activity patterns: {e}", paths.config().display())))?;
     let inbox = setup::prepare_inbox(&opts.inbox)?;
+    crate::settings::remove_timed_overrides(&paths);
 
     let mut queue = Queue::new(paths.clone(), settings.clone(), inbox.clone(), patterns);
     let recovery = queue.recover();

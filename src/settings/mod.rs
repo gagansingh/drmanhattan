@@ -1,5 +1,5 @@
 //! Everything that tunes the queue: environment variables (`Settings`), the persistent
-//! `config.json`, the slot capacity and its timed override, and the manual queue order.
+//! `config.json`, the slot capacity, and the manual queue order.
 
 mod capacity;
 mod config;
@@ -9,8 +9,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 pub(crate) use capacity::{
-    effective_capacity, read_override, read_worker_override, standing_capacity, worker_capacity, write_override,
-    write_worker_override, Override, MAX_SLOTS,
+    effective_capacity, remove_timed_overrides, set_slots, set_worker_slots, standing_capacity, MAX_SLOTS,
 };
 pub(crate) use config::{load_config, save_config};
 pub(crate) use manual_order::{read_manual_order, write_manual_order, ManualOrder};
@@ -35,7 +34,6 @@ pub(crate) struct Settings {
     /// Archived run records leave after this long.
     pub(crate) archive_retention: Duration,
     /// The ceiling of the dashboard's + button.
-    pub(crate) dashboard_max_slots: u32,
     /// The most a running job's log may hold, in bytes. Past it, the earlier output is
     /// dropped and the newest kept.
     pub(crate) max_log_bytes: u64,
@@ -75,12 +73,6 @@ impl Settings {
             max_skip: seconds_env("DRMANHATTAN_MAX_SKIP_SECONDS", 600.0, 0.0)?,
             retention: days_env("DRMANHATTAN_LOG_RETENTION_DAYS", 7)?,
             archive_retention: days_env("DRMANHATTAN_ARCHIVE_DAYS", 90)?,
-            dashboard_max_slots: env_or(
-                "DRMANHATTAN_DASHBOARD_MAX_SLOTS",
-                4,
-                |v| (1..=MAX_SLOTS).contains(v),
-                &format!("an integer from 1 to {MAX_SLOTS}"),
-            )?,
             slots_env: std::env::var("DRMANHATTAN_SLOTS").ok(),
             shell_env: std::env::var("DRMANHATTAN_SHELL_ENV").map_or(true, |v| v.trim() != "0"),
             shell_env_timeout: seconds_env("DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS", 10.0, 0.1)?,
@@ -106,14 +98,6 @@ impl Settings {
             )? * 1024
                 * 1024,
         })
-    }
-}
-
-impl Settings {
-    /// The highest capacity the dashboard's + button offers: the configured ceiling, or the
-    /// standing capacity when that is higher.
-    pub(crate) fn capacity_ceiling(&self, standing: u32) -> u32 {
-        self.dashboard_max_slots.max(standing)
     }
 }
 

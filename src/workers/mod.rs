@@ -35,12 +35,12 @@ pub(crate) struct Slots {
 }
 
 /// The workers in `config.json`, as admission sees them now.
-pub(crate) fn slots(paths: &crate::paths::Paths, workers: &[WorkerConfig]) -> Vec<Slots> {
+pub(crate) fn slots(workers: &[WorkerConfig]) -> Vec<Slots> {
     workers
         .iter()
         .map(|w| Slots {
             name: w.name.clone(),
-            capacity: crate::settings::worker_capacity(paths, w),
+            capacity: w.slots,
             tags: w.tags.clone(),
             unavailable: pool().get(&w.name).unavailable().is_some(),
         })
