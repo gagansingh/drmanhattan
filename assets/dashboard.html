@@ -758,7 +758,7 @@ function plainTemperature(t) {
 /** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
  *  worker), its CPU, memory and temperature, and why it is not taking work. */
 function machineBar(m, d, open) {
-  const s = m.local ? { load: d.load, ncpu: d.ncpu, cpu_pct: d.cpu_pct, memory: d.memory, thermals: d.thermals } : (m.stats || {});
+  const s = m.local ? { load: d.load, ncpu: d.ncpu, cpu_pct: d.cpu_pct, memory: d.memory, thermals: d.thermals, battery: d.battery } : (m.stats || {});
   const online = m.local || m.online === true ? 'online' : m.online === false ? 'offline' : 'not asked yet';
   const dot = online === 'online' ? '' : online === 'offline' ? ' off' : ' unknown';
   const cap = m.capacity, min = m.local ? 1 : 0, max = d.capacity_max || 256;
@@ -770,7 +770,7 @@ function machineBar(m, d, open) {
     + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${fixed || cap <= min ? 'disabled' : ''} title="${esc(fewer)}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
     + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button></span>`;
   const figures = online === 'offline' ? ''
-    : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals));
+    : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals)) + batteryFigure(s.battery);
   const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
   const reason = m.reason
     ? `<span class="reason" title="${m.reason_until ? `Tried again after ${esc(clock(m.reason_until))}` : ''}">not taking work: ${esc(m.reason)}</span>`
@@ -1029,8 +1029,8 @@ function renderFinished(d) {
 /* ================================================================ the machine (header) */
 
 /** One header figure. A warning colour is also said in words, for screen readers. */
-function figure(cls, title, html, action = '') {
-  const level = cls.includes('hot') ? '<span class="sr">, very high</span>' : cls.includes('warm') ? '<span class="sr">, high</span>' : '';
+function figure(cls, title, html, action = '', words = ['high', 'very high']) {
+  const level = cls.includes('hot') ? `<span class="sr">, ${words[1]}</span>` : cls.includes('warm') ? `<span class="sr">, ${words[0]}</span>` : '';
   return action
     ? `<button class="figure${cls}" data-action="${action}" title="${esc(title)}">${html}${level}</button>`
     : `<span class="figure${cls}" title="${esc(title)}">${html}${level}</span>`;
@@ -1048,6 +1048,22 @@ function cpuFigure(load, cores, usage) {
       + (perCore > 1 ? 'With more than one per core they take turns.' : 'Under one per core, nothing waits for a core.')
       + `\nLoad over 1, 5 and 15 minutes: ${load.join(', ')}` : '');
   return figure(cls, title, (usage != null ? `CPU <b>${usage}%</b>` : '') + (perCore != null ? `${usage != null ? ' · ' : ''}load <b>${per}×</b>` : ''));
+}
+
+/** The battery: its charge, amber at 20% or less and red at 10% or less while it runs on
+ *  battery, when it says to plug in; amber too when the system says the battery needs service. */
+function batteryFigure(b) {
+  if (!b) return '';
+  const low = !b.on_power && b.percent <= 20, critical = !b.on_power && b.percent <= 10;
+  const unwell = b.health && !/^good$/i.test(b.health);
+  const cls = critical ? ' hot' : low || unwell ? ' warm' : '';
+  const time = b.minutes ? `${Math.floor(b.minutes / 60)}:${String(b.minutes % 60).padStart(2, '0')}` : '';
+  const state = b.charging ? `charging${time ? `, full in ${time}` : ''}`
+    : b.on_power ? 'plugged in' : `on battery${time ? `, ${time} left` : ''}`;
+  const title = `Battery ${b.percent}%, ${state}.` + (b.health ? `\nHealth: ${b.health}.` : '')
+    + (low ? '\nPlug it in soon.' : '');
+  const note = low ? ' · <b>plug in</b>' : b.charging ? ' · charging' : '';
+  return figure(cls, title, `Batt <b>${b.percent}%</b>${note}`, '', [low ? 'low' : 'needs service', 'very low']);
 }
 
 /** Memory as Activity Monitor shows it, coloured by the system's memory pressure. */
@@ -1086,7 +1102,7 @@ function temperatureFigure(t, now) {
 }
 
 function renderMachine(d) {
-  put($('#machine'), cpuFigure(d.load, d.ncpu, d.cpu_pct) + memoryFigure(d.memory) + temperatureFigure(d.thermals, d.now));
+  put($('#machine'), cpuFigure(d.load, d.ncpu, d.cpu_pct) + memoryFigure(d.memory) + temperatureFigure(d.thermals, d.now) + batteryFigure(d.battery));
 }
 
 /* ================================================================ first visit */
