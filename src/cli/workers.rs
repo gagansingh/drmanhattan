@@ -169,15 +169,32 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
     if let Some(why) = workers::unusable(&stats) {
         return invalid(format!("{alias} cannot be a worker yet: {why}"));
     }
-    // The probe may have taken a while: apply this worker to the file as it is now.
-    let existed = update_config(paths, |config| {
-        let at = config.workers.iter().position(|w| w.ssh == alias || w.name == worker.name);
-        match at {
-            Some(i) => config.workers[i] = worker.clone(),
-            None => config.workers.push(worker.clone()),
-        }
+    // The probe may have taken a while: change the file as it is now, and only in what was
+    // asked, so a change made meanwhile (a − or + on the dashboard) stays.
+    let (existed, worker) = update_config(paths, |config| {
+        let at = config.workers.iter().position(|w| w.ssh == alias || name.is_some_and(|n| w.name == n));
+        let i = match at {
+            Some(i) => {
+                let w = &mut config.workers[i];
+                w.ssh = alias.to_string();
+                if let Some(n) = name {
+                    w.name = n.to_string();
+                }
+                if let Some(s) = slots {
+                    w.slots = s;
+                }
+                if !tags.is_empty() {
+                    w.tags = tags.to_vec();
+                }
+                i
+            }
+            None => {
+                config.workers.push(worker.clone());
+                config.workers.len() - 1
+            }
+        };
         workers::validate(&mut config.workers)?;
-        Ok(at.is_some())
+        Ok((at.is_some(), config.workers[i].clone()))
     })?;
     let verb = if existed { "updated" } else { "added" };
     println!("{verb} worker {} (ssh {}, {} slot(s) for this machine)", worker.name, worker.ssh, worker.slots);
