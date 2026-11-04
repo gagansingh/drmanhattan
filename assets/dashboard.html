@@ -965,7 +965,7 @@ function queuedRow(run, i, d) {
     running: ['preparing', 'Its prepare command is running; it can take a slot once that succeeds'],
     succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
   const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
-    + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">runs here</span>` : '')
+    + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">${run.stays_here ? 'runs here' : 'bounced'}</span>` : '')
     + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (run.quick ? `<span class="note" title="Starts without waiting for a slot once a quick place frees: ${esc(run.lane_reason || '')}">quick</span>` : '')

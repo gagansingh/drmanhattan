@@ -138,7 +138,8 @@ impl Queue {
     /// nowhere yet. A job runs here unless its `remote` says otherwise: `allowed` goes to a
     /// worker only while every slot here is busy, `prefer` to a free worker first. A worker
     /// must have a free slot, every tag the job `requires`, and not be out of admission after
-    /// a failure; a run that a worker could not take stays here.
+    /// a failure. A run a worker failed for a reason of its own stays here; one bounced by an
+    /// unavailable worker may go to a worker again once one is available.
     fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
         let running_on = |m: Option<&str>| {
             self.records(State::Running).filter(|r| r.machine.as_deref() == m && r.holds_slot()).count()
@@ -146,7 +147,7 @@ impl Queue {
         // A worker's dispatcher may grant more of its slots than it would use itself.
         let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
         let here = (running_on(None) < local_capacity as usize).then_some(None);
-        if rec.job.remote == RemoteMode::Never || rec.remote_fallback.is_some() {
+        if rec.job.remote == RemoteMode::Never || rec.stays_here {
             return here;
         }
         let worker = workers

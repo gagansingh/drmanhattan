@@ -152,7 +152,8 @@ fn a_failed_dispatch_runs_the_job_here_with_one_line_in_its_log() {
     assert!(s["machine"].is_null(), "{s}");
     assert!(s["remote_fallback"].as_str().unwrap().contains("postgres is not answering"), "{s}");
     let log = p.here.log_of("pref");
-    assert!(log.contains("worker w1 unavailable: its check failed: postgres is not answering; running here"), "{log}");
+    assert!(log.contains("worker w1 unavailable: its check failed: postgres is not answering; back in the queue"), "{log}");
+    assert!(s.get("stays_here").is_none_or(|v| v == false), "the worker's fault: it may go to a worker again: {s}");
     assert!(log.contains("ran here"));
     let w = p.here.status_json()["workers"][0].clone();
     assert_eq!(w["state"], "unavailable", "{w}");
@@ -208,11 +209,11 @@ fn the_worker_is_on_the_dashboard_with_its_readings_and_slots() {
     let m = wait_for(T, || {
         let st = p.here.api_state();
         let m = st["machines"].clone();
-        (m[1]["online"] == true && m[1]["stats"]["ncpu"].is_number()).then_some(m)
+        (m[1]["online"] == true && m[1]["stats"]["ncpu"].is_number() && m[1]["capacity"] == 2).then_some(m)
     })
-    .expect("the worker's readings arrive");
+    .expect("the worker's readings arrive, with its own slot count (2) in place of config.json's 1");
     assert_eq!((&m[0]["name"], &m[0]["local"]), (&json!("local"), &json!(true)));
-    assert_eq!((&m[1]["name"], &m[1]["capacity"]), (&json!("w1"), &json!(1)));
+    assert_eq!(m[1]["name"], "w1");
     // − to 0 pauses it.
     let (code, body) = p.here.post("/api/capacity", r#"{"worker": "w1", "slots": 0}"#, WRITE_HEADERS);
     assert_eq!(code, 200, "{body}");
