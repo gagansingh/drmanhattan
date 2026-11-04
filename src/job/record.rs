@@ -158,6 +158,12 @@ pub(crate) struct Record {
     /// Why a worker could not take it: it runs here from then on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) remote_fallback: Option<String>,
+    /// A quick run: it starts without waiting for a slot (see `HistoryIndex::lane`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) quick: bool,
+    /// Why it is quick, or waits for a slot; none for a service.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) lane_reason: Option<String>,
 }
 
 /// A run handed to a worker: its job there, and how much of its log came back.
@@ -204,6 +210,8 @@ impl Record {
             remote_run: None,
             remote_fallback: None,
             ready_at: None,
+            quick: false,
+            lane_reason: None,
             job,
         }
     }
@@ -294,6 +302,8 @@ mod tests {
             "notes",
             "prepare_status",
             "remote_run",
+            "quick",
+            "lane_reason",
         ];
         for key in record_only {
             assert!(job_fields.get(key).is_none(), "a job field is named {key}, which the record uses too");

@@ -2,11 +2,18 @@
 
 use crate::error::{invalid, Result};
 
-/// Shell words that say nothing about what a command does; skipped when naming a job.
-const SHELL_BOOKKEEPING: [&str; 22] = [
-    "cd", "echo", "printf", "set", "export", "source", ".", "true", "false", ":", "if", "then", "for", "while",
-    "until", "case", "test", "[", "eval", "exec", "exit", "return",
+/// Shell words that say nothing about what a command does; skipped when naming a job, with
+/// their arguments.
+const SHELL_BOOKKEEPING: [&str; 16] = [
+    "cd", "echo", "printf", "set", "export", "source", ".", "true", "false", ":", "for", "case", "test", "[", "exit",
+    "return",
 ];
+/// Shell words a command follows (`do cargo build`, `if make test`) or that only close one
+/// (`fi`, `done`): skipped, and the next word is still where a command starts.
+const SHELL_KEYWORDS: [&str; 14] =
+    ["if", "then", "else", "elif", "while", "until", "do", "exec", "time", "!", "done", "fi", "esac", "eval"];
+/// What separates one command from the next.
+const SEPARATORS: [&str; 5] = [";", "&&", "||", "|", "&"];
 const SHELLS: [&str; 4] = ["sh", "bash", "zsh", "dash"];
 const INTERPRETERS: [&str; 9] = ["sh", "bash", "zsh", "dash", "python", "python3", "node", "ruby", "perl"];
 const MAX_NAME_CHARS: usize = 40;
@@ -80,33 +87,175 @@ pub(crate) fn default_label(command: &[String]) -> String {
     truncated(&label.join(" "))
 }
 
-/// The first command in a shell script that is not shell bookkeeping. Words are scanned in
-/// order; a command starts the script and follows each `;`, `&&`, `||`, `|` or `&`.
-/// Assignments before a command, redirections and quoted words are skipped.
+/// The first command in a shell script that is not shell bookkeeping.
 fn first_command_in_script(script: &str) -> Option<String> {
+    commands_in_script(script).into_iter().next().map(|name| truncated(&name))
+}
+
+/// The programs a shell script runs, shell bookkeeping aside, in order: the word where each
+/// command starts, at the start of the script and after each separator (`;`, `&&`, `||`,
+/// `|`, `&`, a line break) or keyword (`do`, `then`, ...). Assignments before a command,
+/// redirections and quoted words are not programs.
+fn commands_in_script(script: &str) -> Vec<String> {
+    let mut found = Vec::new();
     let mut at_start = true;
-    for raw in script.split_whitespace() {
-        let word = raw.trim_start_matches(['(', '{']);
-        let ends_command = ["&&", "||", ";", "|", "&"].contains(&word) || word.ends_with(';');
-        if at_start && !ends_command {
-            let is_assignment = word.contains('=') && !word.starts_with('=');
-            if !is_assignment {
-                let name = basename(word.trim_end_matches(';'));
-                let not_a_program = name.is_empty()
-                    || name.starts_with(['>', '<', '$', '"', '\'', '`'])
-                    || name.starts_with(|c: char| c.is_ascii_digit())
-                    || SHELL_BOOKKEEPING.contains(&name);
-                if !not_a_program {
-                    return Some(truncated(name));
-                }
-                at_start = false;
-            }
-        }
-        if ends_command {
+    for word in script_words(script) {
+        if SEPARATORS.contains(&word.as_str()) {
             at_start = true;
+            continue;
+        }
+        if !at_start {
+            continue;
+        }
+        let word = word.trim_start_matches(['(', '{']).trim_end_matches([')', '}']);
+        let is_assignment = word.contains('=') && !word.starts_with(['=', '"', '\'']);
+        let name = basename(word);
+        if is_assignment || name.is_empty() || SHELL_KEYWORDS.contains(&name) {
+            continue;
+        }
+        let not_a_program = name.starts_with(['>', '<', '$', '"', '\'', '`'])
+            || name.starts_with(|c: char| c.is_ascii_digit())
+            || SHELL_BOOKKEEPING.contains(&name);
+        if !not_a_program {
+            found.push(name.to_string());
+        }
+        at_start = false;
+    }
+    found
+}
+
+/// A shell script's words, with each separator a word of its own and a line break as `;`.
+/// Quoted text and command substitutions (`$(...)`, backquotes) stay in their word, quotes
+/// and all; a `#` that starts a word outside quotes begins a comment; a backslash-newline
+/// joins two lines.
+fn script_words(script: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut quote: Option<char> = None;
+    // Inside `$(`: how deep; inside backquotes.
+    let (mut depth, mut backquoted) = (0usize, false);
+    let mut chars = script.chars().peekable();
+    while let Some(c) = chars.next() {
+        if depth > 0 || backquoted {
+            word.push(c);
+            match c {
+                '(' => depth += usize::from(depth > 0),
+                ')' if depth > 0 => depth -= 1,
+                '`' if backquoted => backquoted = false,
+                _ => {}
+            }
+            continue;
+        }
+        if let Some(q) = quote {
+            word.push(c);
+            if c == q {
+                quote = None;
+            } else if c == '\\' && q == '"' {
+                word.extend(chars.next());
+            }
+            continue;
+        }
+        match c {
+            '\'' | '"' => {
+                quote = Some(c);
+                word.push(c);
+            }
+            '$' if chars.peek() == Some(&'(') => {
+                word.push(c);
+                word.extend(chars.next());
+                depth = 1;
+            }
+            '`' => {
+                word.push(c);
+                backquoted = true;
+            }
+            '\\' => match chars.next() {
+                Some('\n') => {}
+                next => {
+                    word.push(c);
+                    word.extend(next);
+                }
+            },
+            '#' if word.is_empty() => while chars.next_if(|n| *n != '\n').is_some() {},
+            // `2>&1`, `>&2`, `&>log`: a redirection, not a separator.
+            '&' if word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => word.push(c),
+            ';' | '\n' | '&' | '|' => {
+                words.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
+                let mut op = if c == '\n' { ";".to_string() } else { c.to_string() };
+                if matches!(c, '&' | '|') && chars.next_if_eq(&c).is_some() {
+                    op.push(c);
+                }
+                words.push(op);
+            }
+            c if c.is_whitespace() => words.extend((!word.is_empty()).then(|| std::mem::take(&mut word))),
+            c => word.push(c),
         }
     }
-    None
+    words.extend((!word.is_empty()).then_some(word));
+    words
+}
+
+/// For `sh -c '<script>'`: the programs it runs besides the one that names the job, when it
+/// is plain commands joined by `;`, `&&`, `||`, `|`, `&` or line breaks, each a named program
+/// or shell bookkeeping (`cd`, `echo`, `export`, ...). Anything else, whose programs cannot
+/// be listed with confidence, is an error saying what: a shell given other options, inline
+/// code for an interpreter, a substitution or other expansion, a sourced script, control
+/// flow, a command word that is not a plain name. Any other command is one program.
+pub(crate) fn script_shape(command: &[String]) -> std::result::Result<Vec<String>, String> {
+    let words = without_env(command);
+    let Some(program) = words.first().map(|w| basename(w)) else { return Ok(Vec::new()) };
+    let flags: Vec<&String> = words[1..].iter().take_while(|w| w.starts_with('-')).collect();
+    let script = match words {
+        [_, flag, script, ..] if SHELLS.contains(&program) && flag == "-c" => script,
+        _ if SHELLS.contains(&program) && !flags.is_empty() => {
+            return Err(format!("runs {program} {}", flags.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(" ")));
+        }
+        _ if INTERPRETERS.contains(&program) && flags.iter().any(|f| f.contains(['c', 'e'])) => {
+            return Err(format!("runs inline {program} code"));
+        }
+        _ => return Ok(Vec::new()),
+    };
+    // Expansions and definitions whose commands a plain scan cannot see.
+    if let Some(found) = ["$(", "${", "$'", "`", "<(", ">(", "=(", "()"].iter().find(|s| script.contains(**s)) {
+        return Err(format!("contains {found}"));
+    }
+    let words = script_words(script);
+    let mut programs = Vec::new();
+    let mut at_start = true;
+    for word in &words {
+        if SEPARATORS.contains(&word.as_str()) {
+            at_start = true;
+            continue;
+        }
+        if !at_start {
+            continue;
+        }
+        let word = word.trim_start_matches(['(', '{']).trim_end_matches([')', '}']);
+        if word.is_empty() || (word.contains('=') && !word.starts_with(['=', '"', '\''])) {
+            continue; // a group's bracket, or an assignment before the command
+        }
+        let name = basename(word);
+        if [".", "source"].contains(&name) {
+            return Err("runs another script".into());
+        }
+        if SHELL_KEYWORDS.contains(&name) || ["for", "case", "select", "function"].contains(&name) {
+            return Err(format!("uses {name}"));
+        }
+        let plain = |c: char| c.is_ascii_alphanumeric() || "_-.+/~".contains(c);
+        if !word.chars().all(plain) || !name.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(format!("runs {word}, which is not a plain name"));
+        }
+        if !SHELL_BOOKKEEPING.contains(&name) {
+            programs.push(name.to_string());
+        }
+        at_start = false;
+    }
+    if let Some(first) = first_command_in_script(script) {
+        if let Some(at) = programs.iter().position(|p| *p == first) {
+            programs.remove(at);
+        }
+    }
+    Ok(programs)
 }
 
 /// A label made safe for a file name: letters, digits, `_`, `.` and `-`, not starting with
@@ -166,6 +315,73 @@ pub(crate) fn shell_words(command: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_of_plain_commands_lists_the_programs_after_its_first() {
+        let sh = |script: &str| vec!["/bin/sh".to_string(), "-c".into(), script.into()];
+        let later = |script: &str| script_shape(&sh(script));
+        let ok = |names: &[&str]| Ok(names.iter().map(|n| n.to_string()).collect::<Vec<_>>());
+        assert_eq!(later("cd repo && git status"), ok(&[]));
+        assert_eq!(later("git log | head -20"), ok(&["head"]));
+        assert_eq!(later("cd repo && git pull && cargo build --release"), ok(&["cargo"]));
+        assert_eq!(later("make deps\nmake build"), ok(&["make"]));
+        assert_eq!(later("git commit -m \"fix #12\" && cargo build"), ok(&["cargo"]));
+        assert_eq!(later("git commit -m 'a; b | c' && git push"), ok(&["git"]));
+        assert_eq!(later("echo a#b; git log | head -3"), ok(&["head"]));
+        assert_eq!(later("cargo build \\\n  --release"), ok(&[]));
+        assert_eq!(later("(cd app && npm test)"), ok(&[]));
+        assert_eq!(script_shape(&["git".into(), "status".into()]), ok(&[]));
+        // Anything but plain commands cannot be listed with confidence.
+        for (script, found) in [
+            ("git fetch && echo \"$(swift build 2>&1 | tail -1)\"", "$("),
+            ("git fetch && echo $( cargo build )", "$("),
+            ("git log -1 && `make`", "`"),
+            ("git status && diff <(cargo build 2>&1) ref.txt", "<("),
+            ("VERSION=$(git describe) && cargo build", "$("),
+            ("git commit -m $'don\\'t' && cargo build", "$'"),
+            ("git log ${ cargo build; }", "${"),
+            ("git diff =(cargo build) x", "=("),
+            ("git () { cargo build; }; git status", "()"),
+        ] {
+            assert_eq!(later(script), Err(format!("contains {found}")), "{script}");
+        }
+        assert_eq!(later("git log 2>&1 | head"), ok(&["head"]), "a redirection is not a separator");
+        assert_eq!(later("git log &>/dev/null; git status"), ok(&["git"]));
+        assert_eq!(
+            later("git status; 2>/tmp/git cargo build"),
+            Err("runs 2>/tmp/git, which is not a plain name".into())
+        );
+        assert_eq!(
+            later("git status; cargo>/tmp/head build"),
+            Err("runs cargo>/tmp/head, which is not a plain name".into())
+        );
+        let cmd = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(script_shape(&cmd(&["bash", "-lc", "git status && cargo build"])), Err("runs bash -lc".into()));
+        assert_eq!(script_shape(&cmd(&["bash", "-o", "pipefail", "-c", "x"])), Err("runs bash -o".into()));
+        assert_eq!(script_shape(&cmd(&["python3", "-c", "print(1)"])), Err("runs inline python3 code".into()));
+        assert_eq!(script_shape(&cmd(&["sh", "build.sh"])), ok(&[]), "a script file is one program");
+        assert_eq!(script_shape(&cmd(&["env", "A=1", "sh", "-c", "git status"])), ok(&[]));
+        assert_eq!(later("git pull && . ./build.sh"), Err("runs another script".into()));
+        assert_eq!(later("git pull && source build.sh"), Err("runs another script".into()));
+        assert_eq!(later("git pull && for d in a b; do cargo build; done"), Err("uses for".into()));
+        assert_eq!(later("git status && if [ -f x ]; then cargo build; fi"), Err("uses if".into()));
+        assert_eq!(later("git status && case x in x) cargo build;; esac"), Err("uses case".into()));
+        assert_eq!(later("git status && $CARGO build"), Err("runs $CARGO, which is not a plain name".into()));
+        assert_eq!(later("git status && >log cargo build"), Err("runs >log, which is not a plain name".into()));
+    }
+
+    #[test]
+    fn a_script_is_named_after_its_first_program() {
+        let sh = |script: &str| vec!["/bin/sh".to_string(), "-c".into(), script.into()];
+        assert_eq!(derive_category(&sh("set -e\n# build it\ncargo build # fast")), "cargo");
+        assert_eq!(derive_category(&sh("if [ -d x ]; then\n  echo hi\nfi\ncargo build")), "cargo");
+        assert_eq!(derive_category(&sh("cd repo\nnpm test")), "npm");
+        assert_eq!(derive_category(&sh("if cargo test; then echo ok; fi")), "cargo");
+        assert_eq!(derive_category(&sh("FOO=1 BAR='x y' make test")), "make");
+        assert_eq!(derive_category(&sh("(cd app && npm test)")), "npm");
+        assert_eq!(derive_category(&sh("VERSION=$(git describe) && cargo build")), "cargo");
+        assert_eq!(derive_category(&sh("x=$(cargo build) && make")), "make");
+    }
 
     #[test]
     fn shell_words_quote_what_a_shell_would_split() {

@@ -127,6 +127,8 @@ impl Queue {
         }
         done.exits_rewritten = self.rewrite_missing_exits();
         done.reclaimed = self.reclaim_orphaned_job_files();
+        // Waiters from the last daemon, or from before lanes, are judged on today's history.
+        self.refresh_lanes();
         done
     }
 

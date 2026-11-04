@@ -111,6 +111,10 @@ struct WaiterDoc<'a> {
     prepare: Option<PrepareState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     group: Option<&'a str>,
+    /// Whether it starts without waiting for a slot, and why (see `HistoryIndex::lane`).
+    quick: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lane_reason: Option<&'a str>,
     job_file: &'a PathBuf,
 }
 
@@ -163,6 +167,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             manual: w.manual,
             prepare: r.prepare_status.as_ref().map(|p| p.state),
             group: r.job.group.as_deref(),
+            quick: r.quick,
+            lane_reason: r.lane_reason.as_deref(),
             job_file: &r.job.job_file,
         })
         .collect();
