@@ -23,7 +23,7 @@ use crate::job::{is_job_name, JobFiles, JobSpec, State};
 use crate::paths::{self, Paths};
 use crate::process;
 use crate::queue::read_records;
-use crate::settings::effective_capacity;
+use crate::settings::{effective_capacity, load_config};
 use crate::sysinfo;
 use crate::time::Timestamp;
 
@@ -55,6 +55,10 @@ pub(crate) struct MachineStats {
     /// Its battery, when it has one. Absent before 0.7.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) battery: Option<serde_json::Value>,
+    /// Paused as a worker on this machine (`drmanhattan pause`): it takes no jobs from others.
+    /// Absent before 0.7.2.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) paused: bool,
     /// Free space on the disk holding the home directory.
     pub(crate) free_gb: Option<f64>,
     /// Mirrors `__dispatch-probe` removed.
@@ -119,6 +123,7 @@ fn stats(paths: &Paths) -> MachineStats {
         memory: readings.memory.and_then(|m| serde_json::to_value(m).ok()),
         thermals: readings.thermals.and_then(|t| serde_json::to_value(t).ok()),
         battery: readings.battery.and_then(|b| serde_json::to_value(b).ok()),
+        paused: load_config(paths).is_ok_and(|c| c.paused),
         free_gb: free_gb(&home),
         home,
         pruned: Vec::new(),
@@ -136,7 +141,17 @@ pub(crate) fn machine_stats(rest: &[String]) -> Result<i32> {
         println!("usage: drmanhattan machine-stats\n\nPrints this machine's readings as JSON, for a dispatcher using it as a worker.");
         return Ok(0);
     }
-    print_json(&stats(&Paths::from_env()))
+    let paths = Paths::from_env();
+    seen_by_dispatcher(&paths);
+    print_json(&stats(&paths))
+}
+
+/// Notes that another machine uses this one as its worker, so the dashboard here offers to
+/// pause that.
+fn seen_by_dispatcher(paths: &Paths) {
+    if fsutil::ensure_private_dir(&paths.data).is_ok() {
+        let _ = fsutil::write_atomic(&paths.dispatcher_seen(), &format!("{}\n", Timestamp::now().epoch_seconds()));
+    }
 }
 
 /// What a dispatcher sends with a probe.
@@ -178,6 +193,7 @@ pub(crate) fn dispatch_probe(_rest: &[String]) -> Result<i32> {
     let req: ProbeRequest =
         serde_json::from_str(&read_stdin()?).map_err(|e| Error::Invalid(format!("not a probe request: {e}")))?;
     let paths = Paths::from_env();
+    seen_by_dispatcher(&paths);
     let pruned = housekeeping(&paths, &paths::home(), &req);
     let mut s = stats(&paths);
     s.pruned = pruned;
@@ -262,9 +278,12 @@ pub(crate) fn dispatch_submit(rest: &[String]) -> Result<i32> {
         [flag, name] if flag == "--name" && is_job_name(name) => name,
         _ => return invalid("usage: drmanhattan __dispatch-submit --name NAME < job.json"),
     };
+    let paths = Paths::from_env();
+    if load_config(&paths).is_ok_and(|c| c.paused) {
+        return invalid(format!("{} is paused as a worker (drmanhattan resume there)", hostname()));
+    }
     let text = read_stdin()?;
     let spec = JobSpec::parse(&text)?;
-    let paths = Paths::from_env();
     let Some(inbox) = daemon::running(&paths).and_then(|d| d.info).map(|i| i.inbox) else {
         return invalid("drmanhattan is not running on this machine");
     };

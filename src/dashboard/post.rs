@@ -12,7 +12,7 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
+use crate::settings::{set_paused, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
@@ -49,6 +49,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
     match path {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
+        "/api/pause" => set_pause(req, body, ctx),
         "/api/update" => start_update(req, ctx),
         "/api/auto-update" => set_auto_update(req, body, ctx),
         _ => set_order(req, body, ctx),
@@ -87,6 +88,31 @@ fn set_capacity(req: Request, body: &str, ctx: &Ctx) {
     }
     match set_slots(&ctx.paths, slots) {
         Ok(slots) => http::json(req, 200, &json!({ "slots": slots })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PauseBody {
+    paused: bool,
+    /// A worker, rather than this machine as a worker for others.
+    #[serde(default)]
+    worker: Option<String>,
+}
+
+/// Pause and resume: this machine as a worker for others, or one of this machine's workers
+/// (which is told over SSH, so its own dashboard shows it too).
+fn set_pause(req: Request, body: &str, ctx: &Ctx) {
+    let Some(PauseBody { paused, worker }) = object::<PauseBody>(body) else {
+        return http::error(req, "send {\"paused\": true or false}, with \"worker\" for a worker");
+    };
+    let done = match &worker {
+        Some(worker) => crate::workers::push_pause(&ctx.paths, worker, paused).map(|()| paused),
+        None => set_paused(&ctx.paths, paused),
+    };
+    match done {
+        Ok(paused) => http::json(req, 200, &json!({ "paused": paused, "worker": worker })),
         Err(e) => http::error(req, e),
     }
 }

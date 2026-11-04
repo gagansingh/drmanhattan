@@ -70,6 +70,9 @@ pub(crate) fn unusable(stats: &MachineStats) -> Option<String> {
     if !stats.daemon {
         return Some("its drmanhattan is not running".into());
     }
+    if stats.paused {
+        return Some(format!("paused on {}", stats.hostname));
+    }
     None
 }
 

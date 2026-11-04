@@ -112,4 +112,8 @@ impl Paths {
     pub(crate) fn config(&self) -> PathBuf {
         self.data.join("config.json")
     }
+    /// Touched whenever another machine asks for this one's readings, as its worker.
+    pub(crate) fn dispatcher_seen(&self) -> PathBuf {
+        self.data.join("dispatcher-seen")
+    }
 }

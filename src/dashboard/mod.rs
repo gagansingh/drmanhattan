@@ -84,7 +84,10 @@ fn handle(req: Request, ctx: &Ctx) {
         }
         (Method::Get, "/api/state") => http::json(req, 200, &state::build(ctx, &state::Query::parse(&url))),
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
-        (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/update" | "/api/auto-update") => {
+        (
+            Method::Post,
+            "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/pause" | "/api/update" | "/api/auto-update",
+        ) => {
             let path = path.to_string();
             post::handle(req, &path, ctx);
         }

@@ -22,6 +22,9 @@ pub(crate) struct Config {
     /// Other machines that run jobs for this one, over SSH.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) workers: Vec<WorkerConfig>,
+    /// Takes no jobs from other machines, as their worker, until resumed (`drmanhattan pause`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) paused: bool,
     /// Install newer releases of this major version by itself, once the queue is idle.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto_update: bool,

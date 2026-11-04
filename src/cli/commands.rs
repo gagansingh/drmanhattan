@@ -10,7 +10,7 @@ use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
-use crate::settings::{set_slots, standing_capacity, Settings, MAX_SLOTS};
+use crate::settings::{set_paused, set_slots, standing_capacity, Settings, MAX_SLOTS};
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -230,6 +230,35 @@ pub(super) fn slots(rest: &[String]) -> Result<i32> {
         ""
     };
     println!("standing capacity set to {n} slot{plural}{note}");
+    Ok(0)
+}
+
+const PAUSE: Spec = Spec {
+    usage: "\
+usage: drmanhattan pause
+       drmanhattan resume
+
+Pause stops this machine taking jobs from the other machines that use it as their worker,
+until resume; it is kept in config.json, so it lasts through restarts. Jobs it is already
+running for them finish, and its own jobs run as usual. Their dashboards show it paused,
+and can pause or resume it too.
+",
+    values: &[],
+    switches: &[],
+    positional: 0,
+};
+
+pub(super) fn pause(rest: &[String], paused: bool) -> Result<i32> {
+    let Some(_) = args::parse(&PAUSE, rest)? else { return Ok(0) };
+    set_paused(&Paths::from_env(), paused)?;
+    println!(
+        "{}",
+        if paused {
+            "paused: no jobs from other machines until `drmanhattan resume`"
+        } else {
+            "resumed: taking jobs from other machines"
+        }
+    );
     Ok(0)
 }
 

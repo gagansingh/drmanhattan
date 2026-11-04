@@ -152,7 +152,10 @@ fn a_failed_dispatch_runs_the_job_here_with_one_line_in_its_log() {
     assert!(s["machine"].is_null(), "{s}");
     assert!(s["remote_fallback"].as_str().unwrap().contains("postgres is not answering"), "{s}");
     let log = p.here.log_of("pref");
-    assert!(log.contains("worker w1 unavailable: its check failed: postgres is not answering; back in the queue"), "{log}");
+    assert!(
+        log.contains("worker w1 unavailable: its check failed: postgres is not answering; back in the queue"),
+        "{log}"
+    );
     assert!(s.get("stays_here").is_none_or(|v| v == false), "the worker's fault: it may go to a worker again: {s}");
     assert!(log.contains("ran here"));
     let w = p.here.status_json()["workers"][0].clone();
@@ -280,4 +283,36 @@ fn stopping_the_dispatcher_leaves_a_job_running_on_its_worker() {
     assert_eq!(p.here.wait_exit("job", T), 0);
     assert!(p.here.log_of("job").contains("two\n"));
     p.here.wait_daemon_log("job on a worker followed again");
+}
+
+#[test]
+fn a_worker_paused_from_either_machine_takes_nothing_until_resumed() {
+    let p = pair(json!({}));
+    let proj = project(&p.home, "proj");
+    let worker_paused = |p: &Pair| {
+        let config = fs::read_to_string(p.worker.data.join("config.json")).unwrap_or_default();
+        serde_json::from_str::<Value>(&config).unwrap_or_default()["paused"] == true
+    };
+    // Paused from this machine's dashboard: the worker is told, and says so in its readings.
+    let (code, body) = p.here.post("/api/pause", r#"{"worker": "w1", "paused": true}"#, WRITE_HEADERS);
+    assert_eq!(code, 200, "{body}");
+    wait_for(T, || worker_paused(&p).then_some(())).expect("the worker's config says paused");
+    wait_for(T, || (p.here.api_state()["machines"][1]["paused_there"] == true).then_some(()))
+        .expect("the dashboard shows it paused there");
+    p.here.submit("pref", json!({"command": "echo hi", "cwd": proj, "remote": "prefer"}));
+    assert_eq!(p.here.wait_exit("pref", T), 0);
+    assert!(p.here.status_of("pref").unwrap()["machine"].is_null(), "a paused worker takes nothing");
+    // It refuses a hand-over itself too, for a dispatcher that does not know about pausing.
+    let out = p.worker.cmd(&["__dispatch-submit", "--name", "sneaky"]).output().unwrap();
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("paused"), "{out:?}");
+    // Its own dashboard offers resume, and resuming there reaches this machine.
+    assert_eq!(p.worker.api_state()["paused"], true);
+    let (code, _) = p.worker.post("/api/pause", r#"{"paused": false}"#, WRITE_HEADERS);
+    assert_eq!(code, 200);
+    wait_for(T, || (p.here.api_state()["machines"][1]["paused_there"] == false).then_some(()))
+        .expect("the resume comes back with the next readings");
+    wait_for(T, || (p.here.status_json()["workers"][0]["state"] == "free").then_some(())).expect("free again");
+    p.here.submit("pref2", json!({"command": "echo hi", "cwd": proj, "remote": "prefer"}));
+    assert_eq!(p.here.wait_exit("pref2", T), 0);
+    assert_eq!(p.here.status_of("pref2").unwrap()["machine"], "w1");
 }

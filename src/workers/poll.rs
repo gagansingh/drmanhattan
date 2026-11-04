@@ -11,6 +11,7 @@ use crate::log;
 use crate::paths::Paths;
 use crate::settings::{load_config, set_worker_slots};
 use crate::workers::host::MachineStats;
+use crate::workers::WorkerConfig;
 use crate::workers::{dispatch, pool, ssh};
 
 const ANSWER_LIMIT: Duration = Duration::from_secs(20);
@@ -34,7 +35,7 @@ pub(crate) fn start_poller(paths: Paths, every: Duration) {
     });
 }
 
-fn poll_one(paths: &Paths, worker: &crate::workers::WorkerConfig) {
+fn poll_one(paths: &Paths, worker: &WorkerConfig) {
     let asked = Instant::now();
     let out = ssh::run(worker, &ssh::drmanhattan(worker, &["machine-stats"]), None, ANSWER_LIMIT);
     let stats: Option<MachineStats> = (out.code == 0).then(|| serde_json::from_str(out.stdout.trim()).ok()).flatten();
@@ -70,4 +71,26 @@ pub(crate) fn push_slots(paths: &Paths, worker: &str) {
         }
         pool().slots_set(&w.name, false);
     });
+}
+
+/// Pauses or resumes the worker, as `drmanhattan pause` or `resume` there, in the background.
+/// A pause keeps it out of admission here at once; either way it is asked again right after,
+/// so the dashboard shows what it says.
+pub(crate) fn push_pause(paths: &Paths, worker: &str, paused: bool) -> crate::error::Result<()> {
+    let Some(w) = load_config(paths)?.workers.into_iter().find(|w| w.name == worker) else {
+        return crate::error::invalid(format!("no worker is named {worker:?}"));
+    };
+    if paused {
+        pool().polled_unavailable(paths, worker, &format!("paused on {worker}"));
+    }
+    let paths = paths.clone();
+    let _ = std::thread::Builder::new().name("worker-pause".into()).spawn(move || {
+        let word = if paused { "pause" } else { "resume" };
+        let out = ssh::run(&w, &ssh::drmanhattan(&w, &[word]), None, ANSWER_LIMIT);
+        if out.code != 0 {
+            log::warn(format!("could not {word} {}: {}", w.name, out.first_line()));
+        }
+        poll_one(&paths, &w);
+    });
+    Ok(())
 }
