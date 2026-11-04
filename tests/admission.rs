@@ -259,9 +259,10 @@ fn the_quick_lane_has_its_own_limit_and_can_be_turned_off() {
     d.wait_state("blocker", "running", T);
     let job = || json!({"command": ["sh", "-c", "sleep 3"], "cwd": d.work, "label": "t", "category": "t"});
     d.submit("q1", job());
-    d.submit("q2", job());
     d.wait_state("q1", "running", T);
-    assert_eq!(d.status_of("q2").unwrap()["state"], "queued", "one quick place: q2 waits for q1");
+    d.submit("q2", job());
+    let q2 = d.wait_state("q2", "queued", T);
+    assert_eq!(q2["quick"], true, "one quick place: q2 waits for q1 though it is quick");
     assert_eq!(d.wait_exit("q2", T), 0);
     assert!(started(&d, "q2") >= epoch(&d.status_of("q1").unwrap()["finished_at"]) - 0.5);
     fs::write(d.inbox.join("blocker.cancel"), "").unwrap();
