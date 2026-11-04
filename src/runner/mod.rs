@@ -96,6 +96,7 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
     let (now, run_id) = (Timestamp::now().local_time(), &rec.run_id);
     say(&match phase {
         Phase::Run if rec.job.service => format!("{} started as a service at {now} · run {run_id}", rec.job.label),
+        Phase::Run if rec.quick => format!("{} started at once (quick) at {now} · run {run_id}", rec.job.label),
         Phase::Run => format!("{} started in slot {} at {now} · run {run_id}", rec.job.label, rec.slot.unwrap_or(0)),
         Phase::Prepare => format!("preparing {} at {now} · run {run_id}", rec.job.label),
     });

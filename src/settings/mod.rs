@@ -49,6 +49,9 @@ pub(crate) struct Settings {
     pub(crate) worker_poll: Duration,
     /// The most services that run at once; they take no build slots.
     pub(crate) max_services: usize,
+    /// The most quick runs at once (`DRMANHATTAN_QUICK`, the number of cores by default);
+    /// they take no slots either. 0 turns the quick lane off: every job waits for a slot.
+    pub(crate) max_quick: usize,
     /// Give jobs the user's login shell environment (`DRMANHATTAN_SHELL_ENV`, on unless `0`).
     pub(crate) shell_env: bool,
     /// How long that shell may take to print it.
@@ -82,6 +85,12 @@ impl Settings {
             shell_env: std::env::var("DRMANHATTAN_SHELL_ENV").map_or(true, |v| v.trim() != "0"),
             shell_env_timeout: seconds_env("DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS", 10.0, 0.1)?,
             max_services: env_or("DRMANHATTAN_SERVICES", 4, |v| *v <= 64, "a whole number from 0 to 64")?,
+            max_quick: env_or(
+                "DRMANHATTAN_QUICK",
+                crate::process::cpu_count(),
+                |v| *v <= 256,
+                "a whole number from 0 to 256",
+            )?,
             worker_poll: seconds_env("DRMANHATTAN_WORKER_POLL_SECONDS", 15.0, 0.1)?,
             max_prepares: env_or(
                 "DRMANHATTAN_MAX_PREPARES",

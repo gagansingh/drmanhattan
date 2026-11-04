@@ -234,6 +234,11 @@ impl Record {
         })
     }
 
+    /// Holds one of its machine's slots: neither a service nor a quick run.
+    pub(crate) fn holds_slot(&self) -> bool {
+        !self.job.service && !self.quick
+    }
+
     /// Queued, and its `prepare` (if it has one) has succeeded: it may take a slot.
     pub(crate) fn is_ready(&self) -> bool {
         self.state == State::Queued && self.prepare_status.as_ref().map_or(true, |p| p.state == PrepareState::Succeeded)

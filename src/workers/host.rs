@@ -107,7 +107,8 @@ fn stats(paths: &Paths) -> MachineStats {
         acknowledged: acknowledge::is_acknowledged(paths),
         daemon: running.is_some(),
         inbox: running.and_then(|d| d.info).map(|i| i.inbox),
-        running: read_records(paths).iter().filter(|r| r.state == State::Running).count(),
+        // What holds its slots: a service or a quick run there leaves them free.
+        running: read_records(paths).iter().filter(|r| r.state == State::Running && r.holds_slot()).count(),
         capacity: effective_capacity(paths, slots_env.as_deref()).unwrap_or(1),
         cpu_pct: readings.cpu_pct,
         load: process::load_averages().map(|l| l.map(|x| (x * 100.0).round() / 100.0)),

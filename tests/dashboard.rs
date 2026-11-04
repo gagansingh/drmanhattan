@@ -33,11 +33,12 @@ fn page_and_state_before_any_run() {
 #[test]
 fn state_reflects_runs_and_the_log_is_served() {
     let mut d = Daemon::start(&[]);
+    // Long enough not to be quick, so it holds the slot.
     d.seed_history(&[
-        ("sleep", "blocker", 10),
-        ("sleep", "blocker", 10),
-        ("sleep", "blocker", 10),
-        ("sleep", "blocker", 10),
+        ("sleep", "blocker", 40),
+        ("sleep", "blocker", 40),
+        ("sleep", "blocker", 40),
+        ("sleep", "blocker", 40),
     ]);
     d.submit("earlier", json!({"command": "echo hello; exit 2", "cwd": d.work}));
     assert_eq!(d.wait_exit("earlier", T), 2);
@@ -48,7 +49,7 @@ fn state_reflects_runs_and_the_log_is_served() {
     let state = d.api_state();
     let running = &state["running"][0];
     assert_eq!(running["label"], "blocker");
-    assert_eq!(running["typical_seconds"], 10.0);
+    assert_eq!(running["typical_seconds"], 40.0);
     assert_eq!(running["slot"], 1);
     assert!(running["remaining_estimate"].is_number() && running["elapsed"].is_number());
     assert_eq!(state["slots"][0]["run_id"], running["run_id"]);

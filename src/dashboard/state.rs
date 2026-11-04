@@ -222,9 +222,15 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
     let slots_env = ctx.settings.slots_env.as_deref();
     let standing = standing_capacity(&ctx.paths, slots_env).map_or(1, |(slots, _)| slots);
     let capacity = effective_capacity(&ctx.paths, slots_env).unwrap_or(1);
-    estimate_starts(&running, &mut queued, capacity, now);
-    let used: Vec<(u32, &crate::job::RunId)> =
-        snap.running.iter().filter_map(|(r, _, _)| Some((r.slot?, &r.run_id))).collect();
+    let quick_room = ctx.settings.max_quick.saturating_sub(running.iter().filter(|r| r.is_quick()).count());
+    estimate_starts(&running, &mut queued, capacity, quick_room, now);
+    // A quick run's number is not one of the slots.
+    let used: Vec<(u32, &crate::job::RunId)> = snap
+        .running
+        .iter()
+        .filter(|(r, _, _)| r.holds_slot())
+        .filter_map(|(r, _, _)| Some((r.slot?, &r.run_id)))
+        .collect();
     let top = used.iter().map(|(slot, _)| *slot).max().unwrap_or(0).max(capacity);
     let slots = (1..=top)
         .map(|n| SlotView { slot: n, run_id: used.iter().find(|(slot, _)| *slot == n).map(|(_, id)| (*id).clone()) })
@@ -271,7 +277,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
         return Vec::new();
     }
     let running_on =
-        |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && !r.job.service).count();
+        |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && r.holds_slot()).count();
     let override_view = |o: crate::settings::Override| OverrideView { slots: o.slots, until: o.until.epoch_seconds() };
     let mut out = vec![MachineView {
         name: "local".into(),
@@ -310,14 +316,25 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
     out
 }
 
-/// When each waiter should start, shown as its estimated start.
-fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, now: Timestamp) {
+/// When each waiter should start, shown as its estimated start. A quick waiter that the
+/// quick lane has room for, and whose group is free, starts now; any other is reckoned with
+/// the slots, which it takes when the lane is full.
+fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, quick_room: usize, now: Timestamp) {
     let now = now.epoch_seconds();
-    let busy = running.iter().map(|r| r.timing.remaining_estimate.map(|left| now + left));
+    let busy = running.iter().filter(|r| !r.is_quick()).map(|r| r.timing.remaining_estimate.map(|left| now + left));
     let mut free_at: Vec<Option<f64>> = busy.collect();
     free_at.resize(free_at.len().max(capacity as usize), Some(now));
-    let durations: Vec<Option<f64>> = queued.iter().map(RunView::typical_seconds).collect();
-    for (view, start) in queued.iter_mut().zip(start_times(free_at, &durations)) {
+    let mut room = quick_room;
+    let (quick, slot): (Vec<&mut RunView>, Vec<&mut RunView>) = queued.iter_mut().partition(|v| {
+        let starts_now = v.is_quick() && v.group_busy != Some(true) && room > 0;
+        room -= usize::from(starts_now);
+        starts_now
+    });
+    for view in quick {
+        view.eta = Some(Eta { eta_start: now, eta_wait: 0, eta_open_ended: false });
+    }
+    let durations: Vec<Option<f64>> = slot.iter().map(|v| v.typical_seconds()).collect();
+    for (view, start) in slot.into_iter().zip(start_times(free_at, &durations)) {
         let eta_start = start.unwrap_or(now);
         view.eta =
             Some(Eta { eta_start, eta_wait: (eta_start - now).max(0.0) as u64, eta_open_ended: start.is_none() });

@@ -95,6 +95,7 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         started_at: Timestamp::now(),
         url: None,
         slots_env: settings.slots_env.clone(),
+        max_quick: Some(settings.max_quick),
         shell_env: Some(shell_env.summary.clone()),
         shell_env_read_at: shell_env.read_at,
         shell_env_reload: None,

@@ -40,6 +40,9 @@ pub(crate) struct DaemonInfo {
     /// The daemon's `DRMANHATTAN_SLOTS`, if set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) slots_env: Option<String>,
+    /// How many quick runs it lets run at once. Absent before 0.7.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_quick: Option<usize>,
     /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_env: Option<String>,

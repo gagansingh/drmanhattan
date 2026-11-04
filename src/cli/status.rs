@@ -41,6 +41,9 @@ struct StatusDoc<'a> {
     daemon: Option<DaemonDoc>,
     active: usize,
     capacity: u32,
+    /// Quick runs here now, and how many may run at once; they take no slot.
+    quick: usize,
+    quick_capacity: usize,
     /// The running daemon's version, or this command's when none runs.
     version: String,
     /// This command's version, when the daemon still runs another: it restarts into it.
@@ -75,6 +78,9 @@ struct RunningDoc<'a> {
     /// A service: it takes no slot, and `ready` says whether it is ready yet.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     service: bool,
+    /// A quick run: it takes no slot either; `slot` is only its `DRMANHATTAN_SLOT`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    quick: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ready: Option<bool>,
     run_id: &'a RunId,
@@ -142,7 +148,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     running.sort_by_key(|r| r.slot.unwrap_or(0));
     let by_id: HashMap<&RunId, &Record> = records.iter().map(|r| (&r.run_id, r)).collect();
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
-    let here = running.iter().filter(|r| r.machine.is_none() && !r.job.service).count();
+    let here = running.iter().filter(|r| r.machine.is_none() && r.holds_slot()).count();
+    let quick = running.iter().filter(|r| r.quick).count();
     let state = match &daemon {
         None => "stopped",
         Some(_) if running.is_empty() => "idle",
@@ -173,12 +180,17 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         })
         .collect();
     let (version, installed) = versions(daemon.as_ref());
+    let daemon_quick = daemon.as_ref().and_then(|d| d.info.as_ref()).and_then(|i| i.max_quick);
     Ok(StatusDoc {
         state,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
         active: here,
         workers: super::workers::docs(paths)?,
         capacity,
+        quick,
+        // The daemon's own; with none running (or one from before 0.7.0), this command's.
+        quick_capacity: daemon_quick
+            .unwrap_or_else(|| crate::settings::Settings::from_env().map_or(0, |s| s.max_quick)),
         version,
         installed,
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
@@ -191,6 +203,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 slot: r.slot,
                 machine: r.machine.as_deref(),
                 service: r.job.service,
+                quick: r.quick,
                 ready: r.job.service.then_some(r.ready_at.is_some()),
                 run_id: &r.run_id,
                 label: &r.job.label,
@@ -232,6 +245,7 @@ fn print_text(doc: &StatusDoc) {
         kv("state", doc.state),
         kv("active", doc.active),
         kv("capacity", doc.capacity),
+        kv("quick", format!("{}/{}", doc.quick, doc.quick_capacity)),
         kv("version", &doc.version),
         kv("auto_update", if doc.auto_update { "on" } else { "off" }),
     ];
@@ -253,7 +267,7 @@ fn print_text(doc: &StatusDoc) {
         println!("update available={} url={} run=`drmanhattan update`", u.version, u.url);
     }
     for r in &doc.running {
-        let mut line = vec![kv("slot", r.slot.unwrap_or(0))];
+        let mut line = vec![if r.quick { kv("lane", "quick") } else { kv("slot", r.slot.unwrap_or(0)) }];
         line.extend(r.machine.map(|m| kv("machine", m)));
         if r.service {
             line.push(kv("service", if r.ready == Some(true) { "ready" } else { "starting" }));
@@ -293,6 +307,8 @@ fn print_text(doc: &StatusDoc) {
         let mut line = line.to_vec();
         line.extend(w.prepare.map(|p| kv("prepare", p.as_str())));
         line.extend(w.group.map(|g| kv("group", g)));
+        line.push(kv("lane", if w.quick { "quick" } else { "slot" }));
+        line.extend(w.lane_reason.map(|r| kv("reason", r)));
         println!("{}", line.join(" "));
     }
 }
