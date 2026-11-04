@@ -1106,7 +1106,7 @@ function renderFinished(d) {
   put($('#pager'), pager(f, d.done.length, total));
   // Said as text, and shown as HTML (the search escaped).
   const empty = f.newer ? 'No older runs.'
-    : total ? '' : search ? `No runs match “${search}”.` : f.counts.all ? 'No runs match this filter.' : 'Nothing has finished yet.';
+    : total ? '' : search && !f.counts.all ? `No runs match “${search}”.` : f.counts.all ? 'No runs match this filter.' : 'Nothing has finished yet.';
   put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(esc(empty)));
   if (page.moved) {
     page.moved = false;
