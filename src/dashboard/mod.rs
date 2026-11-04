@@ -1,7 +1,7 @@
 //! The dashboard: a small HTTP server serving one embedded page and its API.
 //!
 //! - `GET /` is the page (`assets/dashboard.html`), which polls
-//! - `GET /api/state` (`state`) every two seconds, and
+//! - `GET /api/state?…` (`state`) every two seconds, asking for a page of finished runs, and
 //! - `GET /api/log?run_id=…&lines=…` for the tail of a run's log, as text.
 //! - `POST /api/…` (`post`) for what the page can change: the manual queue order, the
 //!   slots, a service, and updates.
@@ -82,7 +82,7 @@ fn handle(req: Request, ctx: &Ctx) {
         (Method::Get, "/command-format.js") => {
             http::respond(req, 200, COMMAND_FORMAT, "text/javascript; charset=utf-8")
         }
-        (Method::Get, "/api/state") => http::json(req, 200, &state::build(ctx)),
+        (Method::Get, "/api/state") => http::json(req, 200, &state::build(ctx, &state::Query::parse(&url))),
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
         (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/update" | "/api/auto-update") => {
             let path = path.to_string();
