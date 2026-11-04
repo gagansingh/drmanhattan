@@ -53,14 +53,27 @@ Run builds, tests and other long or heavy commands through drmanhattan:
     manhattan submit --wait -- <command>
 
 It waits for a free slot, prints the output and exits with the command's
-exit code. Start servers with
-`manhattan submit --service --ready-port <port> -- <command>` (or
-`--ready-log <regex>`), never with `--wait`: it returns once the server is
-ready. Use it too for any command you can't run directly in this environment.
-Don't wrap commands in `zsh -ic` or `bash -lc`; jobs already get your shell
-environment. Jobs get no stdin: pass input as a file or an argument, never by
-piping into `manhattan submit`. If it reports that drmanhattan isn't running,
-ask the user to start it; don't start it yourself.
+exit code. If your own tool times out while waiting, don't submit again:
+`manhattan wait <name>`, with the name `submit` printed, waits for the
+same run. `manhattan status` shows what is running and waiting.
+
+Start dev servers and databases as services, never with `--wait`:
+
+    manhattan submit --service --ready-port <port> -- <command>
+
+It returns once the port accepts connections (or a line matches
+`--ready-log <regex>`) and prints the service's name and log. Submitting it
+again returns the running one: add `--restart` to replace it, and run
+`manhattan stop <name>` when you are done with it.
+
+For commands that must never overlap and where only the latest run matters,
+such as deploys, add `--group <name>`.
+
+Jobs already get your shell environment: don't wrap commands in `zsh -ic`
+or `bash -lc`. Jobs get no stdin: pass input as a file or an argument,
+never by piping into `manhattan submit`. Use drmanhattan too for any command
+you can't run directly in this environment. If it reports that drmanhattan
+isn't running, ask the user to start it; don't start it yourself.
 ```
 
 Agents sharing a machine then run their builds one after another. When the queue is not

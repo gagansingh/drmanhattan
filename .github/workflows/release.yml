@@ -2,7 +2,8 @@
 # a macOS universal binary (arm64 and x86_64 in one file, via lipo), a static Linux x86_64
 # binary (musl), a SHA-256 file for each archive, and the installer script, which is then
 # at `.../releases/latest/download/install.sh`. Each archive holds both commands,
-# `drmanhattan` and the alias `manhattan`.
+# `drmanhattan` and the alias `manhattan`. The release notes list the pull requests merged
+# since the previous tag.
 #
 # The build jobs only upload artifacts; a single publish job creates the release, so two
 # jobs never race to create it.
@@ -81,6 +82,7 @@ jobs:
           merge-multiple: true
       - uses: softprops/action-gh-release@v2
         with:
+          generate_release_notes: true
           files: |
             dist/*
             packaging/install.sh
