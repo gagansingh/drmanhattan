@@ -7,6 +7,7 @@ Everything drmanhattan does, in detail. The [README](../README.md) is the short 
 - [Following one run](#following-one-run)
 - [Services: servers that keep running](#services-servers-that-keep-running)
 - [Preparing while waiting](#preparing-while-waiting)
+- [Quick commands](#quick-commands)
 - [One at a time: groups](#one-at-a-time-groups)
 - [Failing on output](#failing-on-output)
 - [Progress markers](#progress-markers)
@@ -55,8 +56,8 @@ Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
 `DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 17 up)
-set, besides its `env`. No two jobs running at once share a `DRMANHATTAN_SLOT`, so it can
-name a per-slot cache or scratch directory.
+set, besides its `env`. No two jobs running here at once share a `DRMANHATTAN_SLOT` (a
+service gets 0), so it can name a per-slot cache or scratch directory.
 
 ## Results
 
@@ -161,8 +162,8 @@ longer wait behind a 20-minute build.
 Whether a job is quick is decided from this machine's own history:
 
 1. Its own runs (same label and variant, else same label), when there are at least 3: it is
-   quick if 9 of its last 10 took under 30 seconds. Failed runs count; a cancelled or timed
-   out one counts only if it ran longer than that.
+   quick if 9 of its last 10 took under 30 seconds (all of them, while it has fewer than 10).
+   Failed runs count; a cancelled or timed out one counts only if it ran longer than that.
 2. Otherwise its category's runs, when there are at least 3: it is quick only if every one
    of the last 20 took under 30 seconds. A new `cargo build` among many quick `cargo fmt`s
    is not.

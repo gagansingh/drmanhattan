@@ -2,7 +2,7 @@
 
 drmanhattan is a local job queue. It watches a folder for JSON job files and runs each
 command when a slot is free, one or a few at a time, writing the log, status and exit
-code beside the job file. Commands that have always finished in seconds here start at
+code beside the job file. Commands that nearly always finish in seconds here start at
 once instead of waiting behind a build. A dashboard on localhost shows what is running
 and waiting.
 
