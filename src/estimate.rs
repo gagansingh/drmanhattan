@@ -201,10 +201,13 @@ impl HistoryIndex {
         }
         let quick = QUICK.as_millis() as u64;
         let seconds = human(QUICK);
+        // A label that is only its category's name (every `sh -c 'cd x && cargo ...'` is
+        // `cargo`) pools unlike commands: those are judged by the category's rule instead.
         let own = [self.variant(None, category, label, variant), self.label(None, category, label)]
             .into_iter()
             .flatten()
-            .find(|r| r.timed.len() >= QUICK_MIN_RUNS);
+            .find(|r| r.timed.len() >= QUICK_MIN_RUNS)
+            .filter(|_| label != category);
         if let Some(runs) = own {
             let recent = last(&runs.timed, 10);
             let long = recent.iter().filter(|m| **m >= quick).count();
@@ -436,6 +439,16 @@ mod tests {
         assert!(!l.quick && l.reason == "a script that also runs cargo", "{l:?}");
         let l = index.lane("git", "git", "", Err("uses for"));
         assert!(!l.quick && l.reason == "a script that uses for", "{l:?}");
+    }
+
+    #[test]
+    fn a_label_that_only_names_its_category_is_judged_as_the_category() {
+        let ok = State::Succeeded;
+        // Ten quick `sh -c 'cd x && cargo fmt'` scripts, all labelled `cargo`, then one long one.
+        let mut h: Vec<HistoryRow> = (0..9).map(|_| row("cargo", "cargo", "", 1, ok)).collect();
+        h.push(row("cargo", "cargo", "", 300, ok));
+        let l = lane(&h, "cargo", "cargo");
+        assert!(!l.quick && l.reason.starts_with("a recent cargo run here took"), "{l:?}");
     }
 
     #[test]
