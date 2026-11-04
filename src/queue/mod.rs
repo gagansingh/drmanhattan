@@ -98,9 +98,9 @@ pub(crate) fn lock(shared: &Shared) -> MutexGuard<'_, Queue> {
 
 impl Queue {
     pub(crate) fn new(paths: Paths, settings: Settings, inbox: PathBuf, default_patterns: Patterns) -> Queue {
-        let mut history = history::read_recent(&paths, usize::MAX);
-        let index = HistoryIndex::of(&history);
-        history.drain(..history.len().saturating_sub(history::IN_MEMORY));
+        let mut all = history::read_recent(&paths, usize::MAX);
+        let index = HistoryIndex::of(&all);
+        let history = all.split_off(all.len().saturating_sub(history::IN_MEMORY));
         Queue {
             model: LoadModel::fit(&history, process::cpu_count()),
             index,
@@ -156,7 +156,8 @@ impl Queue {
         if let Some(from) = &job.dispatched_from {
             return Some(Lane { quick: false, reason: format!("sent here by {from}") });
         }
-        Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default()))
+        let later = crate::naming::later_commands(&job.command);
+        Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default(), &later))
     }
 
     /// Decides the lane of every waiting run again: a run that finished may have shown a

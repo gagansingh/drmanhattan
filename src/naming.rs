@@ -80,33 +80,53 @@ pub(crate) fn default_label(command: &[String]) -> String {
     truncated(&label.join(" "))
 }
 
-/// The first command in a shell script that is not shell bookkeeping. Words are scanned in
-/// order; a command starts the script and follows each `;`, `&&`, `||`, `|` or `&`.
-/// Assignments before a command, redirections and quoted words are skipped.
+/// The first command in a shell script that is not shell bookkeeping.
 fn first_command_in_script(script: &str) -> Option<String> {
-    let mut at_start = true;
-    for raw in script.split_whitespace() {
-        let word = raw.trim_start_matches(['(', '{']);
-        let ends_command = ["&&", "||", ";", "|", "&"].contains(&word) || word.ends_with(';');
-        if at_start && !ends_command {
-            let is_assignment = word.contains('=') && !word.starts_with('=');
-            if !is_assignment {
-                let name = basename(word.trim_end_matches(';'));
-                let not_a_program = name.is_empty()
-                    || name.starts_with(['>', '<', '$', '"', '\'', '`'])
-                    || name.starts_with(|c: char| c.is_ascii_digit())
-                    || SHELL_BOOKKEEPING.contains(&name);
-                if !not_a_program {
-                    return Some(truncated(name));
+    commands_in_script(script).into_iter().next().map(|name| truncated(&name))
+}
+
+/// The programs a shell script runs, shell bookkeeping aside, in order. Words are scanned in
+/// order; a command starts the script and follows each `;`, `&&`, `||`, `|`, `&` or line
+/// break. Assignments before a command, redirections and quoted words are skipped.
+fn commands_in_script(script: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for line in script.lines() {
+        let mut at_start = true;
+        for raw in line.split_whitespace() {
+            let word = raw.trim_start_matches(['(', '{']);
+            let ends_command = ["&&", "||", ";", "|", "&"].contains(&word) || word.ends_with(';');
+            if at_start && !ends_command {
+                let is_assignment = word.contains('=') && !word.starts_with('=');
+                if !is_assignment {
+                    let name = basename(word.trim_end_matches(';'));
+                    let not_a_program = name.is_empty()
+                        || name.starts_with(['>', '<', '$', '"', '\'', '`'])
+                        || name.starts_with(|c: char| c.is_ascii_digit())
+                        || SHELL_BOOKKEEPING.contains(&name);
+                    if !not_a_program {
+                        found.push(name.to_string());
+                    }
+                    at_start = false;
                 }
-                at_start = false;
+            }
+            if ends_command {
+                at_start = true;
             }
         }
-        if ends_command {
-            at_start = true;
-        }
     }
-    None
+    found
+}
+
+/// For `sh -c '<script>'`: the programs the script runs after its first, which names the
+/// job. Empty for any other command, which is one program.
+pub(crate) fn later_commands(command: &[String]) -> Vec<String> {
+    let words = without_env(command);
+    match words {
+        [shell, flag, script, ..] if SHELLS.contains(&basename(shell)) && flag == "-c" => {
+            commands_in_script(script).into_iter().skip(1).collect()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// A label made safe for a file name: letters, digits, `_`, `.` and `-`, not starting with
@@ -166,6 +186,16 @@ pub(crate) fn shell_words(command: &[String]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_script_names_the_programs_it_runs_after_its_first() {
+        let sh = |script: &str| vec!["/bin/sh".to_string(), "-c".into(), script.into()];
+        assert!(later_commands(&sh("cd repo && git status")).is_empty());
+        assert_eq!(later_commands(&sh("git log | head -20")), ["head"]);
+        assert_eq!(later_commands(&sh("cd repo && git pull && cargo build --release")), ["cargo"]);
+        assert_eq!(later_commands(&sh("make deps\nmake build")), ["make"]);
+        assert!(later_commands(&["git".into(), "status".into()]).is_empty());
+    }
 
     #[test]
     fn shell_words_quote_what_a_shell_would_split() {
