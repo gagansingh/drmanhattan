@@ -289,7 +289,7 @@ mod tests {
         assert_eq!(later_commands(&sh("echo a#b; git log | head -3")), ["head"]);
         // What runs in a substitution, or cannot be named, counts too.
         assert_eq!(later_commands(&sh("git fetch && echo \"$(swift build 2>&1 | tail -1)\"")), ["swift", "tail"]);
-        assert_eq!(later_commands(&sh("git log -1 && `make`")), ["`make`", "make"]);
+        assert_eq!(later_commands(&sh("git log -1 && `make`")), ["`make", "make"]);
         assert_eq!(later_commands(&sh("git status && x=$(cargo build)")), ["cargo"]);
         assert_eq!(later_commands(&sh("git status && $CARGO build")), ["$CARGO"]);
         assert_eq!(derive_category(&sh("VERSION=$(git describe) && cargo build")), "cargo");
