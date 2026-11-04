@@ -54,7 +54,9 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
-`DRMANHATTAN_SLOT` (the slot it holds, from 1) set, besides its `env`.
+`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number above the slots)
+set, besides its `env`. No two jobs running at once share a `DRMANHATTAN_SLOT`, so it can
+name a per-slot cache or scratch directory.
 
 ## Results
 
@@ -148,6 +150,38 @@ runs as soon as the job is queued, in the job's `cwd` with its `env`, while the 
   short by the queue stopping runs again on the next start.
 - `.status.json` has `prepare_status` (`pending`, `running`, `succeeded` or `failed`), and
   the dashboard marks the job while it prepares. `submit --prepare CMD` sets it.
+
+## Quick commands
+
+Slots keep long jobs from overlapping. A command that has nearly always finished within
+seconds here does not need one: it starts at once, beside the slots, like a service. On a
+machine where an agent runs everything through the queue, its `git status` and `rg` no
+longer wait behind a 20-minute build.
+
+Whether a job is quick is decided from this machine's own history:
+
+1. Its own runs (same label and variant, else same label), when there are at least 3: it is
+   quick if 9 of its last 10 took under 30 seconds. Failed runs count; a cancelled or timed
+   out one counts only if it ran longer than that.
+2. Otherwise its category's runs, when there are at least 3: it is quick only if every one
+   of the last 20 took under 30 seconds. A new `cargo build` among many quick `cargo fmt`s
+   is not.
+3. Otherwise a short list of read-only tools (`git`, `gh`, `rg`, `grep`, `ls`, `cat`, `head`,
+   `tail`, `wc`, `jq`, `diff`, `which`) is quick until one of their runs here takes longer.
+4. Anything else is new here and waits for a slot. After 3 quick runs it is quick too.
+
+A shell script is judged as its first program only when it is plain commands and the rest
+are read-only tools: `cd repo && git log | head` is `git`, while `git pull && cargo build`,
+or a script with a `$(...)`, a loop or a sourced file, waits for a slot. Services, jobs that
+may run on a worker, and jobs sent from another machine are never quick.
+
+- Up to `DRMANHATTAN_QUICK` quick jobs run at once (the number of cores); more wait for a
+  quick place, or take a free slot. `DRMANHATTAN_QUICK=0` turns the quick lane off.
+- A group still runs one job at a time, quick or not.
+- `status` shows `quick=N/M`, `lane=quick` for a quick run, and `lane=` with a `reason=` for
+  each waiter; `.status.json` has `quick` and `lane_reason`. The dashboard marks quick runs
+  and gives each waiter's reason on hover. A quick run's log starts
+  `… started at once (quick)`.
 
 ## One at a time: groups
 
@@ -348,9 +382,10 @@ commands without asking. `agent-runner.sh --help` lists the options.
 ## Dashboard
 
 `http://127.0.0.1:8417/` (`drmanhattan paths` prints it if that port was busy) shows each
-slot's job with a progress bar against its usual time, the waiting jobs with estimated start
-times, recent results with their logs, and the machine's CPU, memory and temperature. The −
-and + buttons change the number of slots for four hours; drag a waiting job to reorder it.
+slot's job with a progress bar against its usual time, quick runs beside them, the waiting
+jobs with estimated start times, recent results with their logs, and the machine's CPU,
+memory and temperature. The − and + buttons change the number of slots for four hours; drag
+a waiting job to reorder it.
 
 Commands are shown as a person reads them: the program and its subcommand stand out, wrappers
 (`env`, `xcrun`, `nice`, `time`, a script that runs `-- <command>`) are dimmed or folded into a
@@ -372,7 +407,8 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--open` | | open the dashboard in the browser |
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
-| `DRMANHATTAN_SLOTS` | 1 | jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_QUICK` | cores | quick jobs that may run at once, beside the slots; `0` turns them off |
 | `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
 | `DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS` | 10 | how long the login shell may take to print its environment |
 | `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |

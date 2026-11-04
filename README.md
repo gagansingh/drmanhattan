@@ -2,7 +2,9 @@
 
 drmanhattan is a local job queue. It watches a folder for JSON job files and runs each
 command when a slot is free, one or a few at a time, writing the log, status and exit
-code beside the job file. A dashboard on localhost shows what is running and waiting.
+code beside the job file. Commands that have always finished in seconds here start at
+once instead of waiting behind a build. A dashboard on localhost shows what is running
+and waiting.
 
 ![The dashboard: two running jobs, three waiting, recent results with one failure, and the log of a running test job open below](docs/dashboard.png)
 
@@ -52,11 +54,12 @@ Run builds, tests and other long or heavy commands through drmanhattan:
 
     manhattan submit --wait -- <command>
 
-It waits for a free slot, prints the output and exits with the command's
-exit code. If your own tool times out while waiting, don't submit again:
-the run carries on, and `manhattan follow <name>` (the name after `as` in
-the line `submit` printed) prints its output and exits with its exit code.
-`manhattan status` shows what is running and waiting.
+Long commands wait for a free slot, so they never overlap; commands that
+usually finish in seconds here start at once. It prints the output and exits
+with the command's exit code. If your own tool times out while waiting,
+don't submit again: the run carries on, and `manhattan follow <name>` (the
+name after `as` in the line `submit` printed) prints its output and exits
+with its exit code. `manhattan status` shows what is running and waiting.
 
 Start dev servers and databases as services, never with `--wait`:
 
@@ -80,13 +83,16 @@ environment. If it reports that drmanhattan isn't running, ask the user to
 start it; don't start it yourself.
 ```
 
-Agents sharing a machine then run their builds one after another. When the queue is not
-running, `submit --wait` says so at once instead of queueing a job that would never start.
+Agents sharing a machine then run their builds one after another, and their quick commands
+do not wait behind those builds. When the queue is not running, `submit --wait` says so at
+once instead of queueing a job that would never start.
 
 ## What else it does
 
 Each item links to its section of [docs/REFERENCE.md](docs/REFERENCE.md).
 
+- **[Quick commands](docs/REFERENCE.md#quick-commands)**: a command whose runs here nearly
+  always took under 30 seconds starts beside the slots, without waiting.
 - **[Job files](docs/REFERENCE.md#job-files)**: any program can queue a job by writing a
   JSON file into the inbox. The log, status and exit code appear beside it, and `wait`,
   `follow` and `cancel` work on any run.
