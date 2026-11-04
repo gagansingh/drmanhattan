@@ -177,6 +177,8 @@ fn script_words(script: &str) -> Vec<String> {
                 }
             },
             '#' if word.is_empty() => while chars.next_if(|n| *n != '\n').is_some() {},
+            // `2>&1`, `>&2`, `&>log`: a redirection, not a separator.
+            '&' if word.ends_with(['>', '<']) || chars.peek() == Some(&'>') => word.push(c),
             ';' | '\n' | '&' | '|' => {
                 words.extend((!word.is_empty()).then(|| std::mem::take(&mut word)));
                 let mut op = if c == '\n' { ";".to_string() } else { c.to_string() };
@@ -196,19 +198,28 @@ fn script_words(script: &str) -> Vec<String> {
 /// For `sh -c '<script>'`: the programs it runs besides the one that names the job, when it
 /// is plain commands joined by `;`, `&&`, `||`, `|`, `&` or line breaks, each a named program
 /// or shell bookkeeping (`cd`, `echo`, `export`, ...). Anything else, whose programs cannot
-/// be listed with confidence, is an error saying what: a command substitution, a sourced
-/// script, control flow, a command word that cannot be named. Any other command is one
-/// program: no others.
+/// be listed with confidence, is an error saying what: a shell given other options, inline
+/// code for an interpreter, a substitution or other expansion, a sourced script, control
+/// flow, a command word that is not a plain name. Any other command is one program.
 pub(crate) fn script_shape(command: &[String]) -> std::result::Result<Vec<String>, String> {
     let words = without_env(command);
-    let [shell, flag, script, ..] = words else { return Ok(Vec::new()) };
-    if !SHELLS.contains(&basename(shell)) || flag != "-c" {
-        return Ok(Vec::new());
+    let Some(program) = words.first().map(|w| basename(w)) else { return Ok(Vec::new()) };
+    let flags: Vec<&String> = words[1..].iter().take_while(|w| w.starts_with('-')).collect();
+    let script = match words {
+        [_, flag, script, ..] if SHELLS.contains(&program) && flag == "-c" => script,
+        _ if SHELLS.contains(&program) && !flags.is_empty() => {
+            return Err(format!("runs {program} {}", flags.iter().map(|f| f.as_str()).collect::<Vec<_>>().join(" ")));
+        }
+        _ if INTERPRETERS.contains(&program) && flags.iter().any(|f| f.contains(['c', 'e'])) => {
+            return Err(format!("runs inline {program} code"));
+        }
+        _ => return Ok(Vec::new()),
+    };
+    // Expansions and definitions whose commands a plain scan cannot see.
+    if let Some(found) = ["$(", "${", "$'", "`", "<(", ">(", "=(", "()"].iter().find(|s| script.contains(**s)) {
+        return Err(format!("contains {found}"));
     }
     let words = script_words(script);
-    if words.iter().any(|w| ["$(", "`", "<(", ">("].iter().any(|s| w.contains(s))) {
-        return Err("runs a command substitution".into());
-    }
     let mut programs = Vec::new();
     let mut at_start = true;
     for word in &words {
@@ -230,8 +241,9 @@ pub(crate) fn script_shape(command: &[String]) -> std::result::Result<Vec<String
         if SHELL_KEYWORDS.contains(&name) || ["for", "case", "select", "function"].contains(&name) {
             return Err(format!("uses {name}"));
         }
-        if !name.starts_with(|c: char| c.is_ascii_alphanumeric() || "_-.+".contains(c)) {
-            return Err(format!("runs {word}, which cannot be named"));
+        let plain = |c: char| c.is_ascii_alphanumeric() || "_-.+/~".contains(c);
+        if !word.chars().all(plain) || !name.starts_with(|c: char| c.is_ascii_alphanumeric() || c == '_') {
+            return Err(format!("runs {word}, which is not a plain name"));
         }
         if !SHELL_BOOKKEEPING.contains(&name) {
             programs.push(name.to_string());
@@ -320,22 +332,42 @@ mod tests {
         assert_eq!(later("(cd app && npm test)"), ok(&[]));
         assert_eq!(script_shape(&["git".into(), "status".into()]), ok(&[]));
         // Anything but plain commands cannot be listed with confidence.
-        for script in [
-            "git fetch && echo \"$(swift build 2>&1 | tail -1)\"",
-            "git fetch && echo $( cargo build )",
-            "git log -1 && `make`",
-            "git status && diff <(cargo build 2>&1) ref.txt",
-            "VERSION=$(git describe) && cargo build",
+        for (script, found) in [
+            ("git fetch && echo \"$(swift build 2>&1 | tail -1)\"", "$("),
+            ("git fetch && echo $( cargo build )", "$("),
+            ("git log -1 && `make`", "`"),
+            ("git status && diff <(cargo build 2>&1) ref.txt", "<("),
+            ("VERSION=$(git describe) && cargo build", "$("),
+            ("git commit -m $'don\\'t' && cargo build", "$'"),
+            ("git log ${ cargo build; }", "${"),
+            ("git diff =(cargo build) x", "=("),
+            ("git () { cargo build; }; git status", "()"),
         ] {
-            assert_eq!(later(script), Err("runs a command substitution".into()), "{script}");
+            assert_eq!(later(script), Err(format!("contains {found}")), "{script}");
         }
+        assert_eq!(later("git log 2>&1 | head"), ok(&["head"]), "a redirection is not a separator");
+        assert_eq!(later("git log &>/dev/null; git status"), ok(&["git"]));
+        assert_eq!(
+            later("git status; 2>/tmp/git cargo build"),
+            Err("runs 2>/tmp/git, which is not a plain name".into())
+        );
+        assert_eq!(
+            later("git status; cargo>/tmp/head build"),
+            Err("runs cargo>/tmp/head, which is not a plain name".into())
+        );
+        let cmd = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
+        assert_eq!(script_shape(&cmd(&["bash", "-lc", "git status && cargo build"])), Err("runs bash -lc".into()));
+        assert_eq!(script_shape(&cmd(&["bash", "-o", "pipefail", "-c", "x"])), Err("runs bash -o".into()));
+        assert_eq!(script_shape(&cmd(&["python3", "-c", "print(1)"])), Err("runs inline python3 code".into()));
+        assert_eq!(script_shape(&cmd(&["sh", "build.sh"])), ok(&[]), "a script file is one program");
+        assert_eq!(script_shape(&cmd(&["env", "A=1", "sh", "-c", "git status"])), ok(&[]));
         assert_eq!(later("git pull && . ./build.sh"), Err("runs another script".into()));
         assert_eq!(later("git pull && source build.sh"), Err("runs another script".into()));
         assert_eq!(later("git pull && for d in a b; do cargo build; done"), Err("uses for".into()));
         assert_eq!(later("git status && if [ -f x ]; then cargo build; fi"), Err("uses if".into()));
         assert_eq!(later("git status && case x in x) cargo build;; esac"), Err("uses case".into()));
-        assert_eq!(later("git status && $CARGO build"), Err("runs $CARGO, which cannot be named".into()));
-        assert_eq!(later("git status && >log cargo build"), Err("runs >log, which cannot be named".into()));
+        assert_eq!(later("git status && $CARGO build"), Err("runs $CARGO, which is not a plain name".into()));
+        assert_eq!(later("git status && >log cargo build"), Err("runs >log, which is not a plain name".into()));
     }
 
     #[test]
