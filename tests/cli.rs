@@ -90,11 +90,11 @@ fn submit_command_writes_a_job_and_can_wait_for_it() {
 fn slots_command_sets_the_standing_capacity() {
     let d = Daemon::start(&[]);
     let text = |args: &[&str]| String::from_utf8_lossy(&d.cmd(args).output().unwrap().stdout).into_owned();
-    assert!(text(&["slots"]).contains("capacity=1 standing=1 source=default"));
+    assert!(text(&["slots"]).contains("capacity=1 source=default"));
     assert_eq!(d.cmd(&["slots", "3"]).output().unwrap().status.code(), Some(0));
-    assert!(text(&["slots"]).contains("capacity=3 standing=3 source=config"));
+    assert!(text(&["slots"]).contains("capacity=3 source=config"));
     assert_eq!(d.cmd(&["slots", "0"]).output().unwrap().status.code(), Some(2));
-    assert_eq!(d.cmd(&["slots", "99"]).output().unwrap().status.code(), Some(2));
+    assert_eq!(d.cmd(&["slots", "257"]).output().unwrap().status.code(), Some(2));
     // the daemon reads the new standing capacity live
     d.submit("a", d.job("sleep 1"));
     d.submit("b", d.job("sleep 1"));
@@ -242,5 +242,5 @@ fn status_reports_the_daemons_capacity_not_its_own_environments() {
     let status: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(status["capacity"], 3);
     let out = d.cmd(&["slots"]).env_remove("DRMANHATTAN_SLOTS").output().unwrap();
-    assert!(String::from_utf8_lossy(&out.stdout).contains("standing=3 source=DRMANHATTAN_SLOTS"));
+    assert!(String::from_utf8_lossy(&out.stdout).contains("capacity=3 source=DRMANHATTAN_SLOTS"));
 }

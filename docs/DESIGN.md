@@ -48,7 +48,7 @@ slots while fewer than `DRMANHATTAN_QUICK` quick runs are running, and otherwise
 slot like any waiter. Its lane is decided when it is queued and again for every waiter when
 a run finishes or the daemon recovers; the record keeps it with its reason (`quick`,
 `lane_reason`). A quick run's `DRMANHATTAN_SLOT` is the lowest number above any slot there can
-be (17 up) that no run here holds, and nothing that counts slots counts it.
+be (257 up) that no run here holds, and nothing that counts slots counts it.
 
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting
@@ -102,7 +102,6 @@ state (volatile; DRMANHATTAN_STATE_DIR)
     daemon.lock               the single-instance lock, holding the daemon's pid
     dashboard.json            the running daemon's pid, inbox and dashboard address
     heartbeat                 rewritten every few seconds while the daemon runs
-    capacity-override         the dashboard's − and + setting, with its expiry
     manual-order              the order set by dragging
 data (durable; DRMANHATTAN_DATA_DIR)
     history.jsonl             one line per finished run, which the estimates learn from

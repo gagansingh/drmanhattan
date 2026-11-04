@@ -10,7 +10,7 @@ use crate::error::{invalid, Error, Result};
 use crate::job::State;
 use crate::paths::Paths;
 use crate::queue::read_records;
-use crate::settings::{load_config, read_worker_override, save_config, worker_capacity, Override};
+use crate::settings::{load_config, update_config, MAX_SLOTS};
 use crate::time::Timestamp;
 use crate::workers::{self, read_live, Live, WorkerConfig};
 
@@ -40,8 +40,6 @@ struct WorkerDoc {
     online: Option<bool>,
     capacity: u32,
     slots: u32,
-    #[serde(rename = "override")]
-    capacity_override: Option<Override>,
     running: usize,
     tags: Vec<String>,
     reason: Option<String>,
@@ -57,7 +55,7 @@ pub(crate) fn docs(paths: &Paths) -> Result<Vec<serde_json::Value>> {
 
 fn doc(paths: &Paths, w: &WorkerConfig, records: &[crate::job::Record]) -> WorkerDoc {
     let live: Live = read_live(paths, &w.name);
-    let capacity = worker_capacity(paths, w);
+    let capacity = w.slots;
     let running = records.iter().filter(|r| r.state == State::Running && r.machine.as_deref() == Some(&w.name)).count();
     let unavailable = live.unavailable().map(String::from);
     let state = match () {
@@ -73,7 +71,6 @@ fn doc(paths: &Paths, w: &WorkerConfig, records: &[crate::job::Record]) -> Worke
         online: live.online,
         capacity,
         slots: w.slots,
-        capacity_override: read_worker_override(paths, &w.name),
         running,
         tags: w.tags.clone(),
         reason: unavailable,
@@ -88,7 +85,13 @@ pub(super) fn workers(rest: &[String]) -> Result<i32> {
     match a.positional.first().map(String::as_str) {
         None => list(&paths, a.has("json")),
         Some("add") => match a.positional.get(1) {
-            Some(alias) => add(&paths, alias, a.get("name"), a.parsed("slots", "a number from 0 to 16")?, a.all("tag")),
+            Some(alias) => add(
+                &paths,
+                alias,
+                a.get("name"),
+                a.parsed("slots", &format!("a number from 0 to {MAX_SLOTS}"))?,
+                a.all("tag"),
+            ),
             None => invalid("workers add needs the worker's ssh alias (see --help)"),
         },
         Some(other) => invalid(format!("unknown workers command: {other} (see --help)")),
@@ -116,9 +119,6 @@ fn list(paths: &Paths, json: bool) -> Result<i32> {
             "worker={} ssh={} state={} {online} running={} capacity={}",
             d.name, d.ssh, d.state, d.running, d.capacity
         );
-        if let Some(o) = d.capacity_override {
-            line += &format!(" override={} until={}", o.slots, o.until);
-        }
         if !d.tags.is_empty() {
             line += &format!(" tags={}", d.tags.join(","));
         }
@@ -131,7 +131,7 @@ fn list(paths: &Paths, json: bool) -> Result<i32> {
 }
 
 fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags: &[String]) -> Result<i32> {
-    let mut config = load_config(paths)?;
+    let config = load_config(paths)?;
     let existing = config.workers.iter().position(|w| w.ssh == alias || name.is_some_and(|n| w.name == n));
     let mut worker = existing.map(|i| config.workers[i].clone()).unwrap_or(WorkerConfig {
         name: String::new(),
@@ -169,13 +169,34 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
     if let Some(why) = workers::unusable(&stats) {
         return invalid(format!("{alias} cannot be a worker yet: {why}"));
     }
-    match existing {
-        Some(i) => config.workers[i] = worker.clone(),
-        None => config.workers.push(worker.clone()),
-    }
-    workers::validate(&mut config.workers)?;
-    save_config(paths, &config)?;
-    let verb = if existing.is_some() { "updated" } else { "added" };
+    // The probe may have taken a while: change the file as it is now, and only in what was
+    // asked, so a change made meanwhile (a − or + on the dashboard) stays.
+    let (existed, worker) = update_config(paths, |config| {
+        let at = config.workers.iter().position(|w| w.ssh == alias || name.is_some_and(|n| w.name == n));
+        let i = match at {
+            Some(i) => {
+                let w = &mut config.workers[i];
+                w.ssh = alias.to_string();
+                if let Some(n) = name {
+                    w.name = n.to_string();
+                }
+                if let Some(s) = slots {
+                    w.slots = s;
+                }
+                if !tags.is_empty() {
+                    w.tags = tags.to_vec();
+                }
+                i
+            }
+            None => {
+                config.workers.push(worker.clone());
+                config.workers.len() - 1
+            }
+        };
+        workers::validate(&mut config.workers)?;
+        Ok((at.is_some(), config.workers[i].clone()))
+    })?;
+    let verb = if existed { "updated" } else { "added" };
     println!("{verb} worker {} (ssh {}, {} slot(s) for this machine)", worker.name, worker.ssh, worker.slots);
     Ok(0)
 }

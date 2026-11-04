@@ -16,10 +16,7 @@ use crate::estimate::{Estimate, LoadModel};
 use crate::job::{Record, State};
 use crate::process;
 use crate::queue::{self, rank};
-use crate::settings::{
-    effective_capacity, load_config, read_manual_order, read_override, read_worker_override, standing_capacity,
-    worker_capacity,
-};
+use crate::settings::{effective_capacity, load_config, read_manual_order, MAX_SLOTS};
 use crate::sources::Sessions;
 use crate::sysinfo;
 use crate::time::Timestamp;
@@ -35,10 +32,10 @@ const DAY_SECONDS: u64 = 86_400;
 pub(super) struct StateDoc {
     now: f64,
     capacity: u32,
-    capacity_default: u32,
-    /// The ceiling of the + button.
-    capacity_ui_max: u32,
-    capacity_override: Option<OverrideView>,
+    /// The highest number of slots the + button goes to.
+    capacity_max: u32,
+    /// Set when the daemon's `DRMANHATTAN_SLOTS` decides the slots, so − and + cannot.
+    capacity_fixed: Option<String>,
     /// Whether any waiter is placed by the manual order.
     manual_order: bool,
     slots: Vec<SlotView>,
@@ -84,8 +81,6 @@ struct MachineView {
     ssh: Option<String>,
     online: Option<bool>,
     capacity: u32,
-    capacity_default: u32,
-    capacity_override: Option<OverrideView>,
     paused: bool,
     /// Runs on it now.
     running: usize,
@@ -95,12 +90,6 @@ struct MachineView {
     /// Why it is not taking work, while that lasts.
     reason: Option<String>,
     reason_until: Option<f64>,
-}
-
-#[derive(Serialize)]
-struct OverrideView {
-    slots: u32,
-    until: f64,
 }
 
 #[derive(Serialize)]
@@ -220,7 +209,6 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         .collect();
 
     let slots_env = ctx.settings.slots_env.as_deref();
-    let standing = standing_capacity(&ctx.paths, slots_env).map_or(1, |(slots, _)| slots);
     let capacity = effective_capacity(&ctx.paths, slots_env).unwrap_or(1);
     let quick_room = ctx.settings.max_quick.saturating_sub(running.iter().filter(|r| r.is_quick()).count());
     estimate_starts(&running, &mut queued, capacity, quick_room, now);
@@ -236,14 +224,12 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
         .map(|n| SlotView { slot: n, run_id: used.iter().find(|(slot, _)| *slot == n).map(|(_, id)| (*id).clone()) })
         .collect();
     let done = snap.recent.iter().map(|(r, e)| RunView::new(r, e, &sessions, now)).collect();
-    let machines = machines(ctx, &snap, capacity, standing);
+    let machines = machines(ctx, &snap, capacity);
     StateDoc {
         now: now.epoch_seconds(),
         capacity,
-        capacity_default: standing,
-        capacity_ui_max: ctx.settings.capacity_ceiling(standing),
-        capacity_override: read_override(&ctx.paths)
-            .map(|o| OverrideView { slots: o.slots, until: o.until.epoch_seconds() }),
+        capacity_max: MAX_SLOTS,
+        capacity_fixed: ctx.settings.slots_env.as_ref().map(|raw| format!("DRMANHATTAN_SLOTS={raw}")),
         manual_order: queued.iter().any(|v| v.manual == Some(true)),
         slots,
         running,
@@ -271,22 +257,19 @@ pub(super) fn build(ctx: &Ctx) -> StateDoc {
 }
 
 /// This machine and each worker, when there are workers.
-fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<MachineView> {
+fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
     let workers = load_config(&ctx.paths).map(|c| c.workers).unwrap_or_default();
     if workers.is_empty() {
         return Vec::new();
     }
     let running_on =
         |m: Option<&str>| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == m && r.holds_slot()).count();
-    let override_view = |o: crate::settings::Override| OverrideView { slots: o.slots, until: o.until.epoch_seconds() };
     let mut out = vec![MachineView {
         name: "local".into(),
         local: true,
         ssh: None,
         online: Some(true),
         capacity,
-        capacity_default: standing,
-        capacity_override: read_override(&ctx.paths).map(override_view),
         paused: false,
         running: running_on(None),
         stats: None,
@@ -296,14 +279,12 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32, standing: u32) -> Vec<Mac
     }];
     for w in workers {
         let live = workers::pool().get(&w.name);
-        let capacity = worker_capacity(&ctx.paths, &w);
+        let capacity = w.slots;
         out.push(MachineView {
             local: false,
             ssh: Some(w.ssh.clone()),
             online: live.online,
             capacity,
-            capacity_default: w.slots,
-            capacity_override: read_worker_override(&ctx.paths, &w.name).map(override_view),
             paused: capacity == 0,
             running: running_on(Some(&w.name)),
             stats: live.fresh_stats().cloned(),

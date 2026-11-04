@@ -55,7 +55,7 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
-`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 17 up)
+`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 257 up)
 set, besides its `env`. No two jobs running here at once share a `DRMANHATTAN_SLOT` (a
 service gets 0), so it can name a per-slot cache or scratch directory.
 
@@ -385,8 +385,9 @@ commands without asking. `agent-runner.sh --help` lists the options.
 `http://127.0.0.1:8417/` (`drmanhattan paths` prints it if that port was busy) shows each
 slot's job with a progress bar against its usual time, quick runs beside them, the waiting
 jobs with estimated start times, recent results with their logs, and the machine's CPU,
-memory and temperature. The − and + buttons change the number of slots for four hours; drag
-a waiting job to reorder it.
+memory and temperature. The − and + buttons set the number of slots, as
+`drmanhattan slots N` does, and it stays until changed (unless `DRMANHATTAN_SLOTS` is set
+for the daemon, which then decides); drag a waiting job to reorder it.
 
 Commands are shown as a person reads them: the program and its subcommand stand out, wrappers
 (`env`, `xcrun`, `nice`, `time`, a script that runs `-- <command>`) are dimmed or folded into a
@@ -408,7 +409,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--open` | | open the dashboard in the browser |
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
-| `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once (also `drmanhattan slots N`) |
+| `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once, up to 256 (also `drmanhattan slots N`) |
 | `DRMANHATTAN_QUICK` | cores | quick jobs that may run at once, beside the slots; `0` turns them off |
 | `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
 | `DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS` | 10 | how long the login shell may take to print its environment |
@@ -420,7 +421,6 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `DRMANHATTAN_LOG_RETENTION_DAYS` | 7 | how long results and logs are kept |
 | `DRMANHATTAN_MAX_LOG_MB` | 1024 | the most one job's log may hold; past it the earlier output is dropped |
 | `DRMANHATTAN_ARCHIVE_DAYS` | 90 | how long finished runs' records are kept |
-| `DRMANHATTAN_DASHBOARD_MAX_SLOTS` | 4 | the highest number the + button goes to |
 | `DRMANHATTAN_POLL_MS` | 200 | how often the inbox is checked when no change is noticed |
 | `DRMANHATTAN_HEARTBEAT_SECONDS` | 30 | how often a running job's load is sampled |
 | `DRMANHATTAN_STATE_DIR` | `/tmp/drmanhattan-<uid>` | run records and the lock (Linux: `$XDG_RUNTIME_DIR/drmanhattan`) |

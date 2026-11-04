@@ -3,8 +3,8 @@
 //! - `GET /` is the page (`assets/dashboard.html`), which polls
 //! - `GET /api/state` (`state`) every two seconds, and
 //! - `GET /api/log?run_id=…&lines=…` for the tail of a run's log, as text.
-//! - `POST /api/queue-order` and `POST /api/capacity` (`post`) write the manual queue order
-//!   and the capacity override: the only two things the page can change.
+//! - `POST /api/…` (`post`) for what the page can change: the manual queue order, the
+//!   slots, a service, and updates.
 //!
 //! See `http` for the defences against other pages in the same browser.
 

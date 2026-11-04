@@ -6,9 +6,7 @@
 //!     daemon.lock               flock held while a daemon runs; holds its pid
 //!     dashboard.json            the running daemon's pid, inbox, dashboard URL and settings
 //!     heartbeat                 rewritten every few seconds while the daemon runs
-//!     capacity-override         "<slots> <until>", the dashboard's - and + buttons
 //!     manual-order              run ids, one per line, first goes first (drag to reorder)
-//!     capacity-override.worker-<name>   the same for a worker; 0 pauses it
 //!     workers/<name>.json       what this daemon last saw of each worker
 //!
 //! Data (durable; ~/Library/Application Support/drmanhattan on macOS):
@@ -81,9 +79,6 @@ impl Paths {
     pub(crate) fn daemon_info(&self) -> PathBuf {
         self.state.join("dashboard.json")
     }
-    pub(crate) fn capacity_override(&self) -> PathBuf {
-        self.state.join("capacity-override")
-    }
     pub(crate) fn manual_order(&self) -> PathBuf {
         self.state.join("manual-order")
     }
@@ -101,9 +96,6 @@ impl Paths {
     }
     pub(crate) fn acknowledgement(&self) -> PathBuf {
         self.data.join("acknowledged.json")
-    }
-    pub(crate) fn worker_override(&self, worker: &str) -> PathBuf {
-        self.state.join(format!("capacity-override.worker-{worker}"))
     }
     pub(crate) fn worker_states(&self) -> PathBuf {
         self.state.join("workers")

@@ -172,34 +172,38 @@ fn overdue_waiter_is_admitted_ahead_of_shorter_newcomers() {
 }
 
 #[test]
-fn capacity_override_raises_at_once_and_only_while_valid() {
-    let d = Daemon::start(&[]);
+fn more_slots_apply_at_once_and_stay() {
+    let mut d = Daemon::start(&[]);
     d.submit("blocker", d.job("sleep 3"));
     d.wait_state("blocker", "running", T);
     d.submit("waiter", d.job("sleep 0.2"));
     d.wait_state("waiter", "queued", T);
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(d.status_of("waiter").unwrap()["state"], "queued");
-    d.write_override(Some(2));
+    d.set_slots(40);
     d.wait_state("waiter", "running", Duration::from_secs(5));
-    assert_eq!(d.status_json()["capacity"], 2);
-    assert_eq!(d.status_json()["override"]["slots"], 2);
-    // an expired override is ignored, and so is a malformed one
-    fs::write(d.state.join("capacity-override"), "3 2020-01-01T00:00:00Z\n").unwrap();
-    assert_eq!(d.status_json()["capacity"], 1);
-    fs::write(d.state.join("capacity-override"), "lots\n").unwrap();
-    assert_eq!(d.status_json()["capacity"], 1);
+    assert_eq!(d.status_json()["capacity"], 40, "no ceiling below the guard");
     d.wait_exit("blocker", T);
+    // A timed setting from before 0.7.1 is cleared at start, and the count stays.
+    let until = chrono::Utc::now() + chrono::Duration::hours(1);
+    fs::write(d.state.join("capacity-override"), format!("3 {}\n", until.to_rfc3339())).unwrap();
+    d.stop_daemon();
+    d.launch();
+    assert!(!d.state.join("capacity-override").exists());
+    assert_eq!(d.status_json()["capacity"], 40);
+    let out = d.cmd(&["slots", "257"]).output().unwrap();
+    assert!(!out.status.success(), "the guard: {out:?}");
 }
 
 #[test]
 fn lower_capacity_lands_under_load() {
-    let d = Daemon::start(&[("DRMANHATTAN_SLOTS", "2")]);
+    let d = Daemon::start(&[]);
+    d.set_slots(2);
     d.submit("a", d.job("sleep 1.5"));
     d.submit("b", d.job("sleep 3"));
     d.wait_state("a", "running", T);
     d.wait_state("b", "running", T);
-    d.write_override(Some(1));
+    d.set_slots(1);
     d.submit("c", d.job("sleep 0.2"));
     d.wait_exit("a", T);
     std::thread::sleep(Duration::from_millis(500));

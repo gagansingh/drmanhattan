@@ -10,7 +10,7 @@ use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
-use crate::settings::{load_config, read_override, save_config, standing_capacity, Settings, MAX_SLOTS};
+use crate::settings::{set_slots, standing_capacity, Settings, MAX_SLOTS};
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -92,9 +92,10 @@ pub(super) fn update(rest: &[String]) -> Result<i32> {
         Some(other) => return invalid(format!("--auto must be on or off, not {other:?}")),
     };
     let paths = Paths::from_env();
-    let mut config = load_config(&paths)?;
-    config.auto_update = on;
-    save_config(&paths, &config)?;
+    crate::settings::update_config(&paths, |config| {
+        config.auto_update = on;
+        Ok(())
+    })?;
     println!(
         "auto-update {}",
         if on { "on: newer releases of this major version install once the queue is idle" } else { "off" }
@@ -200,9 +201,8 @@ const SLOTS: Spec = Spec {
 usage: drmanhattan slots [N]
 
 With no argument, shows how many jobs may run at once and where that number comes from.
-With N (1 to 16), sets the standing count in config.json; the daemon picks it up at once.
-$DRMANHATTAN_SLOTS, when set, overrides config.json; the dashboard's - and + buttons
-override both for four hours.
+With N (1 to 256), sets it in config.json, as the dashboard's - and + do: the daemon picks
+it up at once, and it stays until changed. $DRMANHATTAN_SLOTS, when set, overrides it.
 ",
     values: &[],
     switches: &[],
@@ -214,22 +214,15 @@ pub(super) fn slots(rest: &[String]) -> Result<i32> {
     let paths = Paths::from_env();
     let Some(n) = a.positional.first() else {
         let slots_env = daemon::slots_env(daemon::running(&paths).as_ref());
-        let (standing, source) = standing_capacity(&paths, slots_env.as_deref())?;
-        let over = read_override(&paths);
-        let mut line = format!("capacity={} standing={standing} source={source}", over.map_or(standing, |o| o.slots));
-        if let Some(o) = over {
-            line += &format!(" override={} until={}", o.slots, o.until);
-        }
-        println!("{line}");
+        let (slots, source) = standing_capacity(&paths, slots_env.as_deref())?;
+        println!("capacity={slots} source={source}");
         return Ok(0);
     };
     let n: u32 = match n.parse() {
         Ok(n) if (1..=MAX_SLOTS).contains(&n) => n,
         _ => return invalid(format!("slots must be a number from 1 to {MAX_SLOTS}, not {n:?}")),
     };
-    let mut config = load_config(&paths)?;
-    config.slots = Some(n);
-    save_config(&paths, &config)?;
+    set_slots(&paths, n)?;
     let plural = if n == 1 { "" } else { "s" };
     let note = if daemon::slots_env(daemon::running(&paths).as_ref()).is_some() {
         " (DRMANHATTAN_SLOTS, set for the daemon, still overrides it)"
