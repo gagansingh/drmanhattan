@@ -11,7 +11,7 @@ use std::time::Duration;
 pub(crate) use capacity::{
     effective_capacity, remove_timed_overrides, set_slots, set_worker_slots, standing_capacity, MAX_SLOTS,
 };
-pub(crate) use config::{load_config, save_config};
+pub(crate) use config::{load_config, update_config};
 pub(crate) use manual_order::{read_manual_order, write_manual_order, ManualOrder};
 
 use crate::error::{invalid, Result};
@@ -33,7 +33,6 @@ pub(crate) struct Settings {
     pub(crate) retention: Duration,
     /// Archived run records leave after this long.
     pub(crate) archive_retention: Duration,
-    /// The ceiling of the dashboard's + button.
     /// The most a running job's log may hold, in bytes. Past it, the earlier output is
     /// dropped and the newest kept.
     pub(crate) max_log_bytes: u64,

@@ -5,7 +5,7 @@
 use crate::error::{invalid, Result};
 use crate::fsutil;
 use crate::paths::Paths;
-use crate::settings::{load_config, save_config};
+use crate::settings::{load_config, update_config};
 
 /// Only a guard against a typo: a machine may run as many jobs at once as its owner likes.
 pub(crate) const MAX_SLOTS: u32 = 256;
@@ -38,10 +38,10 @@ pub(crate) fn standing_capacity(paths: &Paths, slots_env: Option<&str>) -> Resul
 /// it, still wins.
 pub(crate) fn set_slots(paths: &Paths, slots: u32) -> Result<u32> {
     let slots = check(slots, "slots")?;
-    let mut config = load_config(paths)?;
-    config.slots = Some(slots);
-    save_config(paths, &config)?;
-    Ok(slots)
+    update_config(paths, |config| {
+        config.slots = Some(slots);
+        Ok(slots)
+    })
 }
 
 /// Sets how many of a worker's slots this machine may use, in `config.json`; 0 pauses it.
@@ -49,13 +49,13 @@ pub(crate) fn set_worker_slots(paths: &Paths, worker: &str, slots: u32) -> Resul
     if slots > MAX_SLOTS {
         return invalid(format!("slots must be from 0 to {MAX_SLOTS}, not {slots}"));
     }
-    let mut config = load_config(paths)?;
-    let Some(w) = config.workers.iter_mut().find(|w| w.name == worker) else {
-        return invalid(format!("no worker is named {worker:?}"));
-    };
-    w.slots = slots;
-    save_config(paths, &config)?;
-    Ok(slots)
+    update_config(paths, |config| {
+        let Some(w) = config.workers.iter_mut().find(|w| w.name == worker) else {
+            return invalid(format!("no worker is named {worker:?}"));
+        };
+        w.slots = slots;
+        Ok(slots)
+    })
 }
 
 /// The capacity admission honours: the standing count.

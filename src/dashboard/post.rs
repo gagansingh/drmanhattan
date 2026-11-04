@@ -1,5 +1,5 @@
-//! The dashboard's two writes: the manual queue order (dragging a queued run) and the
-//! capacity override (the − and + buttons).
+//! What the dashboard can change: the manual queue order (dragging a queued run), the slots
+//! (the − and + buttons, kept in config.json), a service (stop, restart), and updates.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -12,7 +12,7 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{load_config, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
+use crate::settings::{set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
@@ -143,9 +143,9 @@ fn set_auto_update(req: Request, body: &str, ctx: &Ctx) {
     let Some(AutoUpdateBody { on }) = object::<AutoUpdateBody>(body) else {
         return http::error(req, "send {\"on\": true or false}");
     };
-    let saved = load_config(&ctx.paths).and_then(|mut c| {
+    let saved = crate::settings::update_config(&ctx.paths, |c| {
         c.auto_update = on;
-        crate::settings::save_config(&ctx.paths, &c)
+        Ok(())
     });
     match saved {
         Ok(()) => http::json(req, 200, &json!({ "auto_update": on })),

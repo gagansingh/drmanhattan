@@ -10,7 +10,7 @@ use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
-use crate::settings::{load_config, save_config, set_slots, standing_capacity, Settings, MAX_SLOTS};
+use crate::settings::{set_slots, standing_capacity, Settings, MAX_SLOTS};
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -92,9 +92,10 @@ pub(super) fn update(rest: &[String]) -> Result<i32> {
         Some(other) => return invalid(format!("--auto must be on or off, not {other:?}")),
     };
     let paths = Paths::from_env();
-    let mut config = load_config(&paths)?;
-    config.auto_update = on;
-    save_config(&paths, &config)?;
+    crate::settings::update_config(&paths, |config| {
+        config.auto_update = on;
+        Ok(())
+    })?;
     println!(
         "auto-update {}",
         if on { "on: newer releases of this major version install once the queue is idle" } else { "off" }

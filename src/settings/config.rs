@@ -50,7 +50,58 @@ pub(crate) fn load_config(paths: &Paths) -> Result<Config> {
     Ok(config)
 }
 
-pub(crate) fn save_config(paths: &Paths, config: &Config) -> Result<()> {
+/// Changes `config.json` with `change`, holding a lock on `config.json.lock` from reading it
+/// to writing it back, so two writers (the dashboard's threads, `slots N`, `workers add`)
+/// never lose each other's change. Nothing is written when `change` fails.
+pub(crate) fn update_config<T>(paths: &Paths, change: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::io::AsRawFd;
     fsutil::ensure_private_dir(&paths.data)?;
-    fsutil::write_json(&paths.config(), config)
+    let lock_path = paths.data.join("config.json.lock");
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&lock_path)
+        .context("open the config lock", &lock_path)?;
+    // SAFETY: the descriptor belongs to `lock`, which outlives the call; the kernel releases
+    // the lock when the file is closed at the end of this function.
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("lock", &lock_path);
+    }
+    let mut config = load_config(paths)?;
+    let out = change(&mut config)?;
+    fsutil::write_json(&paths.config(), &config)?;
+    Ok(out)
+}
+
+#[cfg(test)]
+mod lock_tests {
+    use super::*;
+
+    #[test]
+    fn concurrent_changes_are_all_kept() {
+        let root = std::env::temp_dir().join(format!("drmanhattan-config-{}", std::process::id()));
+        let paths = Paths { state: root.join("state"), data: root.join("data") };
+        let threads: Vec<_> = (0..8)
+            .map(|i| {
+                let paths = paths.clone();
+                std::thread::spawn(move || {
+                    update_config(&paths, |c| {
+                        c.other.insert(format!("k{i}"), serde_json::json!(i));
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                        Ok(())
+                    })
+                    .unwrap()
+                })
+            })
+            .collect();
+        threads.into_iter().for_each(|t| t.join().unwrap());
+        let config = load_config(&paths).unwrap();
+        assert_eq!(config.other.len(), 8, "{:?}", config.other.keys());
+        let _ = std::fs::remove_dir_all(root);
+    }
 }

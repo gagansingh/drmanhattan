@@ -10,7 +10,7 @@ use crate::error::{invalid, Error, Result};
 use crate::job::State;
 use crate::paths::Paths;
 use crate::queue::read_records;
-use crate::settings::{load_config, save_config, MAX_SLOTS};
+use crate::settings::{load_config, update_config, MAX_SLOTS};
 use crate::time::Timestamp;
 use crate::workers::{self, read_live, Live, WorkerConfig};
 
@@ -131,7 +131,7 @@ fn list(paths: &Paths, json: bool) -> Result<i32> {
 }
 
 fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags: &[String]) -> Result<i32> {
-    let mut config = load_config(paths)?;
+    let config = load_config(paths)?;
     let existing = config.workers.iter().position(|w| w.ssh == alias || name.is_some_and(|n| w.name == n));
     let mut worker = existing.map(|i| config.workers[i].clone()).unwrap_or(WorkerConfig {
         name: String::new(),
@@ -169,13 +169,17 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
     if let Some(why) = workers::unusable(&stats) {
         return invalid(format!("{alias} cannot be a worker yet: {why}"));
     }
-    match existing {
-        Some(i) => config.workers[i] = worker.clone(),
-        None => config.workers.push(worker.clone()),
-    }
-    workers::validate(&mut config.workers)?;
-    save_config(paths, &config)?;
-    let verb = if existing.is_some() { "updated" } else { "added" };
+    // The probe may have taken a while: apply this worker to the file as it is now.
+    let existed = update_config(paths, |config| {
+        let at = config.workers.iter().position(|w| w.ssh == alias || w.name == worker.name);
+        match at {
+            Some(i) => config.workers[i] = worker.clone(),
+            None => config.workers.push(worker.clone()),
+        }
+        workers::validate(&mut config.workers)?;
+        Ok(at.is_some())
+    })?;
+    let verb = if existed { "updated" } else { "added" };
     println!("{verb} worker {} (ssh {}, {} slot(s) for this machine)", worker.name, worker.ssh, worker.slots);
     Ok(0)
 }
