@@ -209,3 +209,31 @@ fn lower_capacity_lands_under_load() {
     assert_eq!(d.wait_exit("c", T), 0);
     assert!(started(&d, "c") >= epoch(&d.status_of("b").unwrap()["finished_at"]) - 0.5);
 }
+
+#[test]
+fn status_says_which_waiters_are_quick_and_why() {
+    let mut d = Daemon::start(&[]);
+    d.seed_history(&[("make", "make lint", 2), ("make", "make lint", 3), ("make", "make lint", 2)]);
+    d.submit("blocker", d.job("sleep 30"));
+    d.wait_state("blocker", "running", T);
+    d.submit("lint", json!({"command": ["make", "lint"], "cwd": d.work, "label": "make lint"}));
+    d.submit("git", json!({"command": ["git", "--version"], "cwd": d.work, "label": "git"}));
+    d.submit(
+        "build",
+        json!({"command": ["make", "build"], "cwd": d.work, "label": "make build", "category": "make-build"}),
+    );
+    d.wait_state("build", "queued", T);
+    let st = d.status_json();
+    let lane = |label: &str| {
+        let w = st["waiters"].as_array().unwrap().iter().find(|w| w["label"] == label).unwrap().clone();
+        (w["quick"].as_bool().unwrap(), w["lane_reason"].as_str().unwrap_or_default().to_string())
+    };
+    assert_eq!(lane("make lint"), (true, "3 of its last 3 runs here took under 30s".into()));
+    assert_eq!(lane("git"), (true, "git usually takes seconds".into()));
+    let (quick, reason) = lane("make build");
+    assert!(!quick && reason.starts_with("new here"), "{reason}");
+    fs::write(d.inbox.join("blocker.cancel"), "").unwrap();
+    for name in ["lint", "git", "build"] {
+        d.wait_exit(name, T);
+    }
+}

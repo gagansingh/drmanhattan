@@ -37,9 +37,9 @@ pub(crate) use rank::rank;
 pub(crate) use recover::HEARTBEAT_EVERY;
 
 use crate::activity::{Activity, Patterns, Typicals};
-use crate::estimate::{self, Estimate, LoadModel};
+use crate::estimate::{Estimate, HistoryIndex, Lane, LoadModel};
 use crate::history::{self, HistoryRow};
-use crate::job::{Job, Record, RunId, State};
+use crate::job::{Job, Record, RemoteMode, RunId, State};
 use crate::log::{self, Tone};
 use crate::naming::tilde_path;
 use crate::paths::Paths;
@@ -77,8 +77,10 @@ pub(crate) struct Queue {
     pub(crate) settings: Settings,
     pub(crate) inbox: PathBuf,
     pub(crate) runs: BTreeMap<RunId, Entry>,
-    /// The newest rows of `history.jsonl`, which the estimates read.
+    /// The newest rows of `history.jsonl`, which the load model reads.
     pub(crate) history: Vec<HistoryRow>,
+    /// All of it, by what the estimates and lanes match on.
+    index: HistoryIndex,
     /// Fitted from `history`, refitted when a run finishes.
     pub(crate) model: LoadModel,
     /// Usual durations of `::start`/`::done` commands. Its own lock, so runners can learn
@@ -96,9 +98,12 @@ pub(crate) fn lock(shared: &Shared) -> MutexGuard<'_, Queue> {
 
 impl Queue {
     pub(crate) fn new(paths: Paths, settings: Settings, inbox: PathBuf, default_patterns: Patterns) -> Queue {
-        let history = history::read_recent(&paths, history::IN_MEMORY);
+        let mut history = history::read_recent(&paths, usize::MAX);
+        let index = HistoryIndex::of(&history);
+        history.drain(..history.len().saturating_sub(history::IN_MEMORY));
         Queue {
             model: LoadModel::fit(&history, process::cpu_count()),
+            index,
             typicals: Arc::new(Mutex::new(Typicals::load(&paths))),
             default_patterns: Arc::new(default_patterns),
             history,
@@ -135,7 +140,43 @@ impl Queue {
     /// The run's expected duration on `machine` (a worker; None for this machine).
     pub(crate) fn estimate_on(&self, job: &Job, machine: Option<&str>) -> Estimate {
         let variant = job.variant.as_deref().unwrap_or_default();
-        estimate::estimate(&self.history, &job.category, &job.label, variant, machine)
+        self.index.estimate(&job.category, &job.label, variant, machine)
+    }
+
+    /// Whether the job is quick here, and why; None for a service, which has a lane of its own.
+    /// A job that may go to a worker, or came from another machine's queue, takes a slot:
+    /// slots are what machines share out between them.
+    pub(crate) fn lane(&self, job: &Job) -> Option<Lane> {
+        if job.service {
+            return None;
+        }
+        if job.remote != RemoteMode::Never {
+            return Some(Lane { quick: false, reason: "it may run on a worker".into() });
+        }
+        if let Some(from) = &job.dispatched_from {
+            return Some(Lane { quick: false, reason: format!("sent here by {from}") });
+        }
+        Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default()))
+    }
+
+    /// Decides the lane of every waiting run again: a run that finished may have shown a
+    /// command to be quick, or not. Persists the runs whose lane changed.
+    pub(crate) fn refresh_lanes(&mut self) {
+        let changed: Vec<(RunId, Option<Lane>)> = self
+            .records(State::Queued)
+            .filter_map(|r| {
+                let lane = self.lane(&r.job);
+                let now = (lane.as_ref().is_some_and(|l| l.quick), lane.as_ref().map(|l| &l.reason));
+                (now != (r.quick, r.lane_reason.as_ref())).then(|| (r.run_id.clone(), lane))
+            })
+            .collect();
+        for (run_id, lane) in changed {
+            if let Some(e) = self.runs.get_mut(&run_id) {
+                e.rec.quick = lane.as_ref().is_some_and(|l| l.quick);
+                e.rec.lane_reason = lane.map(|l| l.reason);
+                self.persist(&run_id);
+            }
+        }
     }
 
     /// Queues a validated job: gives it a run id, its expected duration and its
@@ -156,7 +197,10 @@ impl Queue {
         ];
         log::event(Tone::Quiet, "queued", &job.label, Some(&run_id), &details);
         let group = job.group.clone();
-        let rec = Record::new(run_id.clone(), job, expected, skip_after);
+        let lane = self.lane(&job);
+        let mut rec = Record::new(run_id.clone(), job, expected, skip_after);
+        rec.quick = lane.as_ref().is_some_and(|l| l.quick);
+        rec.lane_reason = lane.map(|l| l.reason);
         self.runs.insert(run_id.clone(), Entry { rec, live: None, restart: false });
         self.persist(&run_id);
         if let Some(group) = group {
@@ -274,9 +318,11 @@ impl Queue {
         if let Err(e) = history::append(&self.paths, &row) {
             log::problem(format_args!("could not record timing history: {e}"));
         }
+        self.index.add(&row);
         self.history.push(row);
         let excess = self.history.len().saturating_sub(history::IN_MEMORY);
         self.history.drain(..excess);
         self.model = LoadModel::fit(&self.history, process::cpu_count());
+        self.refresh_lanes();
     }
 }
