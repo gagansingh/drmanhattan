@@ -1,7 +1,7 @@
 //! The worker's side: what a dispatcher runs on it over SSH.
 //!
 //! - `drmanhattan machine-stats` prints its version, whether its daemon runs, how busy it
-//!   is, its CPU, memory and temperature, and its free disk, as JSON. The dispatcher polls
+//!   is, its CPU, memory, temperature and battery, and its free disk, as JSON. The dispatcher polls
 //!   it for the dashboard and checks it before each dispatch.
 //! - `drmanhattan __dispatch-probe` does the same after housekeeping: it removes the
 //!   mirrors this dispatcher no longer needs and records the ones it is about to send.
@@ -52,6 +52,9 @@ pub(crate) struct MachineStats {
     pub(crate) ncpu: usize,
     pub(crate) memory: Option<serde_json::Value>,
     pub(crate) thermals: Option<serde_json::Value>,
+    /// Its battery, when it has one. Absent before 0.7.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) battery: Option<serde_json::Value>,
     /// Free space on the disk holding the home directory.
     pub(crate) free_gb: Option<f64>,
     /// Mirrors `__dispatch-probe` removed.
@@ -115,6 +118,7 @@ fn stats(paths: &Paths) -> MachineStats {
         ncpu: process::cpu_count(),
         memory: readings.memory.and_then(|m| serde_json::to_value(m).ok()),
         thermals: readings.thermals.and_then(|t| serde_json::to_value(t).ok()),
+        battery: readings.battery.and_then(|b| serde_json::to_value(b).ok()),
         free_gb: free_gb(&home),
         home,
         pruned: Vec::new(),
