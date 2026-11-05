@@ -44,6 +44,8 @@ pub(super) struct StateDoc {
     capacity_max: u32,
     /// Set when the daemon's `DRMANHATTAN_SLOTS` decides the slots, so − and + cannot.
     capacity_fixed: Option<String>,
+    /// Since when the queue is paused (`drmanhattan pause`), as epoch seconds.
+    queue_paused_since: Option<f64>,
     /// Whether any waiter is placed by the manual order.
     manual_order: bool,
     slots: Vec<SlotView>,
@@ -250,6 +252,7 @@ struct Snapshot {
     history_count: usize,
     model: LoadModel,
     typicals: Arc<Mutex<Typicals>>,
+    queue_paused_since: Option<Timestamp>,
 }
 
 impl Snapshot {
@@ -269,7 +272,7 @@ impl Snapshot {
         finished.sort_by(|a, b| order(b).cmp(&order(a)));
         let (page, mut view) = page(&finished, query);
         view.latest = finished.iter().take(LATEST).map(|r| outcome(r)).collect();
-        Snapshot {
+        let mut snap = Snapshot {
             running,
             queued: q.records(State::Queued).map(with_estimate).collect(),
             page: page.into_iter().map(with_estimate).collect(),
@@ -279,7 +282,14 @@ impl Snapshot {
             history_count: q.history.len(),
             model: q.model.clone(),
             typicals: q.typicals.clone(),
+            queue_paused_since: q.queue_paused_since,
+        };
+        // The pause so far counts toward neither waiting nor running, as it will once resumed.
+        if let Some(since) = snap.queue_paused_since {
+            snap.running.iter_mut().for_each(|(r, _, _)| r.add_pause(since, now));
+            snap.queued.iter_mut().for_each(|(r, _)| r.add_pause(since, now));
         }
+        snap
     }
 }
 
@@ -346,6 +356,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         .iter()
         .map(|(rec, est, activity)| {
             let mut view = ahead(rec, est);
+            view.paused = snap.queue_paused_since.is_some() && rec.stopped_by_pause();
             let activity = crate::sync::lock(activity).clone();
             for note in activity.notes() {
                 if !view.notes.contains(note) {
@@ -369,6 +380,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
             let (rec, est) = by_id.get(&ranked.run_id)?;
             let mut view = ahead(rec, est);
             (view.overdue, view.manual) = (Some(ranked.overdue), Some(ranked.manual));
+            view.paused = snap.queue_paused_since.is_some();
             view.group_busy = rec.job.group.as_deref().map(|g| busy_groups.contains(g));
             Some(view)
         })
@@ -397,6 +409,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         capacity,
         capacity_max: MAX_SLOTS,
         capacity_fixed: ctx.settings.slots_env.as_ref().map(|raw| format!("DRMANHATTAN_SLOTS={raw}")),
+        queue_paused_since: snap.queue_paused_since.map(Timestamp::epoch_seconds),
         manual_order: queued.iter().any(|v| v.manual == Some(true)),
         slots,
         running,

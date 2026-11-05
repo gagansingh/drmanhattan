@@ -2,6 +2,8 @@
 //! to `state/runs/<run id>.json` (where a restarted daemon reads it back) and, without the
 //! job's environment, to `<job>.status.json` beside the job file.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 use crate::job::{Job, RunId};
@@ -164,6 +166,14 @@ pub(crate) struct Record {
     /// Why it is quick, or waits for a slot; none for a service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) lane_reason: Option<String>,
+    /// Seconds of its current phase (waiting, then running) spent with the queue paused
+    /// (`drmanhattan pause`): they count toward neither its wait nor its running time.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub(crate) paused_seconds: u64,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// A run handed to a worker: its job there, and how much of its log came back.
@@ -212,8 +222,39 @@ impl Record {
             ready_at: None,
             quick: false,
             lane_reason: None,
+            paused_seconds: 0,
             job,
         }
+    }
+
+    /// Whether pausing the queue stops it: a waiter, or a run here that is not a service
+    /// (services, and runs on a worker, carry on).
+    pub(crate) fn stopped_by_pause(&self) -> bool {
+        match self.state {
+            State::Queued => true,
+            State::Running => self.machine.is_none() && !self.job.service,
+            _ => false,
+        }
+    }
+
+    /// Adds the part of a pause since `since` that falls in its current phase, up to `now`.
+    pub(crate) fn add_pause(&mut self, since: Timestamp, now: Timestamp) {
+        if !self.stopped_by_pause() {
+            return;
+        }
+        let phase_start = if self.state == State::Running { self.started_at } else { Some(self.queued_at) };
+        let from = phase_start.map_or(since, |t| t.max(since));
+        self.paused_seconds += from.until(now).as_secs();
+    }
+
+    /// How long it has run by `end`, paused time aside.
+    pub(crate) fn ran(&self, end: Timestamp) -> Option<Duration> {
+        Some(self.started_at?.until(end).saturating_sub(Duration::from_secs(self.paused_seconds)))
+    }
+
+    /// How long it has waited, paused time aside.
+    pub(crate) fn waited(&self, now: Timestamp) -> Duration {
+        self.queued_at.until(now).saturating_sub(Duration::from_secs(self.paused_seconds))
     }
 
     /// The record as `<job>.status.json` shows it: the job's environment may hold secrets

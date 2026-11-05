@@ -80,6 +80,7 @@ impl Queue {
             let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
             rec.machine = machine;
             rec.started_at = Some(now);
+            rec.paused_seconds = 0; // what it waited paused is behind it; its run starts at zero
             rec.load_at_start = process::load_now().map(|l| (l * 10.0).round() / 10.0);
             let waited = format!("waited {}", human(rec.queued_at.until(now)));
             log::event(

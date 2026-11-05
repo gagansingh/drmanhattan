@@ -59,6 +59,9 @@ pub(super) struct RunView {
     port: Option<u16>,
     ready_at: Option<f64>,
     ttl: Option<u64>,
+    /// Stopped, or kept waiting, by the queue's pause.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) paused: bool,
     /// Waiting: another job of its group is running, so it cannot start yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) group_busy: Option<bool>,
@@ -173,6 +176,7 @@ impl RunView {
             },
             ready_at: epoch(rec.ready_at),
             ttl: job.ttl,
+            paused: false,
             group_busy: None,
             timeout: job.timeout,
             typical_seconds: est.p50.map(ms_to_secs),
@@ -201,10 +205,11 @@ fn ms_to_secs(ms: u64) -> f64 {
 fn timing(rec: &Record, est: &Estimate, now: Timestamp) -> Timing {
     let waited_until = |end: Timestamp| Some(secs(rec.queued_at.until(end)));
     match (rec.state, rec.started_at) {
-        (State::Queued, _) => Timing { waiting: waited_until(now), ..Timing::default() },
+        // Paused time counts toward neither (`Record::paused_seconds`).
+        (State::Queued, _) => Timing { waiting: Some(secs(rec.waited(now))), ..Timing::default() },
         (State::Running, started) => {
             let started = started.unwrap_or(now);
-            let elapsed = started.until(now);
+            let elapsed = rec.ran(now).unwrap_or_default();
             let elapsed_ms = elapsed.as_millis() as u64;
             Timing {
                 elapsed: Some(secs(elapsed)),
@@ -215,7 +220,7 @@ fn timing(rec: &Record, est: &Estimate, now: Timestamp) -> Timing {
             }
         }
         (_, Some(started)) => Timing {
-            duration: Some(secs(started.until(rec.finished_at.unwrap_or(now)))),
+            duration: rec.ran(rec.finished_at.unwrap_or(now)).map(secs),
             wait_seconds: waited_until(started),
             ..Timing::default()
         },

@@ -25,6 +25,7 @@ mod recover;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -88,6 +89,10 @@ pub(crate) struct Queue {
     pub(crate) typicals: Arc<Mutex<Typicals>>,
     /// The activity patterns of a job that gives none: `config.json`'s, else the markers.
     pub(crate) default_patterns: Arc<Patterns>,
+    /// Since when the queue is paused (`config.json`'s `queue_paused_since`, read each pass).
+    pub(crate) queue_paused_since: Option<Timestamp>,
+    /// Whether it is paused, for the runners, which stop their jobs while it is.
+    pub(crate) paused: Arc<AtomicBool>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Queue>>;
@@ -111,6 +116,8 @@ impl Queue {
             settings,
             inbox,
             runs: BTreeMap::new(),
+            queue_paused_since: None,
+            paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -329,5 +336,41 @@ impl Queue {
         self.history.drain(..excess);
         self.model = LoadModel::fit(&self.history, process::cpu_count());
         self.refresh_lanes();
+    }
+
+    /// Applies `config.json`'s pause. On a resume, the waiters and the runs it stopped are
+    /// credited the paused time, which then counts toward neither their wait nor their run.
+    pub(crate) fn set_pause(&mut self, since: Option<Timestamp>) {
+        if self.queue_paused_since == since {
+            return;
+        }
+        if let Some(old) = self.queue_paused_since {
+            let now = Timestamp::now();
+            let ids: Vec<RunId> =
+                self.runs.iter().filter(|(_, e)| e.rec.stopped_by_pause()).map(|(id, _)| id.clone()).collect();
+            for id in ids {
+                if let Some(e) = self.runs.get_mut(&id) {
+                    e.rec.add_pause(old, now);
+                }
+                self.persist(&id);
+            }
+            if since.is_none() {
+                log::notice(
+                    Tone::Start,
+                    "resumed",
+                    format_args!("after {}; admission carries on", human(old.until(now))),
+                );
+            }
+        }
+        if since.is_some() && self.queue_paused_since.is_none() {
+            let stopped = self.records(State::Running).filter(|r| r.stopped_by_pause()).count();
+            log::notice(
+                Tone::Warning,
+                "paused",
+                format_args!("nothing starts until `drmanhattan resume`; {stopped} running stopped"),
+            );
+        }
+        self.queue_paused_since = since;
+        self.paused.store(since.is_some(), Ordering::SeqCst);
     }
 }

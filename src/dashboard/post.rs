@@ -1,5 +1,5 @@
 //! What the dashboard can change: the manual queue order (dragging a queued run), the slots
-//! (the − and + buttons, kept in config.json), a service (stop, restart), and updates.
+//! (the − and + buttons, kept in config.json), the pause, a service (stop, restart), and updates.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -12,7 +12,7 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
+use crate::settings::{set_queue_paused, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
@@ -55,6 +55,7 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx, lan: bool) {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
         "/api/update" => start_update(req, ctx),
+        "/api/pause" => set_pause(req, body, ctx),
         "/api/auto-update" => set_auto_update(req, body, ctx),
         _ => set_order(req, body, ctx),
     }
@@ -133,6 +134,23 @@ fn start_update(req: Request, ctx: &Ctx) {
     }
     match crate::update::start_detached() {
         Ok(()) => http::json(req, 202, &json!({ "updating": true })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PauseBody {
+    paused: bool,
+}
+
+/// Pause and Resume, as `drmanhattan pause` and `resume`: kept in config.json.
+fn set_pause(req: Request, body: &str, ctx: &Ctx) {
+    let Some(PauseBody { paused }) = object::<PauseBody>(body) else {
+        return http::error(req, "send {\"paused\": true or false}");
+    };
+    match set_queue_paused(&ctx.paths, paused) {
+        Ok(since) => http::json(req, 200, &json!({ "paused": since.is_some() })),
         Err(e) => http::error(req, e),
     }
 }

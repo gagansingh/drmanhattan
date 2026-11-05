@@ -1,4 +1,4 @@
-//! One scheduler pass: pick up new job files, honour cancels, admit waiters.
+//! One scheduler pass: pick up new job files, honour cancels and the pause, admit waiters.
 
 use std::collections::HashSet;
 use std::fs;
@@ -49,7 +49,8 @@ impl Scheduler {
         }
         let capacity = self.capacity();
         let manual = read_manual_order(&self.paths);
-        let workers = load_config(&self.paths).map(|c| workers::slots(&c.workers)).unwrap_or_default();
+        let config = load_config(&self.paths);
+        let workers = config.as_ref().map(|c| workers::slots(&c.workers)).unwrap_or_default();
 
         let mut q = queue::lock(shared);
         for job in new_jobs {
@@ -71,7 +72,11 @@ impl Scheduler {
                 );
             }
         }
-        if !admitting {
+        // An unreadable config keeps the pause as it was.
+        if let Ok(config) = &config {
+            q.set_pause(config.queue_paused_since);
+        }
+        if !admitting || q.queue_paused_since.is_some() {
             return Vec::new();
         }
         let max_prepares = q.settings.max_prepares;
