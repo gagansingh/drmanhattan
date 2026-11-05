@@ -1,5 +1,6 @@
 //! `drmanhattan workers`: the configured workers and what this machine last saw of them,
-//! and `workers add`, which checks a machine and adds it.
+//! `workers add`, which checks a machine and adds it, and `workers remove`. Also
+//! `drmanhattan route`, which sends jobs that may run on a worker to chosen workers only.
 
 use std::time::Duration;
 
@@ -10,7 +11,7 @@ use crate::error::{invalid, Error, Result};
 use crate::job::State;
 use crate::paths::Paths;
 use crate::queue::read_records;
-use crate::settings::{load_config, update_config, MAX_SLOTS};
+use crate::settings::{load_config, set_route, update_config, MAX_SLOTS};
 use crate::time::Timestamp;
 use crate::workers::{self, read_live, Live, WorkerConfig};
 
@@ -18,6 +19,8 @@ const WORKERS: Spec = Spec {
     usage: "\
 usage: drmanhattan workers [--json]
        drmanhattan workers add <ssh-alias> [--name NAME] [--slots N] [--tag TAG]...
+                               [--drmanhattan PATH]
+       drmanhattan workers remove <name>
 
 With no arguments, lists the workers in config.json: whether each answered, how many of
 its slots this machine may use and how many it uses, and why it is not taking work, if it
@@ -25,8 +28,14 @@ is not. `--json` prints the same as one document.
 
 `add` checks that the machine answers over SSH with its key alone, that it runs the same
 drmanhattan, confirmed and running there, then adds it to config.json (or updates it).
+--drmanhattan gives the command's absolute path there, when it is not on the PATH ssh
+gives a command (install.sh's ~/.local/bin usually is not).
+
+`remove` takes it out of config.json, and out of the route (`drmanhattan route`); with
+nothing left on the route, the route is off and jobs run here again. Runs already on it
+carry on there, followed to the end; its mirrors stay on it.
 ",
-    values: &["name", "slots", "tag"],
+    values: &["name", "slots", "tag", "drmanhattan"],
     switches: &["json"],
     positional: 2,
 };
@@ -91,8 +100,13 @@ pub(super) fn workers(rest: &[String]) -> Result<i32> {
                 a.get("name"),
                 a.parsed("slots", &format!("a number from 0 to {MAX_SLOTS}"))?,
                 a.all("tag"),
+                a.get("drmanhattan"),
             ),
             None => invalid("workers add needs the worker's ssh alias (see --help)"),
+        },
+        Some("remove") => match a.positional.get(1) {
+            Some(name) => remove(&paths, name),
+            None => invalid("workers remove needs the worker's name (see --help)"),
         },
         Some(other) => invalid(format!("unknown workers command: {other} (see --help)")),
     }
@@ -130,7 +144,14 @@ fn list(paths: &Paths, json: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags: &[String]) -> Result<i32> {
+fn add(
+    paths: &Paths,
+    alias: &str,
+    name: Option<&str>,
+    slots: Option<u32>,
+    tags: &[String],
+    program: Option<&str>,
+) -> Result<i32> {
     let config = load_config(paths)?;
     let existing = config.workers.iter().position(|w| w.ssh == alias || name.is_some_and(|n| w.name == n));
     let mut worker = existing.map(|i| config.workers[i].clone()).unwrap_or(WorkerConfig {
@@ -153,6 +174,9 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
     }
     if !tags.is_empty() {
         worker.tags = tags.to_vec();
+    }
+    if let Some(p) = program {
+        worker.drmanhattan = Some(p.to_string());
     }
     workers::validate(std::slice::from_mut(&mut worker))?;
     let out =
@@ -186,6 +210,9 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
                 if !tags.is_empty() {
                     w.tags = tags.to_vec();
                 }
+                if let Some(p) = program {
+                    w.drmanhattan = Some(p.to_string());
+                }
                 i
             }
             None => {
@@ -199,4 +226,65 @@ fn add(paths: &Paths, alias: &str, name: Option<&str>, slots: Option<u32>, tags:
     let verb = if existed { "updated" } else { "added" };
     println!("{verb} worker {} (ssh {}, {} slot(s) for this machine)", worker.name, worker.ssh, worker.slots);
     Ok(0)
+}
+
+fn remove(paths: &Paths, name: &str) -> Result<i32> {
+    let route = update_config(paths, |config| {
+        let Some(at) = config.workers.iter().position(|w| w.name == name) else {
+            return invalid(format!("no worker is named {name:?}"));
+        };
+        config.workers.remove(at);
+        config.route.retain(|r| r != name);
+        Ok(config.route.clone())
+    })?;
+    let _ = crate::fsutil::remove_if_present(&paths.worker_state(name));
+    println!("removed worker {name}");
+    let running =
+        read_records(paths).iter().filter(|r| r.state == State::Running && r.machine.as_deref() == Some(name)).count();
+    if running > 0 {
+        println!("{running} run(s) on it carry on there until they end");
+    }
+    println!("{}", route_line(&route));
+    Ok(0)
+}
+
+const ROUTE: Spec = Spec {
+    usage: "\
+usage: drmanhattan route [<worker>... | local]
+
+With no argument, shows the route. With one or more workers, every job that may run on a
+worker (`remote` allowed or prefer) or does not say (no `remote`) runs on those workers
+only: it waits for a free slot on one of them, and does not take a slot here. It is kept
+in config.json until changed. `local` turns it off: jobs run as they say again.
+
+While a route is on, these still run here: jobs with `remote: never`, services, quick runs
+(they start at once, and would spend longer being sent), jobs whose `requires` tags none of
+the route's workers has, and runs a worker failed for a reason of the job's own. Jobs with
+`remote: only` go to any worker.
+",
+    values: &[],
+    switches: &[],
+    positional: 64,
+};
+
+/// `drmanhattan route`: shows or sets the route.
+pub(super) fn route(rest: &[String]) -> Result<i32> {
+    let Some(a) = args::parse(&ROUTE, rest)? else { return Ok(0) };
+    let paths = Paths::from_env();
+    let route = match a.positional.as_slice() {
+        [] => load_config(&paths)?.route,
+        [off] if off == "local" || off == "off" => set_route(&paths, &[])?,
+        names => set_route(&paths, names)?,
+    };
+    println!("{}", route_line(&route));
+    Ok(0)
+}
+
+/// The route in one line, as `route` and `workers remove` print it.
+fn route_line(route: &[String]) -> String {
+    if route.is_empty() {
+        "route=local: jobs run where they say, here by default".into()
+    } else {
+        format!("route={}: jobs that may run on a worker go only to {}", route.join(","), route.join(" or "))
+    }
 }

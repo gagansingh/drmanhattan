@@ -50,11 +50,16 @@ pub(super) struct RunView {
     /// Its job's name on the worker, once it has been handed over.
     remote_job: Option<String>,
     remote_fallback: Option<String>,
+    stays_here: bool,
     service: bool,
     /// A quick run, or a quick waiter: it starts without waiting for a slot.
     quick: bool,
     /// Why it is quick, or waits for a slot.
     lane_reason: Option<String>,
+    /// A waiter that may only run on a worker (the route, or `remote: only`): which, and
+    /// what each is doing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) waits_for: Option<String>,
     /// A service's port, when it is ready by its port.
     port: Option<u16>,
     ready_at: Option<f64>,
@@ -164,9 +169,11 @@ impl RunView {
             machine: rec.machine.clone(),
             remote_job: rec.remote_run.as_ref().map(|r| r.job.clone()),
             remote_fallback: rec.remote_fallback.clone(),
+            stays_here: rec.stays_here,
             service: job.service,
             quick: rec.quick,
             lane_reason: rec.lane_reason.clone(),
+            waits_for: None,
             port: match &job.ready {
                 Some(crate::job::Ready::Port(p)) => Some(*p),
                 _ => None,

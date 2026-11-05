@@ -6,6 +6,9 @@
 //! out, not deleted, on the worker, so it keeps its own build products and inputs. A path
 //! that is not in a git checkout leaves out what its `.gitignore` files name. With
 //! `sync_git`, the git metadata of each synced checkout goes first, additively.
+//!
+//! After a job succeeds there, each of its `sync_back` paths comes the other way
+//! (`copy_back`), so its products are here when the run is marked finished.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -110,6 +113,32 @@ pub(crate) fn mirror(worker: &WorkerConfig, entry: &Entry) -> Result<(), String>
     c.arg(from).arg(to);
     let out = ssh::run_command(c, None, RSYNC_LIMIT);
     (out.code == 0).then_some(()).ok_or_else(|| format!("could not mirror {path}: {}", out.first_line()))
+}
+
+/// Copies `path` back from the worker with `rsync -a --delete`, so it is here as the job
+/// left it there (files only here inside it are removed). On the worker it is at the same
+/// path, or the one `args_path_map` gives; here it must lie inside the home directory, and
+/// its parents are made.
+pub(crate) fn copy_back(worker: &WorkerConfig, path: &str) -> Result<(), String> {
+    let here = Path::new(path);
+    let home = paths::home();
+    let inside = |h: &Path| here.starts_with(h) && here != h;
+    if !inside(&home) && !home.canonicalize().is_ok_and(|h| inside(&h)) {
+        return Err(format!("cannot copy back {path}: only paths inside {} are copied", home.display()));
+    }
+    let (Some(parent), Some(name)) = (here.parent(), here.file_name()) else {
+        return Err(format!("cannot copy back {path}: it has no parent folder"));
+    };
+    let there = worker.map_args(&[path.to_string()]).remove(0);
+    if Path::new(&there).file_name() != Some(name) {
+        return Err(format!("cannot copy back {path}: args_path_map gives it another name there ({there})"));
+    }
+    std::fs::create_dir_all(parent).map_err(|e| format!("cannot copy back {path}: {e}"))?;
+    let mut c = Command::new(rsync_program());
+    c.args(["-a", "--delete", "-e"]).arg(remote_shell());
+    c.arg(format!("{}:{there}", worker.ssh)).arg(format!("{}/", parent.display()));
+    let out = ssh::run_command(c, None, RSYNC_LIMIT);
+    (out.code == 0).then_some(()).ok_or_else(|| format!("could not copy back {path}: {}", out.first_line()))
 }
 
 /// A checkout's common git directory, when `dir` is in one.

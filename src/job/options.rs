@@ -19,15 +19,17 @@ pub(crate) enum Ready {
 pub(crate) const DEFAULT_READY_TIMEOUT: u64 = 120;
 pub(crate) const DEFAULT_TTL: u64 = 8 * 3600;
 
-/// Where a job may run: here only (the default), on a worker when every slot here is busy,
-/// or on a worker first.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq)]
+/// Where a job may run: here only, on a worker when every slot here is busy, on a worker
+/// first, or on a worker only. While `config.json`'s `route` is on, `allowed`, `prefer` and
+/// a job that does not say run only on its workers; with no route, one that does not say
+/// runs here.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum RemoteMode {
-    #[default]
     Never,
     Allowed,
     Prefer,
+    Only,
 }
 
 /// A path to mirror to a worker: a path, or `{"path": …, "exclude": […]}`.
@@ -48,8 +50,8 @@ pub(crate) struct SyncPath {
 }
 
 /// Sync entries as absolute paths: `~/…` is under the home directory; anything else must be
-/// absolute. They need not exist yet; a dispatch checks them.
-pub(super) fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
+/// absolute. They need not exist yet; a dispatch checks them. `field` names them in errors.
+pub(super) fn resolve_sync(field: &str, entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
     entries
         .into_iter()
         .map(|entry| {
@@ -60,7 +62,9 @@ pub(super) fn resolve_sync(entries: Vec<SyncSpec>) -> Result<Vec<SyncPath>> {
             sync.path = match sync.path.strip_prefix("~/") {
                 Some(rest) => paths::home().join(rest).to_string_lossy().into_owned(),
                 None if sync.path.starts_with('/') => sync.path,
-                None => return invalid(format!("sync paths must be absolute or start with ~/, not {:?}", sync.path)),
+                None => {
+                    return invalid(format!("{field} paths must be absolute or start with ~/, not {:?}", sync.path))
+                }
             };
             if sync.exclude.iter().any(|e| e.is_empty() || e.contains(['\n', '\0'])) {
                 return invalid(format!("sync.exclude for {} has an empty or multi-line pattern", sync.path));

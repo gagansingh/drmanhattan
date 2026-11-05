@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -19,9 +20,10 @@ use crate::activity::{Activity, Typicals};
 use crate::dashboard::run_view::{Eta, RunView};
 use crate::dashboard::{http, Ctx};
 use crate::estimate::{Estimate, LoadModel};
+use crate::fsutil;
 use crate::job::{Record, RunId, State};
 use crate::process;
-use crate::queue::{self, rank};
+use crate::queue::{self, rank, waits_for};
 use crate::settings::{effective_capacity, load_config, read_manual_order, MAX_SLOTS};
 use crate::sources::Sessions;
 use crate::sysinfo;
@@ -83,6 +85,14 @@ pub(super) struct StateDoc {
     /// readings. Empty without workers, when the page shows one machine.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     machines: Vec<MachineView>,
+    /// The workers that jobs which may run on a worker go to, and only to (`drmanhattan
+    /// route`); empty when the route is off.
+    route: Vec<String>,
+    /// This machine takes no jobs from others, as their worker.
+    sharing_off: bool,
+    /// Another machine used this one as its worker in the last week, or sharing is off: the
+    /// page offers to turn sharing on and off.
+    serves_others: bool,
 }
 
 /// One machine's bar on the dashboard.
@@ -93,7 +103,14 @@ struct MachineView {
     ssh: Option<String>,
     online: Option<bool>,
     capacity: u32,
+    /// Paused here: its slots set to 0.
     paused: bool,
+    /// Sharing turned off on the worker itself (`drmanhattan sharing off`), from its latest
+    /// readings.
+    sharing_off: bool,
+    /// On the route: jobs that may run on a worker go to it (or another on the route), and
+    /// only there.
+    routed: bool,
     /// Runs on it now.
     running: usize,
     /// Its readings, while fresh: `machine-stats` for a worker.
@@ -362,7 +379,11 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
     let busy_groups: std::collections::HashSet<&str> =
         snap.running.iter().filter_map(|(r, _, _)| r.job.group.as_deref()).collect();
     let manual = read_manual_order(&ctx.paths);
+    let config = load_config(&ctx.paths).unwrap_or_default();
     let by_id: std::collections::HashMap<_, _> = snap.queued.iter().map(|(r, e)| (&r.run_id, (r, e))).collect();
+    let worker_slots = workers::slots(&config);
+    let running_on =
+        |w: &str| snap.running.iter().filter(|(r, _, _)| r.machine.as_deref() == Some(w) && r.holds_slot()).count();
     let mut queued: Vec<RunView> = rank(snap.queued.iter().map(|(r, _)| r), &manual, now)
         .into_iter()
         .filter_map(|ranked| {
@@ -370,6 +391,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
             let mut view = ahead(rec, est);
             (view.overdue, view.manual) = (Some(ranked.overdue), Some(ranked.manual));
             view.group_busy = rec.job.group.as_deref().map(|g| busy_groups.contains(g));
+            view.waits_for = rec.is_ready().then(|| waits_for(rec, &worker_slots, running_on)).flatten();
             Some(view)
         })
         .collect();
@@ -411,7 +433,14 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         inbox: ctx.inbox.clone(),
         version: crate::update::current(),
         update: crate::update::available(&ctx.paths),
-        auto_update: load_config(&ctx.paths).is_ok_and(|c| c.auto_update),
+        auto_update: config.auto_update,
+        sharing_off: config.sharing_off,
+        route: config.route.clone(),
+        serves_others: config.sharing_off
+            || std::fs::metadata(ctx.paths.dispatcher_seen())
+                .ok()
+                .and_then(|m| fsutil::age(&m))
+                .is_some_and(|age| age < Duration::from_secs(7 * 86400)),
         auto_update_state: crate::update::auto_update_summary(&ctx.paths),
         installed: crate::update::installed_version(),
         updated: crate::update::updated(&ctx.paths),
@@ -427,7 +456,8 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
 
 /// This machine and each worker, when there are workers.
 fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
-    let workers = load_config(&ctx.paths).map(|c| c.workers).unwrap_or_default();
+    let config = load_config(&ctx.paths).unwrap_or_default();
+    let workers = config.workers;
     if workers.is_empty() {
         return Vec::new();
     }
@@ -440,6 +470,8 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
         online: Some(true),
         capacity,
         paused: false,
+        sharing_off: false,
+        routed: false,
         running: running_on(None),
         stats: None,
         last_seen: None,
@@ -455,6 +487,8 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
             online: live.online,
             capacity,
             paused: capacity == 0,
+            sharing_off: live.stats.as_ref().is_some_and(|s| s["sharing_off"] == true),
+            routed: config.route.contains(&w.name),
             running: running_on(Some(&w.name)),
             stats: live.fresh_stats().cloned(),
             last_seen: live.last_seen.map(Timestamp::epoch_seconds),
@@ -475,11 +509,13 @@ fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, q
     let mut free_at: Vec<Option<f64>> = busy.collect();
     free_at.resize(free_at.len().max(capacity as usize), Some(now));
     let mut room = quick_room;
-    let (quick, slot): (Vec<&mut RunView>, Vec<&mut RunView>) = queued.iter_mut().partition(|v| {
-        let starts_now = v.is_quick() && v.group_busy != Some(true) && room > 0;
-        room -= usize::from(starts_now);
-        starts_now
-    });
+    // A run that waits for a worker takes no slot here; its start is not reckoned.
+    let (quick, slot): (Vec<&mut RunView>, Vec<&mut RunView>) =
+        queued.iter_mut().filter(|v| v.waits_for.is_none()).partition(|v| {
+            let starts_now = v.is_quick() && v.group_busy != Some(true) && room > 0;
+            room -= usize::from(starts_now);
+            starts_now
+        });
     for view in quick {
         view.eta = Some(Eta { eta_start: now, eta_wait: 0, eta_open_ended: false });
     }

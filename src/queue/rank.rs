@@ -91,6 +91,7 @@ mod tests {
             requires: Vec::new(),
             sync: Vec::new(),
             sync_git: false,
+            sync_back: Vec::new(),
             env_forward: Vec::new(),
             dispatched_from: None,
             dispatch_id: None,

@@ -139,12 +139,20 @@ process-group handling apply unchanged.
 
 - Admission places a run on a worker (`queue::admit::place`); the run's record says which
   (`machine`), and its slot number is that worker's.
+- The route (`config.json`'s `route`) is read with the workers on each pass, as a `routed`
+  flag on each one (`workers::Slots`). It is applied at placement only (`remote_mode`):
+  a waiter whose `remote` lets it go to a worker, or does not say, is placed as `only` on
+  the routed workers. Nothing is rewritten in the run's record, so turning the route off
+  takes effect on the next pass. `status` and the page compute the same placement to say
+  what a waiter waits for (`queue::waits_for`).
 - Its runner (`runner::remote`) dispatches (`workers::dispatch`), holding the worker's
   dispatch lock: probe and housekeeping (`__dispatch-probe`), `check`, mirror, submit, wait
   for the start. Just before the submit it records `remote_run`, so a restart knows where
   the job went. A failure puts the run back in the queue with `remote_fallback` set.
 - Then it follows the worker's log into the local one, counting bytes so a reconnect
-  resumes with `follow --from`, until the worker's status says the job is over.
+  resumes with `follow --from`, until the worker's status says the job is over. A job that
+  succeeded there has its `sync_back` paths copied back (`mirror::copy_back`) before the
+  run completes, so a waiter sees them; a copy that fails fails the run.
 - Recovery leaves a running run with `remote_run` running and starts a runner for it that
   follows it again; one still being handed over (no `remote_run`) is queued again.
 - A poller thread asks each worker for `machine-stats` every 15 s (`workers::poll`) and

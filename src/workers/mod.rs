@@ -16,10 +16,14 @@ mod poll;
 mod pool;
 mod ssh;
 
-pub(crate) use config::{validate, WorkerConfig};
+use crate::paths::Paths;
+use crate::settings::Config;
+
+pub(crate) use config::{validate, validate_route, WorkerConfig};
 pub(crate) use dispatch::{dispatch, unusable};
 pub(crate) use host::{dispatch_probe, dispatch_submit, machine_stats, PROTOCOL};
-pub(crate) use poll::start_poller;
+pub(crate) use mirror::copy_back;
+pub(crate) use poll::{push_sharing, push_slots, start_poller};
 pub(crate) use pool::{pool, read_live, Live};
 pub(crate) use ssh::{command as ssh_command, drmanhattan as remote_argv, run as ssh_run};
 
@@ -30,19 +34,33 @@ pub(crate) struct Slots {
     /// How many of its slots this machine may use now (0: paused).
     pub(crate) capacity: u32,
     pub(crate) tags: Vec<String>,
-    /// Out of admission for a while, after a failure.
-    pub(crate) unavailable: bool,
+    /// Why it is out of admission for a while, after a failure.
+    pub(crate) unavailable: Option<String>,
+    /// In `config.json`'s `route`: jobs that may run on a worker go to it (or another on the
+    /// route), and only there.
+    pub(crate) routed: bool,
 }
 
-/// The workers in `config.json`, as admission sees them now.
-pub(crate) fn slots(workers: &[WorkerConfig]) -> Vec<Slots> {
-    workers
+/// The workers in `config.json`, as admission in this daemon sees them now.
+pub(crate) fn slots(config: &Config) -> Vec<Slots> {
+    slots_with(config, |name| pool().get(name))
+}
+
+/// The same, from what the daemon last wrote, for commands run beside it.
+pub(crate) fn slots_read(paths: &Paths, config: &Config) -> Vec<Slots> {
+    slots_with(config, |name| read_live(paths, name))
+}
+
+fn slots_with(config: &Config, live: impl Fn(&str) -> Live) -> Vec<Slots> {
+    config
+        .workers
         .iter()
         .map(|w| Slots {
             name: w.name.clone(),
             capacity: w.slots,
             tags: w.tags.clone(),
-            unavailable: pool().get(&w.name).unavailable().is_some(),
+            unavailable: live(&w.name).unavailable().map(String::from),
+            routed: config.route.contains(&w.name),
         })
         .collect()
 }

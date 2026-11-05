@@ -58,11 +58,15 @@ options:
                       runs once it succeeds, and fails if it fails
   --group NAME        at most one job of the group runs and one waits; a newer waiting
                       job replaces an older one
-  --remote MODE       never (the default), allowed (on a worker when every slot here is
-                      busy) or prefer (on a free worker first)
+  --remote MODE       never, allowed (on a worker when every slot here is busy), prefer
+                      (on a free worker first) or only (on a worker, never here); without
+                      it, or with allowed or prefer, it follows `drmanhattan route`
+                      when that is on; else it runs here
   --requires TAG      a tag the worker must have (repeatable)
   --sync PATH         a path to mirror to the worker (repeatable; default: --cwd)
   --sync-git          mirror the git metadata of synced checkouts too
+  --sync-back PATH    a path copied back from the worker once the job succeeds there
+                      (repeatable): its products, such as an Xcode build's Build/Products
   --service           a server that keeps running: submit returns once it is ready (with
                       --ready-port or --ready-log) and it takes no build slot
   --ready-port N      the service is ready once 127.0.0.1:N accepts connections
@@ -93,6 +97,7 @@ options:
         "remote",
         "requires",
         "sync",
+        "sync-back",
         "ready-port",
         "ready-log",
         "ready-timeout",
@@ -179,14 +184,17 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         prepare: a.get("prepare").map(|p| CommandSpec::Shell(p.to_string())),
         group: a.get("group").map(String::from),
         remote: match a.get("remote") {
-            None | Some("never") => None,
+            None => None,
+            Some("never") => Some(RemoteMode::Never),
             Some("allowed") => Some(RemoteMode::Allowed),
             Some("prefer") => Some(RemoteMode::Prefer),
-            Some(other) => return invalid(format!("--remote must be never, allowed or prefer, not {other:?}")),
+            Some("only") => Some(RemoteMode::Only),
+            Some(other) => return invalid(format!("--remote must be never, allowed, prefer or only, not {other:?}")),
         },
         requires: a.all("requires").to_vec(),
         sync: a.all("sync").iter().map(|p| SyncSpec::Path(absolute(p))).collect(),
         sync_git: a.has("sync-git"),
+        sync_back: a.all("sync-back").iter().map(|p| absolute(p)).collect(),
         tty: a.has("tty"),
         env_forward: Vec::new(),
         dispatched_from: None,

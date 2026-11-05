@@ -1,5 +1,5 @@
 //! `config.json` in the data directory: the standing slot count (`drmanhattan slots N`), the
-//! daemon-wide activity patterns, workers, and how updates are installed. Unknown keys are
+//! daemon-wide activity patterns, workers and the route to them, and how updates are installed. Unknown keys are
 //! kept when the file is rewritten.
 
 use std::collections::BTreeMap;
@@ -22,6 +22,14 @@ pub(crate) struct Config {
     /// Other machines that run jobs for this one, over SSH.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub(crate) workers: Vec<WorkerConfig>,
+    /// Workers that every job which may run on a worker, or does not say, runs on and only
+    /// on (`drmanhattan route`); empty: jobs run where they say.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub(crate) route: Vec<String>,
+    /// Takes no jobs from other machines, as their worker, until sharing is turned back on
+    /// (`drmanhattan sharing off`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) sharing_off: bool,
     /// Install newer releases of this major version by itself, once the queue is idle.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto_update: bool,
@@ -49,6 +57,7 @@ pub(crate) fn load_config(paths: &Paths) -> Result<Config> {
     let mut config: Config =
         serde_json::from_str(&text).or_else(|e| invalid(format!("{} is not valid: {e}", path.display())))?;
     crate::workers::validate(&mut config.workers)
+        .and_then(|()| crate::workers::validate_route(&config.route, &config.workers))
         .or_else(|e| invalid(format!("{} is not valid: {e}", path.display())))?;
     Ok(config)
 }

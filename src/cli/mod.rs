@@ -24,12 +24,14 @@ usage:
                                           wait for a run to start or finish
   drmanhattan follow <run> [--from BYTES] print a run's log as it grows, until it finishes
   drmanhattan cancel <run>                cancel a queued or running run
-  drmanhattan workers [add <ssh-alias>]   the machines that run jobs for this one, over SSH
+  drmanhattan workers [add|remove ...]    the machines that run jobs for this one, over SSH
+  drmanhattan route [<worker>... | local] send jobs to those workers only, or run them here
   drmanhattan machine-stats               this machine's readings, as JSON, for a dispatcher
   drmanhattan update [--now]              install the latest release and restart the daemon
   drmanhattan reload-env                  read your login shell's environment again for later jobs
   drmanhattan stop                        stop the daemon (running jobs get a grace period)
   drmanhattan slots [N]                   show or set how many jobs may run at once
+  drmanhattan sharing [on|off]            whether other machines may send this one jobs
   drmanhattan lan [on|off|new-key]        the dashboard on this network, for a phone
   drmanhattan paths                       where the inbox, state and data live
   drmanhattan --version | --help
@@ -84,6 +86,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "follow" => runs::follow(rest),
         "cancel" => runs::cancel(rest),
         "workers" => workers::workers(rest),
+        "route" => workers::route(rest),
         "update" => commands::update(rest),
         "machine-stats" => crate::workers::machine_stats(rest),
         // What a dispatcher runs on a worker; not for people.
@@ -92,6 +95,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "reload-env" => commands::reload_env(rest),
         "stop" => commands::stop(rest),
         "slots" => commands::slots(rest),
+        "sharing" => commands::sharing(rest),
         "lan" => commands::lan(rest),
         "paths" => commands::paths(rest),
         other => crate::error::invalid(format!("unknown command: {other} (see --help)")),

@@ -49,7 +49,7 @@ impl Scheduler {
         }
         let capacity = self.capacity();
         let manual = read_manual_order(&self.paths);
-        let workers = load_config(&self.paths).map(|c| workers::slots(&c.workers)).unwrap_or_default();
+        let workers = load_config(&self.paths).map(|c| workers::slots(&c)).unwrap_or_default();
 
         let mut q = queue::lock(shared);
         for job in new_jobs {

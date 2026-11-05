@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -52,6 +52,9 @@ impl Live {
 pub(crate) struct Pool {
     live: Mutex<HashMap<String, Live>>,
     dispatching: Mutex<HashMap<String, Arc<Mutex<()>>>>,
+    /// Per worker, a slot count set here: when it was last set or pushed, and how many pushes
+    /// to the worker are still on their way.
+    slots_set: Mutex<HashMap<String, (Instant, u32)>>,
 }
 
 pub(crate) fn pool() -> &'static Pool {
@@ -108,6 +111,21 @@ impl Pool {
             l.unavailable_until = Some(Timestamp::now().plus(RETRY_AFTER));
             l.from_poll = false;
         });
+    }
+
+    /// A slot count set here starts on its way to the worker (`pushing`), or got there or
+    /// failed to.
+    pub(crate) fn slots_set(&self, worker: &str, pushing: bool) {
+        let mut all = crate::sync::lock(&self.slots_set);
+        let (at, on_way) = all.entry(worker.to_string()).or_insert((Instant::now(), 0));
+        *at = Instant::now();
+        *on_way = if pushing { *on_way + 1 } else { on_way.saturating_sub(1) };
+    }
+
+    /// Whether a poll asked at `asked` may take the worker's own slot count: not while a
+    /// count set here is on its way, nor from an answer older than it.
+    pub(crate) fn may_adopt_slots(&self, worker: &str, asked: Instant) -> bool {
+        crate::sync::lock(&self.slots_set).get(worker).map_or(true, |&(at, on_way)| on_way == 0 && asked > at)
     }
 
     /// Dispatches to one worker happen one at a time: hold this while dispatching.

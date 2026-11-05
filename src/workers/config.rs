@@ -116,6 +116,19 @@ pub(crate) fn validate(workers: &mut [WorkerConfig]) -> Result<()> {
     Ok(())
 }
 
+/// Checks that the route names configured workers, each once.
+pub(crate) fn validate_route(route: &[String], workers: &[WorkerConfig]) -> Result<()> {
+    for (i, name) in route.iter().enumerate() {
+        if !workers.iter().any(|w| &w.name == name) {
+            return invalid(format!("the route names {name:?}, which is not a worker"));
+        }
+        if route[..i].contains(name) {
+            return invalid(format!("the route names {name} twice"));
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,6 +147,15 @@ mod tests {
         assert!(validate(&mut [worker(r#"{"ssh": "-oProxyCommand=x"}"#)]).is_err());
         assert!(validate(&mut [worker(r#"{"ssh": "a", "name": "a b"}"#)]).is_err());
         assert!(serde_json::from_str::<WorkerConfig>(r#"{"ssh": "a", "slot": 1}"#).is_err());
+    }
+
+    #[test]
+    fn a_route_names_configured_workers() {
+        let mut ws = vec![worker(r#"{"ssh": "me@air"}"#)];
+        validate(&mut ws).unwrap();
+        assert!(validate_route(&["air".into()], &ws).is_ok());
+        assert!(validate_route(&["box".into()], &ws).unwrap_err().to_string().contains("not a worker"));
+        assert!(validate_route(&["air".into(), "air".into()], &ws).is_err());
     }
 
     #[test]

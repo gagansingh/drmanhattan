@@ -135,10 +135,13 @@ impl Queue {
     }
 
     /// Where a ready waiter can run now: Some(None) here, Some(Some(worker)) on a worker, None
-    /// nowhere yet. A job runs here unless its `remote` says otherwise: `allowed` goes to a
-    /// worker only while every slot here is busy, `prefer` to a free worker first. A worker
-    /// must have a free slot, every tag the job `requires`, and not be out of admission after
-    /// a failure; a run that a worker could not take stays here.
+    /// nowhere yet. A job runs as its `remote` says, or as the route does (`remote_mode`):
+    /// `allowed` goes to a worker only while every slot here is busy, `prefer` to a free
+    /// worker first, `only` waits for a worker. A worker must have a free slot, every tag the
+    /// job `requires`, and not be out of admission after a failure; a job that follows the
+    /// route goes only to the route's workers. A run a worker failed for a reason of its own
+    /// stays here; one bounced by an unavailable worker may go to a worker again once one is
+    /// available.
     fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
         let running_on = |m: Option<&str>| {
             self.records(State::Running).filter(|r| r.machine.as_deref() == m && r.holds_slot()).count()
@@ -146,19 +149,16 @@ impl Queue {
         // A worker's dispatcher may grant more of its slots than it would use itself.
         let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
         let here = (running_on(None) < local_capacity as usize).then_some(None);
-        if rec.job.remote == RemoteMode::Never || rec.remote_fallback.is_some() {
+        let (mode, routed) = remote_mode(rec, workers);
+        if mode == RemoteMode::Never {
             return here;
         }
-        let worker = workers
-            .iter()
-            .find(|w| {
-                !w.unavailable
-                    && running_on(Some(&w.name)) < w.capacity as usize
-                    && rec.job.requires.iter().all(|t| w.tags.contains(t))
-            })
+        let worker = candidates(rec, workers, routed)
+            .find(|w| w.unavailable.is_none() && running_on(Some(&w.name)) < w.capacity as usize)
             .map(|w| Some(w.name.clone()));
-        match rec.job.remote {
+        match mode {
             RemoteMode::Prefer => worker.or(here),
+            RemoteMode::Only => worker,
             _ => here.or(worker),
         }
     }
@@ -201,4 +201,63 @@ impl Queue {
         }
         started
     }
+}
+
+/// How a waiter may use the workers, and whether that is the route's doing. While a route is
+/// on, a job that may run on a worker (`allowed`, `prefer`) or does not say runs only on
+/// the route's workers, unless none of them has every tag it `requires`: then it runs as it
+/// would with no route. `never` stays here and `only` takes any worker, route or not. A run
+/// a worker failed for a reason of its own, a service and a job another machine sent here
+/// run here; quick runs start here before placement.
+fn remote_mode(rec: &Record, workers: &[workers::Slots]) -> (RemoteMode, bool) {
+    if rec.stays_here || rec.job.service || rec.job.dispatched_from.is_some() {
+        return (RemoteMode::Never, false);
+    }
+    let routable = matches!(rec.job.remote, None | Some(RemoteMode::Allowed | RemoteMode::Prefer));
+    if routable && candidates(rec, workers, true).next().is_some() {
+        return (RemoteMode::Only, true);
+    }
+    (rec.job.remote.unwrap_or(RemoteMode::Never), false)
+}
+
+/// The workers that could take the run, free or not: those with every tag it requires and,
+/// for a run that follows the route, on the route.
+fn candidates<'a>(
+    rec: &'a Record,
+    workers: &'a [workers::Slots],
+    routed: bool,
+) -> impl Iterator<Item = &'a workers::Slots> {
+    workers.iter().filter(move |w| (!routed || w.routed) && rec.job.requires.iter().all(|t| w.tags.contains(t)))
+}
+
+/// Why a ready waiter that may only run on a worker is still waiting, in words: each worker
+/// it could go to, and what keeps it from taking the run now. None for a run that may run
+/// here. `running_on` counts the runs holding a worker's slots.
+pub(crate) fn waits_for(
+    rec: &Record,
+    workers: &[workers::Slots],
+    running_on: impl Fn(&str) -> usize,
+) -> Option<String> {
+    let (mode, routed) = remote_mode(rec, workers);
+    if mode != RemoteMode::Only {
+        return None;
+    }
+    let why: Vec<String> = candidates(rec, workers, routed)
+        .map(|w| {
+            let running = running_on(&w.name);
+            let state = match &w.unavailable {
+                _ if w.capacity == 0 => "paused".to_string(),
+                Some(reason) => format!("unavailable: {reason}"),
+                None if running >= w.capacity as usize => format!("busy, {running} of {} slot(s)", w.capacity),
+                None => "free".to_string(),
+            };
+            format!("{} ({state})", w.name)
+        })
+        .collect();
+    let by = if routed { "the route" } else { "remote: only" };
+    Some(if why.is_empty() {
+        format!("{by}: no worker has the tags it requires")
+    } else {
+        format!("{by}: waits for {}", why.join(", "))
+    })
 }

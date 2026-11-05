@@ -1,5 +1,6 @@
 //! What the dashboard can change: the manual queue order (dragging a queued run), the slots
-//! (the − and + buttons, kept in config.json), a service (stop, restart), and updates.
+//! (the − and + buttons, kept in config.json), pausing, the route to workers, a service
+//! (stop, restart), and updates.
 
 use std::collections::HashSet;
 use std::io::Read;
@@ -12,7 +13,7 @@ use crate::dashboard::{http, Ctx};
 use crate::fsutil;
 use crate::job::{RunId, State};
 use crate::queue;
-use crate::settings::{set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
+use crate::settings::{set_route, set_sharing_off, set_slots, set_worker_slots, write_manual_order, MAX_SLOTS};
 
 const MAX_BODY: u64 = 64 * 1024;
 const MAX_ORDER: usize = 500;
@@ -54,6 +55,8 @@ pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx, lan: bool) {
     match path {
         "/api/capacity" => set_capacity(req, body, ctx),
         "/api/service" => service_action(req, body, ctx),
+        "/api/sharing" => set_sharing(req, body, ctx),
+        "/api/route" => set_route_to(req, body, ctx),
         "/api/update" => start_update(req, ctx),
         "/api/auto-update" => set_auto_update(req, body, ctx),
         _ => set_order(req, body, ctx),
@@ -78,7 +81,12 @@ fn set_capacity(req: Request, body: &str, ctx: &Ctx) {
     };
     if let Some(worker) = worker {
         return match set_worker_slots(&ctx.paths, &worker, slots) {
-            Ok(slots) => http::json(req, 200, &json!({ "worker": worker, "slots": slots })),
+            Ok(slots) => {
+                if slots > 0 {
+                    crate::workers::push_slots(&ctx.paths, &worker);
+                }
+                http::json(req, 200, &json!({ "worker": worker, "slots": slots }))
+            }
             Err(e) => http::error(req, e),
         };
     }
@@ -87,6 +95,50 @@ fn set_capacity(req: Request, body: &str, ctx: &Ctx) {
     }
     match set_slots(&ctx.paths, slots) {
         Ok(slots) => http::json(req, 200, &json!({ "slots": slots })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharingBody {
+    sharing: bool,
+    /// A worker, rather than this machine as a worker for others.
+    #[serde(default)]
+    worker: Option<String>,
+}
+
+/// Sharing on or off: this machine as a worker for others, or one of this machine's workers
+/// (which is told over SSH, so its own dashboard shows it too).
+fn set_sharing(req: Request, body: &str, ctx: &Ctx) {
+    let Some(SharingBody { sharing, worker }) = object::<SharingBody>(body) else {
+        return http::error(req, "send {\"sharing\": true or false}, with \"worker\" for a worker");
+    };
+    let done = match &worker {
+        Some(worker) => crate::workers::push_sharing(&ctx.paths, worker, sharing).map(|()| !sharing),
+        None => set_sharing_off(&ctx.paths, !sharing),
+    };
+    match done {
+        Ok(off) => http::json(req, 200, &json!({ "sharing": !off, "worker": worker })),
+        Err(e) => http::error(req, e),
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RouteBody {
+    /// Workers; empty turns the route off.
+    route: Vec<String>,
+}
+
+/// A worker's route button: the workers that jobs which may run on a worker go to, and
+/// only to, as `drmanhattan route` sets them.
+fn set_route_to(req: Request, body: &str, ctx: &Ctx) {
+    let Some(RouteBody { route }) = object::<RouteBody>(body) else {
+        return http::error(req, "send {\"route\": [worker names]}, or [] to turn it off");
+    };
+    match set_route(&ctx.paths, &route) {
+        Ok(route) => http::json(req, 200, &json!({ "route": route })),
         Err(e) => http::error(req, e),
     }
 }

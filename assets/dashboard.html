@@ -107,6 +107,14 @@ h2:focus { outline: none; }
 }
 .step:hover:not(:disabled) { border-color: var(--dim); color: var(--fg); }
 .step:disabled { opacity: 0.4; cursor: default; }
+/* Sharing with other machines, on or off: a word in a small box, beside the slots. */
+.sharing {
+  padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: none;
+  color: var(--dim); font-size: 12px; line-height: 16px; cursor: pointer;
+}
+.sharing:hover { border-color: var(--dim); color: var(--fg); }
+.sharing[aria-pressed="false"] { border-color: var(--amber); color: var(--amber); }
+.route[aria-pressed="true"] { border-color: var(--blue); color: var(--blue); }
 /* One bar per machine above its runs, once there are workers. */
 tr.machine td { padding: 8px 16px; background: var(--raised); border-top: 1px solid var(--line); }
 tr.machine:first-child td { border-top: 0; }
@@ -252,6 +260,12 @@ html.dragging, html.dragging * { cursor: grabbing !important; user-select: none;
 #filters button:hover { color: var(--fg); }
 #filters button[aria-pressed="true"] { color: var(--fg); border-bottom-color: var(--fg); }
 #filters button span { margin-left: 4px; color: var(--faint); font-variant-numeric: tabular-nums; }
+/* Search is rarely used: a magnifier until it is opened, and while it holds nothing. */
+#search-open {
+  display: inline-flex; padding: 3px; border: 0; background: none; color: var(--faint); cursor: pointer;
+}
+#search-open:hover { color: var(--fg); }
+#search-open[aria-expanded="true"] { display: none; }
 #search {
   width: 168px; padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px;
   background: none; color: var(--fg); font: 12px/18px var(--sans);
@@ -429,7 +443,8 @@ html.log-open #log { display: flex; }
   td.state .word, td.state .n { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .time { width: 104px; }
   #finished-section .head { flex-wrap: wrap; row-gap: 8px; }
-  #search { order: 1; width: 100%; }
+  #search-box:has(#search:not([hidden])) { order: 1; width: 100%; }
+  #search { width: 100%; box-sizing: border-box; }
 }
 @media (prefers-reduced-motion: reduce) {
   .progress i { transition: none; }
@@ -496,7 +511,10 @@ html.log-open #log { display: flex; }
     <div class="head">
       <h2 id="finished-heading" tabindex="-1">Finished<span class="count" id="finished-count"></span></h2>
       <span class="spring"></span>
-      <input id="search" type="search" placeholder="Search" aria-label="Search finished runs by name, command or folder" autocomplete="off" spellcheck="false" hidden>
+      <span id="search-box" hidden>
+        <button id="search-open" type="button" aria-label="Search finished runs" aria-expanded="false" title="Search"><svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><circle cx="6.5" cy="6.5" r="4.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 10l4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+        <input id="search" type="search" placeholder="Search" aria-label="Search finished runs by name, command or folder" autocomplete="off" spellcheck="false" hidden>
+      </span>
       <div id="filters" role="group" aria-label="Show"></div>
     </div>
     <div class="subhead"><p id="summary"></p><div id="pager" class="aside" role="group" aria-label="Pages of finished runs"></div></div>
@@ -584,12 +602,16 @@ function patchChildren(target, source) {
   // detaches it, and focus inside it would be lost.
   const kept = new Set([...source.childNodes].map(keyOf).filter((key) => key != null));
   for (const child of [...target.childNodes]) if (keyOf(child) != null && !kept.has(keyOf(child))) child.remove();
+  // Controls can share a key (a service's stop and restart): those match in order.
   const keyed = new Map();
-  for (const child of target.childNodes) if (keyOf(child) != null) keyed.set(keyOf(child), child);
+  for (const child of target.childNodes) {
+    const key = keyOf(child);
+    if (key != null) keyed.set(key, [...(keyed.get(key) || []), child]);
+  }
   [...source.childNodes].forEach((node, i) => {
     const here = target.childNodes[i];
     // The element this one updates: the one with its key, wherever it is, else the one here.
-    const old = keyOf(node) != null ? keyed.get(keyOf(node)) : here && keyOf(here) == null ? here : null;
+    const old = keyOf(node) != null ? keyed.get(keyOf(node))?.shift() : here && keyOf(here) == null ? here : null;
     if (old && sameNode(old, node)) {
       if (old !== here) target.insertBefore(old, here || null);
       if (node.nodeType === 3) { if (old.nodeValue !== node.nodeValue) old.nodeValue = node.nodeValue; }
@@ -598,6 +620,8 @@ function patchChildren(target, source) {
       target.insertBefore(node, here || null);
     }
   });
+  // A keyed element no new child took (a duplicate) would otherwise linger mid-list.
+  for (const rest of keyed.values()) for (const child of rest) child.remove();
   // Everything after the new children is gone from the markup.
   while (target.childNodes.length > wanted) target.lastChild.remove();
 }
@@ -765,6 +789,28 @@ function plainTemperature(t) {
   return figure(cls, title, `Temp <b>${degrees(t.cpu_max)}</b>${throttled ? ' <b>throttling</b>' : ''}`, 'unit');
 }
 
+/** Sharing on or off: whether other machines may send jobs. `worker` names one of this
+ *  machine's workers; without it, the button is for this machine, as a worker for others. */
+function sharingButton(off, worker) {
+  const whom = worker ? esc(worker) : 'this machine';
+  const title = off
+    ? `Sharing off: ${worker ? `${esc(worker)} takes no jobs from other machines` : 'other machines send this one no jobs'}. Click to turn it on.`
+    : `Sharing on: ${worker ? `this machine sends ${esc(worker)} jobs` : 'other machines may send this one jobs'}. Click to turn it off; what runs there finishes`;
+  return `<button class="sharing" data-action="sharing" data-value="${off ? '1' : '0'}"${worker ? ` data-worker="${esc(worker)}"` : ''}`
+    + ` aria-pressed="${!off}" title="${title}" aria-label="Share ${whom} with other machines">${off ? 'not sharing' : 'sharing'}</button>`;
+}
+
+/** A worker's route button: on, jobs that may run on a worker (or do not say) go only to
+ *  the workers on the route; off takes it off the route (none left: as they say again). */
+function routeButton(m, d) {
+  const on = (d.route || []).includes(m.name);
+  const title = on
+    ? `Routed: jobs that may run on a worker go only to ${esc(d.route.join(' or '))}, and wait for it. Click to take ${esc(m.name)} off the route.`
+    : `Route jobs to ${esc(m.name)}: every job that may run on a worker, or does not say, waits for it instead of running here (services, quick runs and remote: never still run here)`;
+  return `<button class="pause route" data-action="route" data-worker="${esc(m.name)}" aria-pressed="${on}" title="${title}"`
+    + ` aria-label="${on ? 'Stop routing jobs to' : 'Route jobs to'} ${esc(m.name)}">${on ? 'routed · end' : 'route'}</button>`;
+}
+
 /** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
  *  worker), its CPU, memory and temperature, and why it is not taking work. */
 function machineBar(m, d, open) {
@@ -778,13 +824,16 @@ function machineBar(m, d, open) {
   const more = fixed ? `Set by ${fixed}` : 'One slot more';
   const slots = `<span class="slots"><span><b>${m.running}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'}${m.paused ? ' · <b class="warn">paused</b>' : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${fixed || cap <= min ? 'disabled' : ''} title="${esc(fewer)}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
-    + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button></span>`;
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button>`
+    + (m.local ? (d.serves_others ? sharingButton(d.sharing_off) : '') : sharingButton(m.sharing_off, m.name) + routeButton(m, d)) + '</span>';
   const figures = online === 'offline' ? ''
     : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals)) + batteryFigure(s.battery);
   const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
   const reason = m.reason
     ? `<span class="reason" title="${m.reason_until ? `Tried again after ${esc(clock(m.reason_until))}` : ''}">not taking work: ${esc(m.reason)}</span>`
-    : '';
+    : m.local && d.route && d.route.length
+      ? `<span class="reason" title="Set with drmanhattan route, or a worker's route button. Services, quick runs and jobs with remote: never still run here.">routed: jobs go to ${esc(d.route.join(' or '))}</span>`
+      : '';
   const name = m.local ? 'this machine' : m.name;
   const here = d.running.filter((run) => (run.machine || 'local') === m.name);
   const summary = !open && here.length
@@ -802,7 +851,8 @@ function renderRunning(d) {
   put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
     + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use${quick ? ` · <b>${quick}</b> quick` : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${fixed || cap <= 1 ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot fewer')}" aria-label="Fewer slots">−</button>`
-    + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${fixed || cap >= max ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot more: more jobs at once, each slower')}" aria-label="More slots">+</button>`);
+    + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${fixed || cap >= max ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot more: more jobs at once, each slower')}" aria-label="More slots">+</button>`
+    + (d.serves_others ? sharingButton(d.sharing_off) : ''));
   const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
   put($('#running'), d.running.length ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
 }
@@ -949,7 +999,8 @@ function queuedRow(run, i, d) {
     running: ['preparing', 'Its prepare command is running; it can take a slot once that succeeds'],
     succeeded: ['prepared', 'Its prepare command succeeded; it takes the next slot it is given'] }[run.prepare];
   const extra = (preparing ? `<span class="note${run.prepare === 'running' ? ' warn' : ''}" title="${preparing[1]}">${preparing[0]}</span>` : '')
-    + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">runs here</span>` : '')
+    + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">${run.stays_here ? 'runs here' : 'bounced'}</span>` : '')
+    + (run.waits_for ? `<span class="note warn" title="${esc(run.waits_for)}">waits for a worker</span>` : '')
     + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
     + (run.quick ? `<span class="note" title="Starts without waiting for a slot once a quick place frees: ${esc(run.lane_reason || '')}">quick</span>` : '')
@@ -957,7 +1008,9 @@ function queuedRow(run, i, d) {
   const why = !run.quick && run.lane_reason ? `\nWaits for a slot: ${run.lane_reason}` : '';
   const range = usualRange(run) + why;
   const expected = run.typical_seconds ? `<span class="num" title="${esc(range)}">~${duration(run.typical_seconds)}</span>` : nothing('no estimate', range);
-  const when = run.eta_start && !run.eta_open_ended
+  const when = run.waits_for
+    ? nothing('on a worker', run.waits_for)
+    : run.eta_start && !run.eta_open_ended
     ? `<span class="num">starts ~${clock(run.eta_start)}</span>${under(`in ${duration(run.eta_wait)}`)}`
     : nothing('unknown', 'A job ahead of it has no estimate');
   return rowStart(run, ` data-movable="${movable ? 1 : 0}"`)
@@ -1010,6 +1063,9 @@ function goTo(from) {
   page.from = from || null;
   page.held = false;
   page.moved = true;
+  // A poll on its way asked for the old page: drop it rather than wait for it.
+  if (inFlight) polling?.abort();
+  $('#finished-section').setAttribute('aria-busy', 'true');
   tick();
 }
 
@@ -1036,6 +1092,22 @@ $('#finished-section').addEventListener('mouseenter', updateHold);
 $('#finished-section').addEventListener('mouseleave', updateHold);
 document.addEventListener('focusin', updateHold);
 document.addEventListener('focusout', () => setTimeout(updateHold));
+
+function openSearch(open) {
+  $('#search').hidden = !open;
+  $('#search-open').setAttribute('aria-expanded', String(open));
+  if (open) $('#search').focus();
+}
+$('#search-open').addEventListener('click', () => openSearch(true));
+$('#search').addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  $('#search').value = '';
+  $('#search').dispatchEvent(new Event('input'));
+  openSearch(false);
+  $('#search-open').focus();
+});
+// Left empty, it folds back to the magnifier.
+$('#search').addEventListener('blur', () => { if (!$('#search').value.trim()) openSearch(false); });
 
 let searchTimer = null;
 $('#search').addEventListener('input', () => {
@@ -1098,7 +1170,7 @@ function pager(f, shown, total) {
 
 function renderFinished(d) {
   const f = d.finished, total = f.counts[filter] ?? f.counts.all;
-  $('#search').hidden = !f.counts.all && !search;
+  $('#search-box').hidden = !f.counts.all && !search;
   put($('#finished-count'), f.counts.all ? `<span class="sr">, </span>${count(f.counts.all)}` : '');
   put($('#filters'), f.counts.all || search ? FILTERS.map(([key, name]) =>
     `<button data-action="filter" data-value="${key}" aria-pressed="${filter === key}">${name}<span>${count(f.counts[key])}</span></button>`).join('') : '');
@@ -1110,6 +1182,7 @@ function renderFinished(d) {
   put($('#finished'), d.done.length ? d.done.map((run) => finishedRow(run, d.now)).join('') : emptyRow(esc(empty)));
   if (page.moved) {
     page.moved = false;
+    $('#finished-section').removeAttribute('aria-busy');
     if (!$('#finished-section').contains(document.activeElement)) $('#finished-heading').focus();
     announce(d.done.length ? `Finished runs ${f.newer + 1} to ${f.newer + d.done.length} of ${total}.` : empty);
   }
@@ -1660,6 +1733,31 @@ async function setCapacity(value, worker) {
   tick();
 }
 
+/** Puts a worker on the route, or takes it off. Shown at once. */
+async function toggleRoute(worker) {
+  if (!last) return;
+  const route = (last.route || []).includes(worker)
+    ? last.route.filter((w) => w !== worker) : [...(last.route || []), worker];
+  last.route = route;
+  render(last);
+  try { await post('/api/route', { route }); capacityError = ''; }
+  catch (e) { capacityError = `could not change the route: ${e.message}`; announce(capacityError); }
+  tick();
+}
+
+/** Turns sharing on or off, for this machine or a worker. Shown at once; a worker's own
+ *  answer follows within a second or so. */
+async function setSharing(sharing, worker) {
+  if (!last) return;
+  if (worker) { const m = (last.machines || []).find((x) => x.name === worker); if (m) m.sharing_off = !sharing; }
+  else last.sharing_off = !sharing;
+  render(last);
+  try { await post('/api/sharing', worker ? { sharing, worker } : { sharing }); capacityError = ''; }
+  catch (e) { capacityError = `could not turn sharing ${sharing ? 'on' : 'off'}: ${e.message}`; announce(capacityError); }
+  tick();
+  if (worker) setTimeout(tick, 1500);
+}
+
 /* ================================================================ input
    One handler for every control on the page, by its `data-action`. */
 
@@ -1696,6 +1794,8 @@ document.addEventListener('click', (e) => {
     else if (action === 'older') goTo(last.finished.older_from);
     else if (action === 'newer') goTo(page.held ? null : last.finished.newer_from); // a hold's "new" are the newest
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
+    else if (action === 'sharing') setSharing(value === '1', control.dataset.worker);
+    else if (action === 'route') toggleRoute(control.dataset.worker);
     else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
     else if (action === 'command') { $('#log-cmd').hidden = !$('#log-cmd').hidden; logHeading(); }
@@ -1776,7 +1876,7 @@ function favicon(token) {
 }
 
 // Polls every two seconds, one request at a time, and not at all while the tab is hidden.
-let timer = null, inFlight = false, again = false, lastOk = 0;
+let timer = null, inFlight = false, again = false, lastOk = 0, polling = null;
 function schedule() { clearTimeout(timer); timer = setTimeout(() => { if (!document.hidden) tick(); }, 2000); }
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) return;
@@ -1801,7 +1901,8 @@ async function poll() {
   const changesBefore = changes;
   try {
     const asked = stateUrl();
-    const response = await fetch(asked);
+    polling = new AbortController();
+    const response = await fetch(asked, { signal: polling.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const d = await response.json();
     if (d.error) throw new Error(d.error);
@@ -1819,6 +1920,7 @@ async function poll() {
     status.title = '';
     status.lastElementChild.textContent = `live · ${new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}`;
   } catch (e) {
+    if (e.name === 'AbortError') { again = true; return; }
     if (status.className !== 'offline') announce('Lost the connection to drmanhattan. Retrying.');
     status.className = 'offline';
     status.title = String(e);

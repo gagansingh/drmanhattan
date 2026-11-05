@@ -155,9 +155,13 @@ pub(crate) struct Record {
     /// A service: when it became ready.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) ready_at: Option<Timestamp>,
-    /// Why a worker could not take it: it runs here from then on.
+    /// Why a worker could not take it, the last time one tried.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) remote_fallback: Option<String>,
+    /// It runs here from then on: a worker failed it for a reason of its own, not because the
+    /// worker was unavailable (which only keeps that worker out for a while).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) stays_here: bool,
     /// A quick run: it starts without waiting for a slot (see `HistoryIndex::lane`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) quick: bool,
@@ -209,6 +213,7 @@ impl Record {
             machine: None,
             remote_run: None,
             remote_fallback: None,
+            stays_here: false,
             ready_at: None,
             quick: false,
             lane_reason: None,
