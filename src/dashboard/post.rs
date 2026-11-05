@@ -33,8 +33,13 @@ struct OrderBody {
     order: Option<Vec<RunId>>,
 }
 
-pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx) {
-    if !http::write_allowed(&req, &ctx.bind, ctx.port) {
+pub(super) fn handle(mut req: Request, path: &str, ctx: &Ctx, lan: bool) {
+    let allowed = if lan {
+        super::lan::key(&ctx.paths).is_ok_and(|key| super::lan::write_allowed(&req, &key))
+    } else {
+        http::write_allowed(&req, &ctx.bind, ctx.port)
+    };
+    if !allowed {
         return http::respond(req, 403, "forbidden", "text/plain");
     }
     let mut body = String::new();
