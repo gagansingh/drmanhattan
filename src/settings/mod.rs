@@ -9,8 +9,8 @@ use std::str::FromStr;
 use std::time::Duration;
 
 pub(crate) use capacity::{
-    effective_capacity, remove_timed_overrides, set_paused, set_route, set_slots, set_worker_slots, standing_capacity,
-    MAX_SLOTS,
+    effective_capacity, remove_timed_overrides, set_route, set_sharing_off, set_slots, set_worker_slots,
+    standing_capacity, MAX_SLOTS,
 };
 pub(crate) use config::{load_config, update_config, Config};
 pub(crate) use manual_order::{read_manual_order, write_manual_order, ManualOrder};

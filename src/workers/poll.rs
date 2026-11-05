@@ -84,22 +84,22 @@ pub(crate) fn push_slots(paths: &Paths, worker: &str) {
     });
 }
 
-/// Pauses or resumes the worker, as `drmanhattan pause` or `resume` there, in the background.
-/// A pause keeps it out of admission here at once; either way it is asked again right after,
-/// so the dashboard shows what it says.
-pub(crate) fn push_pause(paths: &Paths, worker: &str, paused: bool) -> crate::error::Result<()> {
+/// Turns sharing on the worker on or off, as `drmanhattan sharing on|off` there, in the
+/// background. Off keeps it out of admission here at once; either way it is asked again
+/// right after, so the dashboard shows what it says.
+pub(crate) fn push_sharing(paths: &Paths, worker: &str, sharing: bool) -> crate::error::Result<()> {
     let Some(w) = load_config(paths)?.workers.into_iter().find(|w| w.name == worker) else {
         return crate::error::invalid(format!("no worker is named {worker:?}"));
     };
-    if paused {
-        pool().polled_unavailable(paths, worker, &format!("paused on {worker}"));
+    if !sharing {
+        pool().polled_unavailable(paths, worker, &format!("sharing is off on {worker}"));
     }
     let paths = paths.clone();
-    let _ = std::thread::Builder::new().name("worker-pause".into()).spawn(move || {
-        let word = if paused { "pause" } else { "resume" };
-        let out = ssh::run(&w, &ssh::drmanhattan(&w, &[word]), None, ANSWER_LIMIT);
+    let _ = std::thread::Builder::new().name("worker-sharing".into()).spawn(move || {
+        let word = if sharing { "on" } else { "off" };
+        let out = ssh::run(&w, &ssh::drmanhattan(&w, &["sharing", word]), None, ANSWER_LIMIT);
         if out.code != 0 {
-            log::warn(format!("could not {word} {}: {}", w.name, out.first_line()));
+            log::warn(format!("could not turn sharing {word} on {}: {}", w.name, out.first_line()));
         }
         poll_one(&paths, &w);
     });

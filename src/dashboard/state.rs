@@ -88,10 +88,10 @@ pub(super) struct StateDoc {
     /// The workers that jobs which may run on a worker go to, and only to (`drmanhattan
     /// route`); empty when the route is off.
     route: Vec<String>,
-    /// This machine is paused as a worker for others.
-    paused: bool,
-    /// Another machine used this one as its worker in the last week, or it is paused: the
-    /// page offers pause and resume.
+    /// This machine takes no jobs from others, as their worker.
+    sharing_off: bool,
+    /// Another machine used this one as its worker in the last week, or sharing is off: the
+    /// page offers to turn sharing on and off.
     serves_others: bool,
 }
 
@@ -105,8 +105,9 @@ struct MachineView {
     capacity: u32,
     /// Paused here: its slots set to 0.
     paused: bool,
-    /// Paused on the worker itself (`drmanhattan pause`), from its latest readings.
-    paused_there: bool,
+    /// Sharing turned off on the worker itself (`drmanhattan sharing off`), from its latest
+    /// readings.
+    sharing_off: bool,
     /// On the route: jobs that may run on a worker go to it (or another on the route), and
     /// only there.
     routed: bool,
@@ -433,9 +434,9 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         version: crate::update::current(),
         update: crate::update::available(&ctx.paths),
         auto_update: config.auto_update,
-        paused: config.paused,
+        sharing_off: config.sharing_off,
         route: config.route.clone(),
-        serves_others: config.paused
+        serves_others: config.sharing_off
             || std::fs::metadata(ctx.paths.dispatcher_seen())
                 .ok()
                 .and_then(|m| fsutil::age(&m))
@@ -469,7 +470,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
         online: Some(true),
         capacity,
         paused: false,
-        paused_there: false,
+        sharing_off: false,
         routed: false,
         running: running_on(None),
         stats: None,
@@ -486,7 +487,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
             online: live.online,
             capacity,
             paused: capacity == 0,
-            paused_there: live.stats.as_ref().is_some_and(|s| s["paused"] == true),
+            sharing_off: live.stats.as_ref().is_some_and(|s| s["sharing_off"] == true),
             routed: config.route.contains(&w.name),
             running: running_on(Some(&w.name)),
             stats: live.fresh_stats().cloned(),

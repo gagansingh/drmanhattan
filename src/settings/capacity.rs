@@ -58,12 +58,12 @@ pub(crate) fn set_worker_slots(paths: &Paths, worker: &str, slots: u32) -> Resul
     })
 }
 
-/// Pauses or resumes this machine as a worker for other machines, in `config.json`. Its own
-/// jobs, and jobs it is already running for them, are not affected.
-pub(crate) fn set_paused(paths: &Paths, paused: bool) -> Result<bool> {
+/// Turns sharing this machine with others, as their worker, off or on, in `config.json`. Its
+/// own jobs, and jobs it is already running for them, are not affected.
+pub(crate) fn set_sharing_off(paths: &Paths, off: bool) -> Result<bool> {
     update_config(paths, |config| {
-        config.paused = paused;
-        Ok(paused)
+        config.sharing_off = off;
+        Ok(off)
     })
 }
 
