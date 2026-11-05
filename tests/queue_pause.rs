@@ -77,7 +77,7 @@ fn a_paused_job_can_be_cancelled() {
 }
 
 #[test]
-fn the_hold_outlasts_a_restart_and_the_dashboard_resumes_it() {
+fn the_pause_outlasts_a_restart_and_the_dashboard_resumes_it() {
     let mut d = Daemon::start(&[]);
     let headers = [("Content-Type", "application/json"), ("X-Drmanhattan", "1")];
     let (code, body) = d.post("/api/pause", r#"{"paused": true}"#, &headers);
@@ -93,4 +93,51 @@ fn the_hold_outlasts_a_restart_and_the_dashboard_resumes_it() {
     assert_eq!(code, 200, "{body}");
     assert_eq!(d.wait_exit("waiter", T), 0);
     assert!(d.api_state()["queue_paused_since"].is_null());
+}
+
+#[test]
+fn pausing_after_current_lets_the_running_job_finish() {
+    let d = Daemon::start(&[]);
+    d.submit("current", counter(&d, 15));
+    d.wait_state("current", "running", T);
+    assert!(run(&d, &["pause", "--after-current"]).contains("after the current jobs"));
+    d.submit("next", d.job("true"));
+    d.wait_state("next", "queued", T);
+    wait_for(T, || (d.status_json()["state"] == "pausing").then_some(())).expect("it says pausing");
+    assert_eq!(d.status_json()["queue_pause_after_current"], true);
+    assert_eq!(d.wait_exit("current", T), 0);
+    assert!(!d.log_of("current").contains("paused: stopped"), "it was not stopped");
+    assert_eq!(count(&d), 15);
+    wait_for(T, || (d.status_json()["state"] == "paused").then_some(())).expect("then it says paused");
+    std::thread::sleep(Duration::from_secs(1));
+    assert_eq!(d.status_of("next").unwrap()["state"], "queued", "it stays paused until resumed");
+    run(&d, &["resume"]);
+    assert_eq!(d.wait_exit("next", T), 0);
+}
+
+#[test]
+fn pausing_names_a_job_that_drives_a_simulator() {
+    let d = Daemon::start(&[]);
+    d.set_slots(2);
+    // Only its words matter: it never runs xcodebuild.
+    d.submit("uitests", d.job("sleep 30 # xcodebuild test -scheme App"));
+    d.submit("plain", d.job("sleep 30"));
+    d.wait_state("uitests", "running", T);
+    d.wait_state("plain", "running", T);
+    let out = run(&d, &["pause"]);
+    assert!(out.contains("warning: uitests") && out.contains("may fail"), "{out}");
+    assert!(!out.contains("warning: plain"), "{out}");
+    let state = wait_for(T, || {
+        let s = d.api_state();
+        (s["queue_paused_since"].is_number() && s["running"].as_array()?.len() == 2).then_some(s)
+    })
+    .unwrap();
+    let flagged: Vec<_> = state["running"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["may_not_pause_cleanly"] == true)
+        .map(|r| r["label"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(flagged, ["uitests"]);
 }

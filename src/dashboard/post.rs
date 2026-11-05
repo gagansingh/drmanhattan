@@ -142,14 +142,17 @@ fn start_update(req: Request, ctx: &Ctx) {
 #[serde(deny_unknown_fields)]
 struct PauseBody {
     paused: bool,
+    /// Leave the running jobs to finish rather than stopping them.
+    #[serde(default)]
+    after_current: bool,
 }
 
 /// Pause and Resume, as `drmanhattan pause` and `resume`: kept in config.json.
 fn set_pause(req: Request, body: &str, ctx: &Ctx) {
-    let Some(PauseBody { paused }) = object::<PauseBody>(body) else {
+    let Some(PauseBody { paused, after_current }) = object::<PauseBody>(body) else {
         return http::error(req, "send {\"paused\": true or false}");
     };
-    match set_queue_paused(&ctx.paths, paused) {
+    match set_queue_paused(&ctx.paths, paused, after_current) {
         Ok(since) => http::json(req, 200, &json!({ "paused": since.is_some() })),
         Err(e) => http::error(req, e),
     }

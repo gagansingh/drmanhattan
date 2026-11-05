@@ -420,10 +420,24 @@ admission carries on. The dashboard's Pause and Resume buttons do the same, and 
 - The pause is kept in `config.json` (`queue_paused_since`), so it outlasts a restart of the daemon,
   which comes back paused: its waiters, and any `prepare` it starts again, wait for the resume.
 - A paused job can still be cancelled or stopped: it is continued just before the TERM.
-- Not stopped: services (they keep serving), jobs running on a worker (only this machine is
-  paused; pause the worker from its own dashboard or with its own `drmanhattan pause`), and
-  processes a job started outside its process group: a simulator `xcodebuild` boots through
-  launchd, or a daemon a job asked another service to start, keep running.
+- Not stopped: services (they keep serving), and jobs running on a worker (only this machine
+  is paused; pause the worker from its own dashboard or with its own `drmanhattan pause`).
+- SIGSTOP reaches only the job's process group. What a job asked something else to start runs
+  on: an iOS simulator and the XCTest runner in it (booted through launchd by `xcodebuild` or
+  `simctl`), other launchd-started helpers, and Docker containers (run by the Docker daemon). A
+  job like that may fail once resumed, a UI test whose app went on without it, say, and its
+  simulator keeps its memory meanwhile. `drmanhattan pause` names each running job that looks
+  like it drives a simulator (`xcodebuild` testing or with a simulator `-destination`, or
+  `simctl`), and the dashboard marks its row "may not pause cleanly". For those, prefer
+  `--after-current`.
+
+`drmanhattan pause --after-current` (the dashboard's "after current") stops new admissions at
+once but leaves the running jobs to finish, unstopped; the queue then stays paused until
+`drmanhattan resume`. Meanwhile `status` says `state=pausing` (and `mode=after-current` on its
+`paused since=` line; `"queue_pause_after_current": true` in `--json`) and the dashboard
+"pausing after current jobs"; once they have finished, `paused`. It is kept in `config.json`
+(`queue_pause_after_current`) like the pause itself. Pausing the other way switches it, and its
+time starts again.
 
 ## On your phone
 

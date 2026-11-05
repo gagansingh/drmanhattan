@@ -46,6 +46,8 @@ pub(super) struct StateDoc {
     capacity_fixed: Option<String>,
     /// Since when the queue is paused (`drmanhattan pause`), as epoch seconds.
     queue_paused_since: Option<f64>,
+    /// Paused with `--after-current`: the running jobs finish rather than being stopped.
+    queue_pause_after_current: bool,
     /// Whether any waiter is placed by the manual order.
     manual_order: bool,
     slots: Vec<SlotView>,
@@ -253,6 +255,7 @@ struct Snapshot {
     model: LoadModel,
     typicals: Arc<Mutex<Typicals>>,
     queue_paused_since: Option<Timestamp>,
+    pause_after_current: bool,
 }
 
 impl Snapshot {
@@ -283,11 +286,13 @@ impl Snapshot {
             model: q.model.clone(),
             typicals: q.typicals.clone(),
             queue_paused_since: q.queue_paused_since,
+            pause_after_current: q.pause_after_current,
         };
         // The pause so far counts toward neither waiting nor running, as it will once resumed.
         if let Some(since) = snap.queue_paused_since {
-            snap.running.iter_mut().for_each(|(r, _, _)| r.add_pause(since, now));
-            snap.queued.iter_mut().for_each(|(r, _)| r.add_pause(since, now));
+            snap.running.iter_mut().for_each(|(r, _, _)| r.add_pause(since, now, snap.pause_after_current));
+            let after_current = snap.pause_after_current;
+            snap.queued.iter_mut().for_each(|(r, _)| r.add_pause(since, now, after_current));
         }
         snap
     }
@@ -356,7 +361,8 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         .iter()
         .map(|(rec, est, activity)| {
             let mut view = ahead(rec, est);
-            view.paused = snap.queue_paused_since.is_some() && rec.stopped_by_pause();
+            view.paused = snap.queue_paused_since.is_some() && rec.stopped_by_pause(snap.pause_after_current);
+            view.may_not_pause_cleanly = view.paused && rec.may_not_pause_cleanly();
             let activity = crate::sync::lock(activity).clone();
             for note in activity.notes() {
                 if !view.notes.contains(note) {
@@ -410,6 +416,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         capacity_max: MAX_SLOTS,
         capacity_fixed: ctx.settings.slots_env.as_ref().map(|raw| format!("DRMANHATTAN_SLOTS={raw}")),
         queue_paused_since: snap.queue_paused_since.map(Timestamp::epoch_seconds),
+        queue_pause_after_current: snap.pause_after_current,
         manual_order: queued.iter().any(|v| v.manual == Some(true)),
         slots,
         running,

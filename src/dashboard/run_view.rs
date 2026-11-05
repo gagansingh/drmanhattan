@@ -62,6 +62,9 @@ pub(super) struct RunView {
     /// Stopped, or kept waiting, by the queue's pause.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(super) paused: bool,
+    /// Stopped by the pause, but it drives a simulator, which runs on: it may fail once resumed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub(super) may_not_pause_cleanly: bool,
     /// Waiting: another job of its group is running, so it cannot start yet.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) group_busy: Option<bool>,
@@ -177,6 +180,7 @@ impl RunView {
             ready_at: epoch(rec.ready_at),
             ttl: job.ttl,
             paused: false,
+            may_not_pause_cleanly: false,
             group_busy: None,
             timeout: job.timeout,
             typical_seconds: est.p50.map(ms_to_secs),

@@ -42,6 +42,9 @@ struct StatusDoc<'a> {
     /// Since when the queue is paused: nothing starts, and the jobs running here are stopped.
     #[serde(skip_serializing_if = "Option::is_none")]
     queue_paused_since: Option<Timestamp>,
+    /// Paused with `--after-current`: the running jobs finish rather than being stopped.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    queue_pause_after_current: bool,
     daemon: Option<DaemonDoc>,
     active: usize,
     capacity: u32,
@@ -137,10 +140,11 @@ pub(super) fn status(rest: &[String]) -> Result<i32> {
     let paths = Paths::from_env();
     let mut records = read_records(&paths);
     // Paused time counts toward neither waiting nor running, so neither does the pause so far.
-    let queue_paused_since = crate::settings::load_config(&paths).ok().and_then(|c| c.queue_paused_since);
-    if let Some(since) = queue_paused_since {
+    let config = crate::settings::load_config(&paths).ok();
+    if let Some(since) = config.as_ref().and_then(|c| c.queue_paused_since) {
         let now = Timestamp::now();
-        records.iter_mut().for_each(|r| r.add_pause(since, now));
+        let after_current = config.as_ref().is_some_and(|c| c.queue_pause_after_current);
+        records.iter_mut().for_each(|r| r.add_pause(since, now, after_current));
     }
     let doc = build(&paths, &records)?;
     if a.has("json") {
@@ -161,9 +165,14 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
     let here = running.iter().filter(|r| r.machine.is_none() && r.holds_slot()).count();
     let quick = running.iter().filter(|r| r.quick).count();
-    let queue_paused_since = crate::settings::load_config(paths).ok().and_then(|c| c.queue_paused_since);
+    let config = crate::settings::load_config(paths).ok();
+    let queue_paused_since = config.as_ref().and_then(|c| c.queue_paused_since);
+    let after_current = queue_paused_since.is_some() && config.as_ref().is_some_and(|c| c.queue_pause_after_current);
+    // Paused after the current jobs: "pausing" until the runs it waits for have finished.
+    let finishing = running.iter().any(|r| r.machine.is_none() && !r.job.service);
     let state = match &daemon {
         None => "stopped",
+        Some(_) if after_current && finishing => "pausing",
         Some(_) if queue_paused_since.is_some() => "paused",
         Some(_) if running.is_empty() => "idle",
         Some(_) if here < capacity as usize => "available",
@@ -197,6 +206,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     Ok(StatusDoc {
         state,
         queue_paused_since,
+        queue_pause_after_current: after_current,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
         active: here,
         workers: super::workers::docs(paths)?,
@@ -218,7 +228,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 service: r.job.service,
                 quick: r.quick,
                 ready: r.job.service.then_some(r.ready_at.is_some()),
-                paused: queue_paused_since.is_some() && r.stopped_by_pause(),
+                paused: queue_paused_since.is_some() && r.stopped_by_pause(after_current),
                 run_id: &r.run_id,
                 label: &r.job.label,
                 category: &r.job.category,
@@ -275,8 +285,9 @@ fn print_text(doc: &StatusDoc) {
     }
     println!("{}", head.join(" "));
     if let Some(since) = doc.queue_paused_since {
+        let mode = if doc.queue_pause_after_current { " mode=after-current" } else { "" };
         println!(
-            "paused since={} for={} run=`drmanhattan resume`",
+            "paused since={} for={}{mode} run=`drmanhattan resume`",
             since.local_time(),
             human(since.until(Timestamp::now()))
         );

@@ -228,18 +228,25 @@ impl Record {
     }
 
     /// Whether pausing the queue stops it: a waiter, or a run here that is not a service
-    /// (services, and runs on a worker, carry on).
-    pub(crate) fn stopped_by_pause(&self) -> bool {
+    /// (services, and runs on a worker, carry on), unless the pause is `after_current`,
+    /// which leaves the runs to finish.
+    pub(crate) fn stopped_by_pause(&self, after_current: bool) -> bool {
         match self.state {
             State::Queued => true,
-            State::Running => self.machine.is_none() && !self.job.service,
+            State::Running => !after_current && self.machine.is_none() && !self.job.service,
             _ => false,
         }
     }
 
+    /// A running job that SIGSTOP may not pause cleanly: one that drives a simulator, which
+    /// runs outside its process group and carries on, so the job may fail once continued.
+    pub(crate) fn may_not_pause_cleanly(&self) -> bool {
+        self.state == State::Running && drives_a_simulator(&self.job.command)
+    }
+
     /// Adds the part of a pause since `since` that falls in its current phase, up to `now`.
-    pub(crate) fn add_pause(&mut self, since: Timestamp, now: Timestamp) {
-        if !self.stopped_by_pause() {
+    pub(crate) fn add_pause(&mut self, since: Timestamp, now: Timestamp, after_current: bool) {
+        if !self.stopped_by_pause(after_current) {
             return;
         }
         let phase_start = if self.state == State::Running { self.started_at } else { Some(self.queued_at) };
@@ -311,6 +318,20 @@ impl<'a> FileStatus<'a> {
     }
 }
 
+/// Whether a command looks like it drives an iOS or other Apple simulator: `xcodebuild`
+/// testing, or with a simulator `-destination`, or `simctl`. The words are read from the whole
+/// command, so `sh -c "..."` and wrappers count too.
+pub(crate) fn drives_a_simulator(command: &[String]) -> bool {
+    let words: Vec<&str> = command.iter().flat_map(|a| a.split_whitespace()).collect();
+    let program = |name: &str| words.iter().any(|w| *w == name || w.ends_with(&format!("/{name}")));
+    let testing =
+        words.iter().any(|w| matches!(w.trim_matches(|c| c == '"' || c == '\''), "test" | "test-without-building"));
+    // `-destination 'platform=iOS Simulator,…'`: the platform has a space in it.
+    let text = command.join(" ");
+    let simulator_destination = text.contains("-destination") && text.contains("Simulator");
+    (program("xcodebuild") && (testing || simulator_destination)) || program("simctl")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +378,23 @@ mod tests {
         assert!(fields.get("remote_run").is_some());
         assert!(serde_json::to_string(&rec.public()).unwrap().find("\"env\"").is_none());
         let _ = std::fs::remove_file(files.claimed());
+    }
+
+    #[test]
+    fn simulator_jobs_are_told_apart() {
+        let cmd = |parts: &[&str]| parts.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert!(drives_a_simulator(&cmd(&["xcodebuild", "-scheme", "App", "test"])));
+        assert!(drives_a_simulator(&cmd(&["/usr/bin/xcodebuild", "test-without-building"])));
+        assert!(drives_a_simulator(&cmd(&["sh", "-c", "cd app && xcodebuild test -scheme App"])));
+        assert!(drives_a_simulator(&cmd(&[
+            "xcodebuild",
+            "build",
+            "-destination",
+            "platform=iOS Simulator,name=iPhone 16"
+        ])));
+        assert!(drives_a_simulator(&cmd(&["xcrun", "simctl", "boot", "iPhone 16"])));
+        assert!(!drives_a_simulator(&cmd(&["xcodebuild", "-scheme", "App", "build"])));
+        assert!(!drives_a_simulator(&cmd(&["cargo", "test"])));
+        assert!(!drives_a_simulator(&cmd(&["npm", "test"])));
     }
 }

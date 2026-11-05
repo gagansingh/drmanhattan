@@ -36,6 +36,9 @@ pub(crate) struct Config {
     /// running here are stopped until `drmanhattan resume`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) queue_paused_since: Option<Timestamp>,
+    /// Paused with `--after-current`: the running jobs are left to finish, not stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) queue_pause_after_current: bool,
     #[serde(flatten)]
     pub(crate) other: BTreeMap<String, serde_json::Value>,
 }

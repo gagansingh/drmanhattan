@@ -74,7 +74,7 @@ impl Scheduler {
         }
         // An unreadable config keeps the pause as it was.
         if let Ok(config) = &config {
-            q.set_pause(config.queue_paused_since);
+            q.set_pause(config.queue_paused_since, config.queue_pause_after_current);
         }
         if !admitting || q.queue_paused_since.is_some() {
             return Vec::new();
