@@ -403,10 +403,24 @@ Commands are shown as a person reads them: the program and its subcommand stand 
 `via` tag, the job's folder is `.` and the home folder `~`, and flags, settings, quoted strings and
 shell operators each have a colour; hover a job's name to see its command.
 
+## On your phone
+
+`drmanhattan lan on` serves the dashboard on this machine's network address too, and prints a
+link to open on a phone on the same Wi-Fi. The link holds a secret key; opening it once leaves
+a cookie on the phone and drops the key from the address bar. Without the key the network
+address answers only 403. The phone can do everything the page can (reorder, slots, stop a
+service). The running daemon picks the change up within seconds, without a restart, and
+follows the machine to a new network address. `drmanhattan lan` shows the link again,
+`drmanhattan lan new-key` makes the old link and every phone's cookie stop working, and
+`drmanhattan lan off` stops it.
+
+It is plain HTTP: anyone who can watch the network's traffic (an untrusted or open Wi-Fi) can
+read the pages and the key. Use it on a network you trust, and keep it off elsewhere.
+
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]` and
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `lan [on|off|new-key]` and
 `paths`. Each has `--help`.
 
 | option | default | meaning |

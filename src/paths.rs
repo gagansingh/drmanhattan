@@ -112,4 +112,8 @@ impl Paths {
     pub(crate) fn config(&self) -> PathBuf {
         self.data.join("config.json")
     }
+    /// The secret in the dashboard's network link (`drmanhattan lan`).
+    pub(crate) fn lan_key(&self) -> PathBuf {
+        self.data.join("lan-key")
+    }
 }

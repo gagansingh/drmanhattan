@@ -28,15 +28,26 @@ pub(crate) fn is_loopback(bind: &str) -> bool {
 }
 
 pub(super) fn respond(req: Request, code: u16, body: impl Into<Vec<u8>>, content_type: &str) {
+    respond_with(req, code, body, content_type, &[]);
+}
+
+/// `respond`, with more headers.
+pub(super) fn respond_with(
+    req: Request,
+    code: u16,
+    body: impl Into<Vec<u8>>,
+    content_type: &str,
+    extra: &[(&str, &str)],
+) {
     let mut response = Response::from_data(body.into()).with_status_code(code);
-    let headers = [
+    let safe = [
         ("Content-Type", content_type),
         ("Cache-Control", "no-store"),
         ("X-Content-Type-Options", "nosniff"),
         ("X-Frame-Options", "DENY"),
         ("Content-Security-Policy", "frame-ancestors 'none'"),
     ];
-    for (name, value) in headers {
+    for &(name, value) in safe.iter().chain(extra) {
         if let Ok(h) = Header::from_bytes(name.as_bytes(), value.as_bytes()) {
             response.add_header(h);
         }
@@ -52,7 +63,7 @@ pub(super) fn error(req: Request, message: impl std::fmt::Display) {
     json(req, 400, &serde_json::json!({ "error": message.to_string() }))
 }
 
-fn header(req: &Request, name: &str) -> Option<String> {
+pub(super) fn header(req: &Request, name: &str) -> Option<String> {
     let found = req.headers().iter().find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name));
     found.map(|h| h.value.as_str().to_string())
 }

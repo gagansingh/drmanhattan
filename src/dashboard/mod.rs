@@ -6,9 +6,11 @@
 //! - `POST /api/…` (`post`) for what the page can change: the manual queue order, the
 //!   slots, a service, and updates.
 //!
-//! See `http` for the defences against other pages in the same browser.
+//! See `http` for the defences against other pages in the same browser, and `lan` for the
+//! dashboard on this network.
 
 mod http;
+pub(crate) mod lan;
 mod post;
 mod run_view;
 mod state;
@@ -56,23 +58,46 @@ pub(crate) fn start(shared: Shared, bind: &str, port: u16, session_links: bool) 
         (q.paths.clone(), q.settings.clone(), q.inbox.clone())
     };
     let ctx = Arc::new(Ctx { shared, paths, settings, inbox, bind: bind.to_string(), port, session_links });
-    let server = Arc::new(server);
-    for i in 0..HTTP_THREADS {
-        let (server, ctx) = (server.clone(), ctx.clone());
-        let thread = std::thread::Builder::new().name(format!("http-{i}"));
-        thread
-            .spawn(move || {
-                while let Ok(req) = server.recv() {
-                    handle(req, &ctx);
-                }
-            })
-            .or_else(|e| invalid(format!("could not start the dashboard: {e}")))?;
+    serve(Arc::new(server), &ctx, HTTP_THREADS, false)?;
+    if is_loopback(bind) {
+        lan::watch(ctx);
     }
     Ok(format!("http://{}/", host_port(bind, port)))
 }
 
-fn handle(req: Request, ctx: &Ctx) {
-    if !http::host_allowed(&req, &ctx.bind, ctx.port) {
+/// Answers `server`'s requests from `threads` threads, until it is unblocked. `lan`: it
+/// listens on the network, where every request needs the key.
+fn serve(server: Arc<Server>, ctx: &Arc<Ctx>, threads: usize, lan: bool) -> Result<()> {
+    for i in 0..threads {
+        let (server, ctx) = (server.clone(), ctx.clone());
+        let thread = std::thread::Builder::new().name(format!("http-{}{i}", if lan { "lan-" } else { "" }));
+        thread
+            .spawn(move || {
+                while let Ok(req) = server.recv() {
+                    handle(req, &ctx, lan);
+                }
+            })
+            .or_else(|e| invalid(format!("could not start the dashboard: {e}")))?;
+    }
+    Ok(())
+}
+
+fn handle(req: Request, ctx: &Ctx, lan: bool) {
+    if lan {
+        // Read each time, so a new key (`drmanhattan lan new-key`) holds at once.
+        let Ok(key) = lan::key(&ctx.paths) else { return http::respond(req, 500, "no key", "text/plain") };
+        match lan::access(&req, &key) {
+            lan::Access::Allowed => {}
+            lan::Access::TradeForCookie => {
+                let cookie = lan::cookie_header(&key);
+                return http::respond_with(req, 303, "", "text/plain", &[("Location", "/"), ("Set-Cookie", &cookie)]);
+            }
+            lan::Access::Denied => {
+                let why = "forbidden: open the link `drmanhattan lan` prints on the machine running drmanhattan";
+                return http::respond(req, 403, why, "text/plain");
+            }
+        }
+    } else if !http::host_allowed(&req, &ctx.bind, ctx.port) {
         return http::respond(req, 403, "forbidden: this server answers only to localhost", "text/plain");
     }
     let url = req.url().to_string();
@@ -86,7 +111,7 @@ fn handle(req: Request, ctx: &Ctx) {
         (Method::Get, "/api/log") => log_tail(req, &url, ctx),
         (Method::Post, "/api/queue-order" | "/api/capacity" | "/api/service" | "/api/update" | "/api/auto-update") => {
             let path = path.to_string();
-            post::handle(req, &path, ctx);
+            post::handle(req, &path, ctx, lan);
         }
         _ => http::respond(req, 404, "not found", "text/plain"),
     }
