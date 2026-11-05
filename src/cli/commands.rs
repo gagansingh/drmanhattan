@@ -233,6 +233,61 @@ pub(super) fn slots(rest: &[String]) -> Result<i32> {
     Ok(0)
 }
 
+const LAN: Spec = Spec {
+    usage: "\
+usage: drmanhattan lan [on|off|new-key]
+
+Serves the dashboard on this machine's network address too, for a phone on the same Wi-Fi.
+It answers only to the link this prints, which holds a secret key; the phone keeps it as a
+cookie. The running daemon starts or stops it within seconds, without a restart.
+
+  (none)    whether it is on, and the link
+  on        serve it, and print the link
+  off       stop serving it
+  new-key   a new key: phones that have the old link must open the new one
+",
+    values: &[],
+    switches: &[],
+    positional: 1,
+};
+
+pub(super) fn lan(rest: &[String]) -> Result<i32> {
+    use crate::dashboard::lan;
+    let Some(a) = args::parse(&LAN, rest)? else { return Ok(0) };
+    let paths = Paths::from_env();
+    let key = match a.positional.first().map(String::as_str) {
+        None => lan::key(&paths)?,
+        Some("on") => {
+            crate::settings::update_config(&paths, |c| {
+                c.lan = true;
+                Ok(())
+            })?;
+            lan::key(&paths)?
+        }
+        Some("off") => {
+            crate::settings::update_config(&paths, |c| {
+                c.lan = false;
+                Ok(())
+            })?;
+            println!("off: the dashboard answers only on this machine (within a few seconds)");
+            return Ok(0);
+        }
+        Some("new-key") => lan::new_key(&paths)?,
+        Some(other) => return invalid(format!("lan takes on, off or new-key, not {other:?}")),
+    };
+    let on = crate::settings::load_config(&paths).is_ok_and(|c| c.lan);
+    let port = daemon::running(&paths)
+        .and_then(|d| d.info?.url)
+        .and_then(|u| u.trim_end_matches('/').rsplit_once(':')?.1.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    match (on, lan::link(port, &key)) {
+        (false, _) => println!("off; `drmanhattan lan on` serves the dashboard on this network"),
+        (true, Some(link)) => println!("on · open on your phone (same Wi-Fi):\n{link}"),
+        (true, None) => println!("on, but this machine has no network address right now"),
+    }
+    Ok(0)
+}
+
 const PATHS: Spec = Spec {
     usage: "\
 usage: drmanhattan paths
