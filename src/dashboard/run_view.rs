@@ -50,6 +50,7 @@ pub(super) struct RunView {
     /// Its job's name on the worker, once it has been handed over.
     remote_job: Option<String>,
     remote_fallback: Option<String>,
+    stays_here: bool,
     service: bool,
     /// A quick run, or a quick waiter: it starts without waiting for a slot.
     quick: bool,
@@ -164,6 +165,7 @@ impl RunView {
             machine: rec.machine.clone(),
             remote_job: rec.remote_run.as_ref().map(|r| r.job.clone()),
             remote_fallback: rec.remote_fallback.clone(),
+            stays_here: rec.stays_here,
             service: job.service,
             quick: rec.quick,
             lane_reason: rec.lane_reason.clone(),

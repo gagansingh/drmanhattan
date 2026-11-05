@@ -12,6 +12,7 @@
 
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use serde::Serialize;
 
@@ -19,6 +20,7 @@ use crate::activity::{Activity, Typicals};
 use crate::dashboard::run_view::{Eta, RunView};
 use crate::dashboard::{http, Ctx};
 use crate::estimate::{Estimate, LoadModel};
+use crate::fsutil;
 use crate::job::{Record, RunId, State};
 use crate::process;
 use crate::queue::{self, rank};
@@ -83,6 +85,11 @@ pub(super) struct StateDoc {
     /// readings. Empty without workers, when the page shows one machine.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     machines: Vec<MachineView>,
+    /// This machine takes no jobs from others, as their worker.
+    sharing_off: bool,
+    /// Another machine used this one as its worker in the last week, or sharing is off: the
+    /// page offers to turn sharing on and off.
+    serves_others: bool,
 }
 
 /// One machine's bar on the dashboard.
@@ -93,7 +100,11 @@ struct MachineView {
     ssh: Option<String>,
     online: Option<bool>,
     capacity: u32,
+    /// Paused here: its slots set to 0.
     paused: bool,
+    /// Sharing turned off on the worker itself (`drmanhattan sharing off`), from its latest
+    /// readings.
+    sharing_off: bool,
     /// Runs on it now.
     running: usize,
     /// Its readings, while fresh: `machine-stats` for a worker.
@@ -362,6 +373,7 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
     let busy_groups: std::collections::HashSet<&str> =
         snap.running.iter().filter_map(|(r, _, _)| r.job.group.as_deref()).collect();
     let manual = read_manual_order(&ctx.paths);
+    let config = load_config(&ctx.paths).unwrap_or_default();
     let by_id: std::collections::HashMap<_, _> = snap.queued.iter().map(|(r, e)| (&r.run_id, (r, e))).collect();
     let mut queued: Vec<RunView> = rank(snap.queued.iter().map(|(r, _)| r), &manual, now)
         .into_iter()
@@ -411,7 +423,13 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
         inbox: ctx.inbox.clone(),
         version: crate::update::current(),
         update: crate::update::available(&ctx.paths),
-        auto_update: load_config(&ctx.paths).is_ok_and(|c| c.auto_update),
+        auto_update: config.auto_update,
+        sharing_off: config.sharing_off,
+        serves_others: config.sharing_off
+            || std::fs::metadata(ctx.paths.dispatcher_seen())
+                .ok()
+                .and_then(|m| fsutil::age(&m))
+                .is_some_and(|age| age < Duration::from_secs(7 * 86400)),
         auto_update_state: crate::update::auto_update_summary(&ctx.paths),
         installed: crate::update::installed_version(),
         updated: crate::update::updated(&ctx.paths),
@@ -440,6 +458,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
         online: Some(true),
         capacity,
         paused: false,
+        sharing_off: false,
         running: running_on(None),
         stats: None,
         last_seen: None,
@@ -455,6 +474,7 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
             online: live.online,
             capacity,
             paused: capacity == 0,
+            sharing_off: live.stats.as_ref().is_some_and(|s| s["sharing_off"] == true),
             running: running_on(Some(&w.name)),
             stats: live.fresh_stats().cloned(),
             last_seen: live.last_seen.map(Timestamp::epoch_seconds),

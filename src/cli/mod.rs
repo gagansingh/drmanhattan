@@ -30,6 +30,7 @@ usage:
   drmanhattan reload-env                  read your login shell's environment again for later jobs
   drmanhattan stop                        stop the daemon (running jobs get a grace period)
   drmanhattan slots [N]                   show or set how many jobs may run at once
+  drmanhattan sharing [on|off]            whether other machines may send this one jobs
   drmanhattan lan [on|off|new-key]        the dashboard on this network, for a phone
   drmanhattan paths                       where the inbox, state and data live
   drmanhattan --version | --help
@@ -92,6 +93,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "reload-env" => commands::reload_env(rest),
         "stop" => commands::stop(rest),
         "slots" => commands::slots(rest),
+        "sharing" => commands::sharing(rest),
         "lan" => commands::lan(rest),
         "paths" => commands::paths(rest),
         other => crate::error::invalid(format!("unknown command: {other} (see --help)")),

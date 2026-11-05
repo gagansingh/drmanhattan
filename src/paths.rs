@@ -112,6 +112,10 @@ impl Paths {
     pub(crate) fn config(&self) -> PathBuf {
         self.data.join("config.json")
     }
+    /// Touched whenever another machine asks for this one's readings, as its worker.
+    pub(crate) fn dispatcher_seen(&self) -> PathBuf {
+        self.data.join("dispatcher-seen")
+    }
     /// The secret in the dashboard's network link (`drmanhattan lan`).
     pub(crate) fn lan_key(&self) -> PathBuf {
         self.data.join("lan-key")

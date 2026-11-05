@@ -19,7 +19,7 @@ mod ssh;
 pub(crate) use config::{validate, WorkerConfig};
 pub(crate) use dispatch::{dispatch, unusable};
 pub(crate) use host::{dispatch_probe, dispatch_submit, machine_stats, PROTOCOL};
-pub(crate) use poll::start_poller;
+pub(crate) use poll::{push_sharing, push_slots, start_poller};
 pub(crate) use pool::{pool, read_live, Live};
 pub(crate) use ssh::{command as ssh_command, drmanhattan as remote_argv, run as ssh_run};
 

@@ -294,7 +294,7 @@ On this machine, `config.json` in the data directory lists them:
 | --- | --- |
 | `ssh` | an alias from `~/.ssh/config`, or `user@host`; key-based auth only |
 | `name` | its name on the dashboard and in run records (default: the alias) |
-| `slots` | how many of its slots this machine may use (default 1); 0 pauses it |
+| `slots` | how many of its slots this machine may use (default 1), kept in step with the worker's own; 0 pauses it |
 | `tags` | what it offers; a job's `requires` must all be among them |
 | `check` | a command run on it before each hand-over: exit 0 means ready, else its first line of output says why not |
 | `args_path_map` | argument prefixes rewritten for it, for paths that exist only here |
@@ -352,7 +352,16 @@ What happens:
 The dashboard then shows the machines as a tree. Each machine is a node that folds away,
 with whether it answers, its slots with − and + (down to 0, which pauses a worker), its CPU,
 load, memory, temperature and battery, and why it is not taking work while that is so; under it, one
-leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+leaf per slot, holding its running job or free. A worker's slot count is one number on
+every machine: − and + here set it on the worker too, and a count changed on the worker
+shows here within a poll. Setting a worker's slots to 0 pauses it on the machine that did so.
+
+To take a worker out for a while (to game on it, say), turn its sharing off: `drmanhattan
+sharing off` on the worker, its own dashboard's sharing button, or the sharing button on its
+row on any machine that uses it. Each says the same thing to the worker, so every dashboard
+shows it. A worker with sharing off takes no jobs from other machines; what it already runs
+for them finishes, and its own jobs run as usual. `drmanhattan sharing on` (or the button
+again) ends it. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
 ## Goals and loops for coding agents
@@ -420,7 +429,7 @@ read the pages and the key. Use it on a network you trust, and keep it off elsew
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `lan [on|off|new-key]` and
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `sharing [on|off]`, `lan [on|off|new-key]` and
 `paths`. Each has `--help`.
 
 | option | default | meaning |

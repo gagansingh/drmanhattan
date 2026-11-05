@@ -64,7 +64,7 @@ pub(super) fn run(shared: &Shared, admitted: Admitted) {
     let name = rec.machine.clone().unwrap_or_default();
     let worker = load_config(&paths).ok().and_then(|c| c.workers.into_iter().find(|w| w.name == name));
     let Some(worker) = worker else {
-        return requeue(&mut completion, &format!("worker {name} is no longer in config.json"));
+        return requeue(&mut completion, &format!("worker {name} is no longer in config.json"), true);
     };
     let log = match open_log(&rec, true) {
         Ok(log) => log,
@@ -126,12 +126,14 @@ pub(super) fn run(shared: &Shared, admitted: Admitted) {
                     return completion.finish(State::Cancelled, 130, None, Duration::ZERO);
                 }
                 Err(failure) => {
-                    say(&format!("worker {name} unavailable: {}; running here", failure.reason));
+                    let next = if failure.worker_level { "back in the queue" } else { "running here" };
+                    say(&format!("worker {name} unavailable: {}; {next}", failure.reason));
                     if failure.worker_level {
                         pool().unavailable(&paths, &name, &failure.reason);
                     }
                     drop(log);
-                    return requeue(&mut completion, &format!("worker {name} unavailable: {}", failure.reason));
+                    let reason = format!("worker {name} unavailable: {}", failure.reason);
+                    return requeue(&mut completion, &reason, !failure.worker_level);
                 }
             }
         }
@@ -290,8 +292,9 @@ fn current_remote(shared: &Shared, rec: &Record) -> Option<RemoteRun> {
     queue::lock(shared).runs.get(&rec.run_id).and_then(|e| e.rec.remote_run.clone())
 }
 
-/// Puts the run back in the local queue, to run here: no worker takes it again.
-fn requeue(completion: &mut Completion, reason: &str) {
+/// Puts the run back in the queue: to run here only when `stays_here`, else here or on
+/// a worker that is available, whichever frees first.
+fn requeue(completion: &mut Completion, reason: &str, stays_here: bool) {
     completion.finished = true;
     let mut q = queue::lock(completion.shared);
     let Some(e) = q.runs.get_mut(completion.run_id) else { return };
@@ -299,6 +302,7 @@ fn requeue(completion: &mut Completion, reason: &str) {
     rec.state = State::Queued;
     (rec.slot, rec.started_at, rec.machine, rec.remote_run, rec.load_at_start) = (None, None, None, None, None);
     rec.remote_fallback = Some(reason.to_string());
+    rec.stays_here = stays_here;
     e.live = None;
     let label = rec.job.label.clone();
     q.persist(completion.run_id);

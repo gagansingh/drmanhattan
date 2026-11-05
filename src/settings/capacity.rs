@@ -58,6 +58,15 @@ pub(crate) fn set_worker_slots(paths: &Paths, worker: &str, slots: u32) -> Resul
     })
 }
 
+/// Turns sharing this machine with others, as their worker, off or on, in `config.json`. Its
+/// own jobs, and jobs it is already running for them, are not affected.
+pub(crate) fn set_sharing_off(paths: &Paths, off: bool) -> Result<bool> {
+    update_config(paths, |config| {
+        config.sharing_off = off;
+        Ok(off)
+    })
+}
+
 /// The capacity admission honours: the standing count.
 pub(crate) fn effective_capacity(paths: &Paths, slots_env: Option<&str>) -> Result<u32> {
     standing_capacity(paths, slots_env).map(|(slots, _)| slots)
