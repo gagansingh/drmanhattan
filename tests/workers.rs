@@ -156,7 +156,7 @@ fn a_failed_dispatch_runs_the_job_here_with_one_line_in_its_log() {
         log.contains("worker w1 unavailable: its check failed: postgres is not answering; back in the queue"),
         "{log}"
     );
-    assert!(s.get("stays_here").is_none_or(|v| v == false), "the worker's fault: it may go to a worker again: {s}");
+    assert!(s.get("stays_here").map_or(true, |v| v == false), "the worker's fault: it may go to a worker again: {s}");
     assert!(log.contains("ran here"));
     let w = p.here.status_json()["workers"][0].clone();
     assert_eq!(w["state"], "unavailable", "{w}");
