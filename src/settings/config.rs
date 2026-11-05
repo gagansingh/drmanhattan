@@ -33,6 +33,9 @@ pub(crate) struct Config {
     /// Install newer releases of this major version by itself, once the queue is idle.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) auto_update: bool,
+    /// Serve the dashboard to this network too, to whoever has its key (`drmanhattan lan`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) lan: bool,
     /// Sign each update with this identity before installing it (macOS).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sign: Option<SignConfig>,
