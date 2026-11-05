@@ -46,7 +46,7 @@ impl Key<'_> {
 pub(crate) fn rank<'a>(queued: impl Iterator<Item = &'a Record>, manual: &ManualOrder, now: Timestamp) -> Vec<Ranked> {
     let mut keyed: Vec<(Key, Ranked)> = queued
         .map(|r| {
-            let overdue = r.queued_at.until(now) > Duration::from_secs(r.skip_after_seconds);
+            let overdue = r.waited(now) > Duration::from_secs(r.skip_after_seconds);
             let position = manual.get(&r.run_id).filter(|_| !r.job.priority);
             let (group, measure) = match (r.job.priority, position) {
                 (true, _) => (0, 0.0),

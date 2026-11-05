@@ -387,7 +387,8 @@ slot's job with a progress bar against its usual time, quick runs beside them, t
 jobs with estimated start times, recent results with their logs, and the machine's CPU,
 memory, temperature and battery (amber at 20% on battery, when it says to plug in). The − and + buttons set the number of slots, as
 `drmanhattan slots N` does, and it stays until changed (unless `DRMANHATTAN_SLOTS` is set
-for the daemon, which then decides); drag a waiting job to reorder it.
+for the daemon, which then decides); drag a waiting job to reorder it. Pause and Resume do what
+`drmanhattan pause` and `resume` do (below).
 
 Finished runs are listed 20 at a time, newest first, with "‹ newer" and "older ›" to step
 through every run still kept (`DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
@@ -402,6 +403,41 @@ Commands are shown as a person reads them: the program and its subcommand stand 
 (`env`, `xcrun`, `nice`, `time`, a script that runs `-- <command>`) are dimmed or folded into a
 `via` tag, the job's folder is `.` and the home folder `~`, and flags, settings, quoted strings and
 shell operators each have a colour; hover a job's name to see its command.
+
+## Pausing the queue
+
+`drmanhattan pause` frees the machine for a while without losing work: nothing more starts
+(jobs can still be submitted; they wait), and each job running here is stopped where it is,
+with SIGSTOP to its process group. `drmanhattan resume` continues them with SIGCONT, and
+admission carries on. The dashboard's Pause and Resume buttons do the same, and `status`
+(`state=paused`, a `paused since=…` line, `paused=yes` on each stopped run; `queue_paused_since` and
+`"paused": true` in `--json`) and the dashboard (an amber "paused", and ⏸ in the tab's title) show it.
+
+- Paused time is not running time: it counts toward no job's `timeout` or `ready_timeout`, nor
+  its elapsed time, duration or timing history, nor toward a waiter's wait
+  (`skip_after_seconds`). A record's `paused_seconds` says how much of its current phase
+  (waiting, then running) was paused.
+- The pause is kept in `config.json` (`queue_paused_since`), so it outlasts a restart of the daemon,
+  which comes back paused: its waiters, and any `prepare` it starts again, wait for the resume.
+- A paused job can still be cancelled or stopped: it is continued just before the TERM.
+- Not stopped: services (they keep serving), and jobs running on a worker (only this machine
+  is paused; pause the worker from its own dashboard or with its own `drmanhattan pause`).
+- SIGSTOP reaches only the job's process group. What a job asked something else to start runs
+  on: an iOS simulator and the XCTest runner in it (booted through launchd by `xcodebuild` or
+  `simctl`), other launchd-started helpers, and Docker containers (run by the Docker daemon). A
+  job like that may fail once resumed, a UI test whose app went on without it, say, and its
+  simulator keeps its memory meanwhile. `drmanhattan pause` names each running job that looks
+  like it drives a simulator (`xcodebuild` testing or with a simulator `-destination`, or
+  `simctl`), and the dashboard marks its row "may not pause cleanly". For those, prefer
+  `--after-current`.
+
+`drmanhattan pause --after-current` (the dashboard's "after current") stops new admissions at
+once but leaves the running jobs to finish, unstopped; the queue then stays paused until
+`drmanhattan resume`. Meanwhile `status` says `state=pausing` (and `mode=after-current` on its
+`paused since=` line; `"queue_pause_after_current": true` in `--json`) and the dashboard
+"pausing after current jobs"; once they have finished, `paused`. It is kept in `config.json`
+(`queue_pause_after_current`) like the pause itself. Pausing the other way switches it, and its
+time starts again.
 
 ## On your phone
 
@@ -420,7 +456,7 @@ read the pages and the key. Use it on a network you trust, and keep it off elsew
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `lan [on|off|new-key]` and
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `pause`, `resume`, `lan [on|off|new-key]` and
 `paths`. Each has `--help`.
 
 | option | default | meaning |

@@ -2,9 +2,12 @@
 //! its log says it is doing.
 //!
 //! Deadlines are measured on the monotonic clock, so a clock change or a laptop asleep
-//! never counts as running time: a job's timeout is time it actually ran.
+//! never counts as running time: a job's timeout is time it actually ran. Nor does time the
+//! queue was paused (`drmanhattan pause`): its process group is stopped (SIGSTOP) until the
+//! resume (SIGCONT), and its deadlines move on by as long. Services are never stopped.
 
 use std::os::unix::process::ExitStatusExt;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -32,6 +35,8 @@ pub(super) struct Outcome {
     pub(super) error_line: Option<String>,
     /// The `::note` badges its log printed.
     pub(super) notes: Vec<String>,
+    /// How long it was stopped by a pause; not part of `duration`.
+    pub(super) paused: Duration,
 }
 
 /// Everything `supervise` reads.
@@ -47,6 +52,8 @@ pub(super) struct Watch<'a> {
     pub(super) settings: &'a Settings,
     /// Where in the log the command's output starts: after its `prepare` command's.
     pub(super) log_from: u64,
+    /// The queue's pause: while set, the command's group is stopped.
+    pub(super) paused: &'a AtomicBool,
     /// Called once when a service becomes ready.
     pub(super) on_ready: &'a dyn Fn(),
 }
@@ -73,7 +80,7 @@ const READY_EVERY: Duration = Duration::from_millis(250);
 pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     let (rec, settings) = (w.rec, w.settings);
     let started = Instant::now();
-    let timeout_at = rec.job.timeout.and_then(|t| started.checked_add(Duration::from_secs(t)));
+    let mut timeout_at = rec.job.timeout.and_then(|t| started.checked_add(Duration::from_secs(t)));
     let mut samples: Vec<f64> = rec.load_at_start.into_iter().collect();
     let mut next_sample = started + settings.heartbeat;
     let mut next_scan = started;
@@ -83,14 +90,43 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     let mut activity = Activity::from_offset(w.log_from);
     let service = rec.job.service;
     let ready_timeout = rec.job.ready_timeout.unwrap_or(crate::job::DEFAULT_READY_TIMEOUT);
-    let ready_by = started + Duration::from_secs(ready_timeout);
+    let mut ready_by = started + Duration::from_secs(ready_timeout);
     let expires_at = rec.job.ttl.filter(|_| service).and_then(|t| started.checked_add(Duration::from_secs(t)));
     let mut readiness = super::ready::Readiness::new(rec.job.ready.as_ref(), w.log_from);
     let mut ready = !service;
     let mut next_ready_check = started;
+    let mut stopped_at: Option<Instant> = None;
+    let mut paused = Duration::ZERO;
+    // Continues a stopped group, moving the deadlines on by the time it was stopped.
+    let mut resume = |stopped: Instant, timeout_at: &mut Option<Instant>, ready_by: &mut Instant| {
+        process::signal_group(pgid, libc::SIGCONT);
+        let pause = stopped.elapsed();
+        paused += pause;
+        *timeout_at = timeout_at.map(|t| t + pause);
+        *ready_by += pause;
+        pause
+    };
     let status = loop {
         let now = Instant::now();
-        if !ready && stopping == Stopping::No && now >= next_ready_check {
+        let pause = !service && stopping == Stopping::No && w.paused.load(Ordering::SeqCst);
+        match stopped_at {
+            None if pause => {
+                process::signal_group(pgid, libc::SIGSTOP);
+                stopped_at = Some(now);
+                say("paused: stopped until the queue is resumed");
+            }
+            Some(stopped) if !pause => {
+                stopped_at = None;
+                let pause = resume(stopped, &mut timeout_at, &mut ready_by);
+                if stopping == Stopping::No {
+                    say(&format!("resumed after {}; carrying on", human(pause)));
+                }
+            }
+            _ => {}
+        }
+        let now = Instant::now();
+        let running = stopped_at.is_none();
+        if running && !ready && stopping == Stopping::No && now >= next_ready_check {
             next_ready_check = now + READY_EVERY;
             if readiness.check(&rec.job.log) {
                 ready = true;
@@ -117,7 +153,7 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
             next_sample = now + settings.heartbeat;
             samples.extend(process::load_now());
         }
-        if stopping == Stopping::No && timeout_at.is_some_and(|t| now >= t) {
+        if running && stopping == Stopping::No && timeout_at.is_some_and(|t| now >= t) {
             stopping = Stopping::TimedOut;
             say(&format!(
                 "timed out after {}; stopping it",
@@ -125,6 +161,10 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
             ));
         }
         if stopping != Stopping::No && kill_at.is_none() {
+            // A stopped group would not act on TERM until continued.
+            if let Some(stopped) = stopped_at.take() {
+                resume(stopped, &mut timeout_at, &mut ready_by);
+            }
             process::signal_group(pgid, libc::SIGTERM);
             kill_at = Some(now + settings.term_grace);
         }
@@ -133,12 +173,12 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
             killed = true;
         }
         let pending_kill = kill_at.filter(|_| !killed);
-        let checking = (!ready && stopping == Stopping::No).then_some(next_ready_check);
+        let checking = (running && !ready && stopping == Stopping::No).then_some(next_ready_check);
         let expiry = expires_at.filter(|_| stopping == Stopping::No);
         let wake = [
             Some(next_scan),
             Some(next_sample),
-            timeout_at.filter(|_| stopping == Stopping::No),
+            timeout_at.filter(|_| running && stopping == Stopping::No),
             pending_kill,
             checking,
             expiry,
@@ -149,11 +189,18 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
             Ok(RunEvent::Cancel) if stopping == Stopping::No => {
                 stopping = Stopping::Cancelled;
                 say("cancelled; stopping it");
+                // Act on it now, not at the next wake.
+                if let Some(stopped) = stopped_at.take() {
+                    resume(stopped, &mut timeout_at, &mut ready_by);
+                }
             }
             Ok(RunEvent::Cancel) | Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => break None,
         }
     };
+    if let Some(stopped) = stopped_at.take() {
+        resume(stopped, &mut timeout_at, &mut ready_by);
+    }
     process::terminate_group(pgid, settings.term_grace);
     follow_log(w, &mut activity);
     samples.extend(process::load_now());
@@ -182,11 +229,12 @@ pub(super) fn supervise(w: &Watch, pgid: i32, say: &dyn Fn(&str)) -> Outcome {
     Outcome {
         state,
         exit,
-        duration: started.elapsed(),
+        duration: started.elapsed().saturating_sub(paused),
         load_samples: samples,
         failure_reason,
         error_line: None,
         notes: activity.notes().to_vec(),
+        paused,
     }
 }
 

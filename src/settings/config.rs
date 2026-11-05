@@ -1,5 +1,5 @@
 //! `config.json` in the data directory: the standing slot count (`drmanhattan slots N`), the
-//! daemon-wide activity patterns, workers, and how updates are installed. Unknown keys are
+//! daemon-wide activity patterns, whether the queue is paused, workers, and how updates are installed. Unknown keys are
 //! kept when the file is rewritten.
 
 use std::collections::BTreeMap;
@@ -10,6 +10,7 @@ use crate::activity::PatternConfig;
 use crate::error::{invalid, IoContext, Result};
 use crate::fsutil;
 use crate::paths::Paths;
+use crate::time::Timestamp;
 use crate::update::SignConfig;
 use crate::workers::WorkerConfig;
 
@@ -31,6 +32,13 @@ pub(crate) struct Config {
     /// Sign each update with this identity before installing it (macOS).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) sign: Option<SignConfig>,
+    /// Since when the whole queue is paused (`drmanhattan pause`): nothing starts, and the jobs
+    /// running here are stopped until `drmanhattan resume`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) queue_paused_since: Option<Timestamp>,
+    /// Paused with `--after-current`: the running jobs are left to finish, not stopped.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) queue_pause_after_current: bool,
     #[serde(flatten)]
     pub(crate) other: BTreeMap<String, serde_json::Value>,
 }

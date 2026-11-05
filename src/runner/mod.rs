@@ -129,7 +129,10 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         }
         let _ = exit_sender.send(RunEvent::Exited(status));
     });
-    let typicals = queue::lock(shared).typicals.clone();
+    let (typicals, paused) = {
+        let q = queue::lock(shared);
+        (q.typicals.clone(), q.paused.clone())
+    };
     let watch = Watch {
         rec: &rec,
         events: &events,
@@ -139,6 +142,7 @@ fn execute(shared: &Shared, admitted: Admitted, phase: Phase) {
         paths: &paths,
         settings: &settings,
         log_from,
+        paused: &paused,
         on_ready: &|| mark_ready(shared, &rec),
     };
     let mut outcome = supervise(&watch, pgid, &say);
@@ -269,6 +273,7 @@ impl Completion<'_> {
             if let Some(e) = q.runs.get_mut(self.run_id) {
                 e.rec.load = load;
                 e.rec.error_line = error_line;
+                e.rec.paused_seconds = outcome.paused.as_secs();
                 for note in &outcome.notes {
                     if !e.rec.notes.contains(note) && e.rec.notes.len() < crate::activity::MAX_NOTES {
                         e.rec.notes.push(note.clone());

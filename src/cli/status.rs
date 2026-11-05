@@ -36,8 +36,15 @@ plus `state` (also `submitted` for a job file not yet picked up) and `exit` once
 
 #[derive(Serialize)]
 struct StatusDoc<'a> {
-    /// `stopped`, `idle` (nothing running), `available` (a slot is free) or `busy`.
+    /// `stopped`, `paused` (`drmanhattan pause`), `idle` (nothing running), `available` (a slot
+    /// is free) or `busy`.
     state: &'static str,
+    /// Since when the queue is paused: nothing starts, and the jobs running here are stopped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    queue_paused_since: Option<Timestamp>,
+    /// Paused with `--after-current`: the running jobs finish rather than being stopped.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    queue_pause_after_current: bool,
     daemon: Option<DaemonDoc>,
     active: usize,
     capacity: u32,
@@ -81,6 +88,9 @@ struct RunningDoc<'a> {
     quick: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ready: Option<bool>,
+    /// Stopped by the pause (services and runs on a worker carry on).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    paused: bool,
     run_id: &'a RunId,
     label: &'a str,
     category: &'a str,
@@ -128,7 +138,14 @@ pub(super) fn status(rest: &[String]) -> Result<i32> {
         return super::runs::status_of(&a, run);
     }
     let paths = Paths::from_env();
-    let records = read_records(&paths);
+    let mut records = read_records(&paths);
+    // Paused time counts toward neither waiting nor running, so neither does the pause so far.
+    let config = crate::settings::load_config(&paths).ok();
+    if let Some(since) = config.as_ref().and_then(|c| c.queue_paused_since) {
+        let now = Timestamp::now();
+        let after_current = config.as_ref().is_some_and(|c| c.queue_pause_after_current);
+        records.iter_mut().for_each(|r| r.add_pause(since, now, after_current));
+    }
     let doc = build(&paths, &records)?;
     if a.has("json") {
         println!("{}", serde_json::to_string_pretty(&doc).map_err(|e| crate::error::Error::Invalid(e.to_string()))?);
@@ -148,8 +165,15 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
     let here = running.iter().filter(|r| r.machine.is_none() && r.holds_slot()).count();
     let quick = running.iter().filter(|r| r.quick).count();
+    let config = crate::settings::load_config(paths).ok();
+    let queue_paused_since = config.as_ref().and_then(|c| c.queue_paused_since);
+    let after_current = queue_paused_since.is_some() && config.as_ref().is_some_and(|c| c.queue_pause_after_current);
+    // Paused after the current jobs: "pausing" until the runs it waits for have finished.
+    let finishing = running.iter().any(|r| r.machine.is_none() && !r.job.service);
     let state = match &daemon {
         None => "stopped",
+        Some(_) if after_current && finishing => "pausing",
+        Some(_) if queue_paused_since.is_some() => "paused",
         Some(_) if running.is_empty() => "idle",
         Some(_) if here < capacity as usize => "available",
         Some(_) => "busy",
@@ -163,8 +187,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             run_id: &r.run_id,
             label: &r.job.label,
             category: &r.job.category,
-            waited_seconds: r.queued_at.until(now).as_secs(),
-            waited: r.queued_at.until(now),
+            waited_seconds: r.waited(now).as_secs(),
+            waited: r.waited(now),
             expected_seconds: r.expected_seconds,
             skip_after_seconds: r.skip_after_seconds,
             priority: r.job.priority,
@@ -181,6 +205,8 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
     let daemon_quick = daemon.as_ref().and_then(|d| d.info.as_ref()).and_then(|i| i.max_quick);
     Ok(StatusDoc {
         state,
+        queue_paused_since,
+        queue_pause_after_current: after_current,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
         active: here,
         workers: super::workers::docs(paths)?,
@@ -202,13 +228,14 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 service: r.job.service,
                 quick: r.quick,
                 ready: r.job.service.then_some(r.ready_at.is_some()),
+                paused: queue_paused_since.is_some() && r.stopped_by_pause(after_current),
                 run_id: &r.run_id,
                 label: &r.job.label,
                 category: &r.job.category,
                 cwd: &r.job.cwd,
                 started_at: r.started_at,
-                elapsed_seconds: r.started_at.map(|s| s.until(now).as_secs()),
-                elapsed: r.started_at.map(|s| s.until(now)),
+                elapsed_seconds: r.ran(now).map(|d| d.as_secs()),
+                elapsed: r.ran(now),
                 expected_seconds: r.expected_seconds,
                 log: &r.job.log,
                 job_file: &r.job.job_file,
@@ -257,6 +284,14 @@ fn print_text(doc: &StatusDoc) {
         head.extend(d.url.as_ref().map(|u| kv("dashboard", u)));
     }
     println!("{}", head.join(" "));
+    if let Some(since) = doc.queue_paused_since {
+        let mode = if doc.queue_pause_after_current { " mode=after-current" } else { "" };
+        println!(
+            "paused since={} for={}{mode} run=`drmanhattan resume`",
+            since.local_time(),
+            human(since.until(Timestamp::now()))
+        );
+    }
     if let Some(u) = &doc.update {
         println!("update available={} url={} run=`drmanhattan update`", u.version, u.url);
     }
@@ -268,6 +303,9 @@ fn print_text(doc: &StatusDoc) {
         }
         line.extend([kv("run_id", r.run_id), kv("label", r.label), kv("category", r.category)]);
         line.extend(r.elapsed.map(|d| kv("elapsed", human(d))));
+        if r.paused {
+            line.push(kv("paused", "yes"));
+        }
         line.extend(r.expected_seconds.map(|e| kv("expected", human(std::time::Duration::from_secs(e)))));
         line.push(kv("cwd", r.cwd.display()));
         println!("{}", line.join(" "));

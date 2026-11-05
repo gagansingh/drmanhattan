@@ -1,4 +1,4 @@
-//! The small commands: `serve`, `stop`, `slots` and `paths`.
+//! The small commands: `serve`, `stop`, `slots`, `pause`, `resume` and `paths`.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -10,7 +10,7 @@ use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
-use crate::settings::{set_slots, standing_capacity, Settings, MAX_SLOTS};
+use crate::settings::{set_queue_paused, set_slots, standing_capacity, Settings, MAX_SLOTS};
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -194,6 +194,61 @@ pub(super) fn reload_env(rest: &[String]) -> Result<i32> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+const PAUSE: Spec = Spec {
+    usage: "\
+usage: drmanhattan pause [--after-current]
+       drmanhattan resume
+
+pause frees this machine for a while: nothing more starts, and each job running here is
+stopped (SIGSTOP to its process group) where it is. resume continues them (SIGCONT) and
+admission carries on. Paused time counts toward no job's timeout or ready_timeout, nor toward
+how long a waiter has waited. The pause is kept in config.json, so it outlasts a restart.
+
+Not stopped: services, jobs running on a worker, and processes a job started outside its
+process group (such as a simulator launched through launchd). A paused job can be cancelled.
+A job that drives a simulator (xcodebuild test, simctl) is named when it is paused: its
+simulator runs on, so it may fail once continued and need running again.
+
+--after-current stops new jobs at once but leaves the running ones to finish, unstopped;
+the queue then stays paused until `drmanhattan resume`.
+",
+    values: &[],
+    switches: &["after-current"],
+    positional: 0,
+};
+
+pub(super) fn pause(rest: &[String], paused: bool) -> Result<i32> {
+    let Some(a) = args::parse(&PAUSE, rest)? else { return Ok(0) };
+    let after_current = a.has("after-current");
+    if after_current && !paused {
+        return invalid("--after-current goes with `drmanhattan pause`");
+    }
+    let paths = Paths::from_env();
+    match set_queue_paused(&paths, paused, after_current)? {
+        Some(_) if after_current => println!(
+            "pausing after the current jobs: nothing more starts, and the running ones finish; `drmanhattan resume` carries on"
+        ),
+        Some(since) => {
+            println!(
+                "paused since {}: nothing starts, and running jobs stop within a second; `drmanhattan resume` carries on",
+                since.local_time()
+            );
+            let records = crate::queue::read_records(&paths);
+            for r in records.iter().filter(|r| r.stopped_by_pause(false) && r.may_not_pause_cleanly()) {
+                println!(
+                    "warning: {} ({}) drives a simulator, which a pause does not stop: it may fail once resumed and need running again",
+                    r.job.label, r.run_id
+                );
+            }
+        }
+        None => println!("resumed: stopped jobs carry on, and admission with them"),
+    }
+    if daemon::running(&paths).is_none() {
+        println!("(the daemon is not running; it keeps to this when it starts)");
+    }
+    Ok(0)
 }
 
 const SLOTS: Spec = Spec {

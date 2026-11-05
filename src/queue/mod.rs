@@ -25,6 +25,7 @@ mod recover;
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
@@ -88,6 +89,12 @@ pub(crate) struct Queue {
     pub(crate) typicals: Arc<Mutex<Typicals>>,
     /// The activity patterns of a job that gives none: `config.json`'s, else the markers.
     pub(crate) default_patterns: Arc<Patterns>,
+    /// Since when the queue is paused (`config.json`'s `queue_paused_since`, read each pass).
+    pub(crate) queue_paused_since: Option<Timestamp>,
+    /// Paused with `--after-current`: the running jobs finish rather than being stopped.
+    pub(crate) pause_after_current: bool,
+    /// Whether it is paused, for the runners, which stop their jobs while it is.
+    pub(crate) paused: Arc<AtomicBool>,
 }
 
 pub(crate) type Shared = Arc<Mutex<Queue>>;
@@ -111,6 +118,9 @@ impl Queue {
             settings,
             inbox,
             runs: BTreeMap::new(),
+            queue_paused_since: None,
+            pause_after_current: false,
+            paused: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -329,5 +339,55 @@ impl Queue {
         self.history.drain(..excess);
         self.model = LoadModel::fit(&self.history, process::cpu_count());
         self.refresh_lanes();
+    }
+
+    /// Applies `config.json`'s pause. When it ends or changes, the waiters and the runs it
+    /// stopped are credited the paused time, which then counts toward neither their wait nor
+    /// their run.
+    pub(crate) fn set_pause(&mut self, since: Option<Timestamp>, after_current: bool) {
+        let after_current = since.is_some() && after_current;
+        if (self.queue_paused_since, self.pause_after_current) == (since, after_current) {
+            return;
+        }
+        let was_after_current = self.pause_after_current;
+        if let Some(old) = self.queue_paused_since {
+            let now = Timestamp::now();
+            let ids: Vec<RunId> = self
+                .runs
+                .iter()
+                .filter(|(_, e)| e.rec.stopped_by_pause(was_after_current))
+                .map(|(id, _)| id.clone())
+                .collect();
+            for id in ids {
+                if let Some(e) = self.runs.get_mut(&id) {
+                    e.rec.add_pause(old, now, was_after_current);
+                }
+                self.persist(&id);
+            }
+            if since.is_none() {
+                log::notice(
+                    Tone::Start,
+                    "resumed",
+                    format_args!("after {}; admission carries on", human(old.until(now))),
+                );
+            }
+        }
+        if since.is_some() && after_current {
+            log::notice(
+                Tone::Warning,
+                "pausing",
+                "after the current jobs: they finish, and nothing more starts until `drmanhattan resume`",
+            );
+        } else if since.is_some() {
+            let stopped = self.records(State::Running).filter(|r| r.stopped_by_pause(false)).count();
+            log::notice(
+                Tone::Warning,
+                "paused",
+                format_args!("nothing starts until `drmanhattan resume`; {stopped} running stopped"),
+            );
+        }
+        self.queue_paused_since = since;
+        self.pause_after_current = after_current;
+        self.paused.store(since.is_some() && !after_current, Ordering::SeqCst);
     }
 }

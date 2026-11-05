@@ -1,11 +1,12 @@
 //! How many jobs may run at once: `DRMANHATTAN_SLOTS`, else `config.json`'s `slots`, else 1.
 //! `drmanhattan slots N` and the dashboard's − and + set `config.json`'s, which stays until it
-//! is changed again.
+//! is changed again. `drmanhattan pause` and `resume` set whether admission is paused.
 
 use crate::error::{invalid, Result};
 use crate::fsutil;
 use crate::paths::Paths;
 use crate::settings::{load_config, update_config};
+use crate::time::Timestamp;
 
 /// Only a guard against a typo: a machine may run as many jobs at once as its owner likes.
 pub(crate) const MAX_SLOTS: u32 = 256;
@@ -41,6 +42,22 @@ pub(crate) fn set_slots(paths: &Paths, slots: u32) -> Result<u32> {
     update_config(paths, |config| {
         config.slots = Some(slots);
         Ok(slots)
+    })
+}
+
+/// Pauses the queue (`paused`) or resumes it, in `config.json`; `after_current` leaves the
+/// running jobs to finish rather than stopping them. Returns since when it is paused: pausing
+/// it again the same way keeps the first time, and changing the way starts the time again.
+pub(crate) fn set_queue_paused(paths: &Paths, paused: bool, after_current: bool) -> Result<Option<Timestamp>> {
+    update_config(paths, |config| {
+        let same = config.queue_pause_after_current == after_current;
+        config.queue_paused_since = match config.queue_paused_since {
+            _ if !paused => None,
+            Some(since) if same => Some(since),
+            _ => Some(Timestamp::now()),
+        };
+        config.queue_pause_after_current = paused && after_current;
+        Ok(config.queue_paused_since)
     })
 }
 

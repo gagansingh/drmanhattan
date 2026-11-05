@@ -14,6 +14,7 @@ use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::process::Stdio;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::RecvTimeoutError;
 use std::sync::{Arc, Mutex};
@@ -147,6 +148,8 @@ pub(super) fn run(shared: &Shared, admitted: Admitted) {
         paths: &paths,
         settings: &settings,
         log_from: remote.log_base,
+        // A pause here leaves it running there: only this machine is freed.
+        paused: &AtomicBool::new(false),
         on_ready: &|| {},
     };
     let outcome = follow(&worker, &rec, &remote, &watch, &exit_sender);
@@ -173,6 +176,7 @@ fn follow(
     let mut stopping = Stopping::No;
     let ask = |args: &[&str]| workers::ssh_run(worker, &workers::remote_argv(worker, args), None, ASK_LIMIT);
     let ended = |state: State, exit: i32, reason: Option<String>, activity: &Activity| Outcome {
+        paused: Duration::ZERO,
         state,
         exit,
         duration: started.elapsed(),
