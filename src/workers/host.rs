@@ -55,10 +55,10 @@ pub(crate) struct MachineStats {
     /// Its battery, when it has one. Absent before 0.7.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) battery: Option<serde_json::Value>,
-    /// Paused as a worker on this machine (`drmanhattan pause`): it takes no jobs from others.
+    /// Sharing turned off on this machine (`drmanhattan sharing off`): it takes no jobs from others.
     /// Absent before 0.7.2.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub(crate) paused: bool,
+    pub(crate) sharing_off: bool,
     /// Free space on the disk holding the home directory.
     pub(crate) free_gb: Option<f64>,
     /// Mirrors `__dispatch-probe` removed.
@@ -123,7 +123,7 @@ fn stats(paths: &Paths) -> MachineStats {
         memory: readings.memory.and_then(|m| serde_json::to_value(m).ok()),
         thermals: readings.thermals.and_then(|t| serde_json::to_value(t).ok()),
         battery: readings.battery.and_then(|b| serde_json::to_value(b).ok()),
-        paused: load_config(paths).is_ok_and(|c| c.paused),
+        sharing_off: load_config(paths).is_ok_and(|c| c.sharing_off),
         free_gb: free_gb(&home),
         home,
         pruned: Vec::new(),
@@ -147,7 +147,7 @@ pub(crate) fn machine_stats(rest: &[String]) -> Result<i32> {
 }
 
 /// Notes that another machine uses this one as its worker, so the dashboard here offers to
-/// pause that.
+/// turn that off.
 fn seen_by_dispatcher(paths: &Paths) {
     if fsutil::ensure_private_dir(&paths.data).is_ok() {
         let _ = fsutil::write_atomic(&paths.dispatcher_seen(), &format!("{}\n", Timestamp::now().epoch_seconds()));
@@ -279,8 +279,8 @@ pub(crate) fn dispatch_submit(rest: &[String]) -> Result<i32> {
         _ => return invalid("usage: drmanhattan __dispatch-submit --name NAME < job.json"),
     };
     let paths = Paths::from_env();
-    if load_config(&paths).is_ok_and(|c| c.paused) {
-        return invalid(format!("{} is paused as a worker (drmanhattan resume there)", hostname()));
+    if load_config(&paths).is_ok_and(|c| c.sharing_off) {
+        return invalid(format!("{} has sharing off (drmanhattan sharing on there)", hostname()));
     }
     let text = read_stdin()?;
     let spec = JobSpec::parse(&text)?;

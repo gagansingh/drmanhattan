@@ -286,31 +286,31 @@ fn stopping_the_dispatcher_leaves_a_job_running_on_its_worker() {
 }
 
 #[test]
-fn a_worker_paused_from_either_machine_takes_nothing_until_resumed() {
+fn a_worker_with_sharing_off_from_either_machine_takes_nothing_until_it_is_on() {
     let p = pair(json!({}));
     let proj = project(&p.home, "proj");
-    let worker_paused = |p: &Pair| {
+    let sharing_off = |p: &Pair| {
         let config = fs::read_to_string(p.worker.data.join("config.json")).unwrap_or_default();
-        serde_json::from_str::<Value>(&config).unwrap_or_default()["paused"] == true
+        serde_json::from_str::<Value>(&config).unwrap_or_default()["sharing_off"] == true
     };
-    // Paused from this machine's dashboard: the worker is told, and says so in its readings.
-    let (code, body) = p.here.post("/api/pause", r#"{"worker": "w1", "paused": true}"#, WRITE_HEADERS);
+    // Turned off from this machine's dashboard: the worker is told, and says so in its readings.
+    let (code, body) = p.here.post("/api/sharing", r#"{"worker": "w1", "sharing": false}"#, WRITE_HEADERS);
     assert_eq!(code, 200, "{body}");
-    wait_for(T, || worker_paused(&p).then_some(())).expect("the worker's config says paused");
-    wait_for(T, || (p.here.api_state()["machines"][1]["paused_there"] == true).then_some(()))
-        .expect("the dashboard shows it paused there");
+    wait_for(T, || sharing_off(&p).then_some(())).expect("the worker's config says sharing is off");
+    wait_for(T, || (p.here.api_state()["machines"][1]["sharing_off"] == true).then_some(()))
+        .expect("the dashboard shows sharing off there");
     p.here.submit("pref", json!({"command": "echo hi", "cwd": proj, "remote": "prefer"}));
     assert_eq!(p.here.wait_exit("pref", T), 0);
-    assert!(p.here.status_of("pref").unwrap()["machine"].is_null(), "a paused worker takes nothing");
-    // It refuses a hand-over itself too, for a dispatcher that does not know about pausing.
+    assert!(p.here.status_of("pref").unwrap()["machine"].is_null(), "a worker not sharing takes nothing");
+    // It refuses a hand-over itself too, for a dispatcher that does not know about sharing.
     let out = p.worker.cmd(&["__dispatch-submit", "--name", "sneaky"]).output().unwrap();
-    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("paused"), "{out:?}");
-    // Its own dashboard offers resume, and resuming there reaches this machine.
-    assert_eq!(p.worker.api_state()["paused"], true);
-    let (code, _) = p.worker.post("/api/pause", r#"{"paused": false}"#, WRITE_HEADERS);
+    assert!(!out.status.success() && String::from_utf8_lossy(&out.stderr).contains("sharing off"), "{out:?}");
+    // Its own dashboard offers to turn it on, and doing so there reaches this machine.
+    assert_eq!(p.worker.api_state()["sharing_off"], true);
+    let (code, _) = p.worker.post("/api/sharing", r#"{"sharing": true}"#, WRITE_HEADERS);
     assert_eq!(code, 200);
-    wait_for(T, || (p.here.api_state()["machines"][1]["paused_there"] == false).then_some(()))
-        .expect("the resume comes back with the next readings");
+    wait_for(T, || (p.here.api_state()["machines"][1]["sharing_off"] == false).then_some(()))
+        .expect("sharing on comes back with the next readings");
     wait_for(T, || (p.here.status_json()["workers"][0]["state"] == "free").then_some(())).expect("free again");
     p.here.submit("pref2", json!({"command": "echo hi", "cwd": proj, "remote": "prefer"}));
     assert_eq!(p.here.wait_exit("pref2", T), 0);

@@ -356,11 +356,12 @@ leaf per slot, holding its running job or free. A worker's slot count is one num
 every machine: − and + here set it on the worker too, and a count changed on the worker
 shows here within a poll. Setting a worker's slots to 0 pauses it on the machine that did so.
 
-To take a worker out for a while (to game on it, say), pause it: `drmanhattan pause` on the
-worker, its own dashboard's pause button, or the pause button on its row on any machine that
-uses it. Each says the same thing to the worker, so every dashboard shows it paused. A paused
-worker takes no jobs from other machines; what it already runs for them finishes, and its own
-jobs run as usual. `drmanhattan resume` (or the button again) ends it. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
+To take a worker out for a while (to game on it, say), turn its sharing off: `drmanhattan
+sharing off` on the worker, its own dashboard's sharing button, or the sharing button on its
+row on any machine that uses it. Each says the same thing to the worker, so every dashboard
+shows it. A worker with sharing off takes no jobs from other machines; what it already runs
+for them finishes, and its own jobs run as usual. `drmanhattan sharing on` (or the button
+again) ends it. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
 ## Goals and loops for coding agents
@@ -414,7 +415,7 @@ shell operators each have a colour; hover a job's name to see its command.
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `pause`, `resume` and
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `sharing [on|off]` and
 `paths`. Each has `--help`.
 
 | option | default | meaning |

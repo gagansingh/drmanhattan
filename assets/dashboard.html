@@ -107,13 +107,13 @@ h2:focus { outline: none; }
 }
 .step:hover:not(:disabled) { border-color: var(--dim); color: var(--fg); }
 .step:disabled { opacity: 0.4; cursor: default; }
-/* Pause and resume: a word in a small box, beside the slots. */
-.pause {
+/* Sharing with other machines, on or off: a word in a small box, beside the slots. */
+.sharing {
   padding: 1px 8px; border: 1px solid var(--line-strong); border-radius: 4px; background: none;
   color: var(--dim); font-size: 12px; line-height: 16px; cursor: pointer;
 }
-.pause:hover { border-color: var(--dim); color: var(--fg); }
-.pause[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); }
+.sharing:hover { border-color: var(--dim); color: var(--fg); }
+.sharing[aria-pressed="false"] { border-color: var(--amber); color: var(--amber); }
 /* One bar per machine above its runs, once there are workers. */
 tr.machine td { padding: 8px 16px; background: var(--raised); border-top: 1px solid var(--line); }
 tr.machine:first-child td { border-top: 0; }
@@ -788,15 +788,15 @@ function plainTemperature(t) {
   return figure(cls, title, `Temp <b>${degrees(t.cpu_max)}</b>${throttled ? ' <b>throttling</b>' : ''}`, 'unit');
 }
 
-/** A pause/resume button. `worker` names one of this machine's workers; without it, the
- *  button is for this machine, as a worker for others. */
-function pauseButton(paused, worker) {
-  const whom = worker ? esc(worker) : 'this machine for other machines';
-  const title = paused
-    ? `Paused: ${worker ? `${esc(worker)} takes no jobs from other machines` : 'other machines send this one no jobs'}. Resume to take them again.`
-    : `Pause ${worker ? `${esc(worker)}: it takes no jobs from other machines` : 'jobs from other machines'} until resumed; what runs there finishes`;
-  return `<button class="pause" data-action="pause" data-value="${paused ? '0' : '1'}"${worker ? ` data-worker="${esc(worker)}"` : ''}`
-    + ` aria-pressed="${paused}" title="${title}" aria-label="${paused ? 'Resume' : 'Pause'} ${whom}">${paused ? 'paused · resume' : 'pause'}</button>`;
+/** Sharing on or off: whether other machines may send jobs. `worker` names one of this
+ *  machine's workers; without it, the button is for this machine, as a worker for others. */
+function sharingButton(off, worker) {
+  const whom = worker ? esc(worker) : 'this machine';
+  const title = off
+    ? `Sharing off: ${worker ? `${esc(worker)} takes no jobs from other machines` : 'other machines send this one no jobs'}. Click to turn it on.`
+    : `Sharing on: ${worker ? `this machine sends ${esc(worker)} jobs` : 'other machines may send this one jobs'}. Click to turn it off; what runs there finishes`;
+  return `<button class="sharing" data-action="sharing" data-value="${off ? '1' : '0'}"${worker ? ` data-worker="${esc(worker)}"` : ''}`
+    + ` aria-pressed="${!off}" title="${title}" aria-label="Share ${whom} with other machines">${off ? 'not sharing' : 'sharing'}</button>`;
 }
 
 /** One machine's bar: its name and whether it answers, its slots with − and + (0 pauses a
@@ -813,7 +813,7 @@ function machineBar(m, d, open) {
   const slots = `<span class="slots"><span><b>${m.running}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'}${m.paused ? ' · <b class="warn">paused</b>' : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}"${who} ${fixed || cap <= min ? 'disabled' : ''} title="${esc(fewer)}" aria-label="Fewer slots on ${esc(m.name)}">−</button>`
     + `<button class="step" data-action="capacity" data-value="${cap + 1}"${who} ${fixed || cap >= max ? 'disabled' : ''} title="${esc(more)}" aria-label="More slots on ${esc(m.name)}">+</button>`
-    + (m.local ? (d.serves_others ? pauseButton(d.paused) : '') : pauseButton(m.paused_there, m.name)) + '</span>';
+    + (m.local ? (d.serves_others ? sharingButton(d.sharing_off) : '') : sharingButton(m.sharing_off, m.name)) + '</span>';
   const figures = online === 'offline' ? ''
     : cpuFigure(s.load, s.ncpu, s.cpu_pct) + memoryFigure(s.memory) + (m.local ? temperatureFigure(s.thermals, d.now) : plainTemperature(s.thermals)) + batteryFigure(s.battery);
   const seen = !m.local && m.last_seen ? `Last answered ${clock(m.last_seen)}` : '';
@@ -838,7 +838,7 @@ function renderRunning(d) {
     + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use${quick ? ` · <b>${quick}</b> quick` : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${fixed || cap <= 1 ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot fewer')}" aria-label="Fewer slots">−</button>`
     + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${fixed || cap >= max ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot more: more jobs at once, each slower')}" aria-label="More slots">+</button>`
-    + (d.serves_others ? pauseButton(d.paused) : ''));
+    + (d.serves_others ? sharingButton(d.sharing_off) : ''));
   const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
   put($('#running'), d.running.length ? bySlot.map((run) => runningRow(run, d.now)).join('') : emptyRow('Nothing is running.'));
 }
@@ -1716,15 +1716,15 @@ async function setCapacity(value, worker) {
   tick();
 }
 
-/** Pauses or resumes this machine for others, or a worker. Shown at once; a worker's own
+/** Turns sharing on or off, for this machine or a worker. Shown at once; a worker's own
  *  answer follows within a second or so. */
-async function setPaused(paused, worker) {
+async function setSharing(sharing, worker) {
   if (!last) return;
-  if (worker) { const m = (last.machines || []).find((x) => x.name === worker); if (m) m.paused_there = paused; }
-  else last.paused = paused;
+  if (worker) { const m = (last.machines || []).find((x) => x.name === worker); if (m) m.sharing_off = !sharing; }
+  else last.sharing_off = !sharing;
   render(last);
-  try { await post('/api/pause', worker ? { paused, worker } : { paused }); capacityError = ''; }
-  catch (e) { capacityError = `could not ${paused ? 'pause' : 'resume'}: ${e.message}`; announce(capacityError); }
+  try { await post('/api/sharing', worker ? { sharing, worker } : { sharing }); capacityError = ''; }
+  catch (e) { capacityError = `could not turn sharing ${sharing ? 'on' : 'off'}: ${e.message}`; announce(capacityError); }
   tick();
   if (worker) setTimeout(tick, 1500);
 }
@@ -1765,7 +1765,7 @@ document.addEventListener('click', (e) => {
     else if (action === 'older') goTo(last.finished.older_from);
     else if (action === 'newer') goTo(page.held ? null : last.finished.newer_from); // a hold's "new" are the newest
     else if (action === 'capacity') setCapacity(value, control.dataset.worker);
-    else if (action === 'pause') setPaused(value === '1', control.dataset.worker);
+    else if (action === 'sharing') setSharing(value === '1', control.dataset.worker);
     else if (action === 'toggle-machine') toggleMachine(value);
     else if (action === 'reset-order') resetOrder();
     else if (action === 'command') { $('#log-cmd').hidden = !$('#log-cmd').hidden; logHeading(); }

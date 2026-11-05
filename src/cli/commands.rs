@@ -10,7 +10,7 @@ use crate::error::{invalid, Result};
 use crate::log;
 use crate::paths::{self, Paths};
 use crate::process;
-use crate::settings::{set_paused, set_slots, standing_capacity, Settings, MAX_SLOTS};
+use crate::settings::{set_sharing_off, set_slots, standing_capacity, Settings, MAX_SLOTS};
 
 /// An uncommon port, so the dashboard does not collide with the usual development servers.
 pub(crate) const DEFAULT_PORT: u16 = 8417;
@@ -233,30 +233,35 @@ pub(super) fn slots(rest: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-const PAUSE: Spec = Spec {
+const SHARING: Spec = Spec {
     usage: "\
-usage: drmanhattan pause
-       drmanhattan resume
+usage: drmanhattan sharing [on|off]
 
-Pause stops this machine taking jobs from the other machines that use it as their worker,
-until resume; it is kept in config.json, so it lasts through restarts. Jobs it is already
-running for them finish, and its own jobs run as usual. Their dashboards show it paused,
-and can pause or resume it too.
+Whether the other machines that use this one as their worker may send it jobs. Off lasts
+until turned on again, through restarts (config.json). Jobs it is already running for them
+finish, and its own jobs run as usual. Their dashboards show it, and can turn it on or off
+too. With no argument, says which it is.
 ",
     values: &[],
     switches: &[],
-    positional: 0,
+    positional: 1,
 };
 
-pub(super) fn pause(rest: &[String], paused: bool) -> Result<i32> {
-    let Some(_) = args::parse(&PAUSE, rest)? else { return Ok(0) };
-    set_paused(&Paths::from_env(), paused)?;
+pub(super) fn sharing(rest: &[String]) -> Result<i32> {
+    let Some(a) = args::parse(&SHARING, rest)? else { return Ok(0) };
+    let paths = Paths::from_env();
+    let off = match a.positional.first().map(String::as_str) {
+        None => crate::settings::load_config(&paths)?.sharing_off,
+        Some("on") => set_sharing_off(&paths, false)?,
+        Some("off") => set_sharing_off(&paths, true)?,
+        Some(other) => return invalid(format!("sharing takes on or off, not {other:?}")),
+    };
     println!(
         "{}",
-        if paused {
-            "paused: no jobs from other machines until `drmanhattan resume`"
+        if off {
+            "sharing off: no jobs from other machines until `drmanhattan sharing on`"
         } else {
-            "resumed: taking jobs from other machines"
+            "sharing on: other machines may send this one jobs"
         }
     );
     Ok(0)
