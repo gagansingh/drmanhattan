@@ -33,6 +33,9 @@ pub(crate) struct Settings {
     pub(crate) retention: Duration,
     /// Archived run records leave after this long.
     pub(crate) archive_retention: Duration,
+    /// The most finished runs kept (`DRMANHATTAN_MAX_FINISHED`): past it the oldest are
+    /// forgotten, as at the end of `retention`. Every `status` reads each one kept.
+    pub(crate) max_finished: usize,
     /// The most a running job's log may hold, in bytes. Past it, the earlier output is
     /// dropped and the newest kept.
     pub(crate) max_log_bytes: u64,
@@ -72,6 +75,12 @@ impl Settings {
             max_skip: seconds_env("DRMANHATTAN_MAX_SKIP_SECONDS", 600.0, 0.0)?,
             retention: days_env("DRMANHATTAN_LOG_RETENTION_DAYS", 7)?,
             archive_retention: days_env("DRMANHATTAN_ARCHIVE_DAYS", 90)?,
+            max_finished: env_or(
+                "DRMANHATTAN_MAX_FINISHED",
+                400,
+                |v| (1..500).contains(v),
+                "a whole number from 1 to 499",
+            )?,
             slots_env: std::env::var("DRMANHATTAN_SLOTS").ok(),
             shell_env: std::env::var("DRMANHATTAN_SHELL_ENV").map_or(true, |v| v.trim() != "0"),
             shell_env_timeout: seconds_env("DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS", 10.0, 0.1)?,

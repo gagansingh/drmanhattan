@@ -93,3 +93,32 @@ fn a_job_file_not_yet_picked_up_can_be_waited_on() {
     assert!(String::from_utf8_lossy(&out.stdout).contains("state=succeeded"));
     wait_for(T, || d.status_of("later")).unwrap();
 }
+
+#[test]
+fn only_the_newest_finished_runs_are_kept() {
+    let d = Daemon::start(&[("DRMANHATTAN_MAX_FINISHED", "3")]);
+    for i in 0..5 {
+        let name = format!("kept{i}");
+        d.submit(&name, d.job("true"));
+        assert_eq!(d.wait_exit(&name, T), 0);
+    }
+    let labels = || -> Option<Vec<String>> {
+        let out = d.cmd(&["status", "--json", "--limit", "50"]).output().ok()?;
+        let doc: Value = serde_json::from_slice(&out.stdout).ok()?;
+        let finished = doc["finished"].as_array()?;
+        Some(finished.iter().filter_map(|f| f["label"].as_str().map(String::from)).collect())
+    };
+    let kept = wait_for(T, || labels().filter(|l| l.len() == 3)).unwrap_or_else(|| panic!("{:?}", labels()));
+    assert_eq!(kept, ["kept4", "kept3", "kept2"], "the newest, newest first");
+    let records = std::fs::read_dir(d.state.join("runs")).unwrap().count();
+    assert_eq!(records, 3, "the older records are gone from disk too");
+    let archived: usize = std::fs::read_dir(d.data.join("archive"))
+        .unwrap()
+        .flatten()
+        .map(|month| std::fs::read_dir(month.path()).unwrap().count())
+        .sum();
+    assert_eq!(archived, 5, "the archive keeps every run");
+    let (code, out, _) = run(&d, &["status", "kept0"]);
+    assert_eq!(code, 0, "a forgotten run's own result files still answer until the retention");
+    assert!(out.contains("state=succeeded"), "{out}");
+}

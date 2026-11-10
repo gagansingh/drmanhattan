@@ -248,6 +248,8 @@ fn run_loop(
             last_prune = Instant::now();
             let live = queue::lock(shared).prune_memory();
             prune_files(&scheduler.paths, &scheduler.inbox, &live, settings);
+        } else {
+            queue::lock(shared).cap_finished();
         }
         // Wait for a file event or the tick, then drain any burst of events.
         // Never longer than the heartbeat interval, which recovery relies on.
