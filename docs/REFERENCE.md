@@ -497,30 +497,40 @@ so run `drmanhattan` once in a terminal first, or add `--yes`.
 ## Updating
 
 ```
-drmanhattan update        # waits until no job is running or queued, then updates and restarts
+drmanhattan update        # between jobs: holds new starts until the running ones finish, then restarts
 drmanhattan update --now  # does not wait; running jobs end when the daemon restarts
 ```
 
 `update` installs the latest release over the running one (both commands, in the directory
 the running one lives in), after checking the archive's SHA-256, and restarts the daemon:
 through launchd or systemd when it runs as a service, else by starting the new version itself.
+A restart ends the jobs running on this machine, so once the new version is downloaded and
+checked, `update` holds new starts until those jobs have finished (`status` says
+`hold='update: …'`, and the dashboard's log `updating: new jobs wait while the running ones
+finish`), then restarts, which takes about a second. Jobs submitted meanwhile are queued as
+usual and keep their places, and `submit --wait` carries on waiting through the restart, so
+the queue pauses at most as long as the jobs already running take, not until it empties.
+Services and runs on workers don't hold the update up: services start again with the new
+daemon, and workers' runs carry on there. A hold whose `update` was killed holds nothing.
 A failed download or checksum leaves the installed version as it was; a directory it cannot
 write to gets a hint to rerun the installer. The daemon looks for a newer release every 4
 hours by the wall clock, so a laptop that slept past a check looks soon after it wakes, and a
 minute after it starts when the last look is older than that
 (`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
-dashboard's footer, which shows the version, offers an Update button while the queue is idle.
+dashboard's footer, which shows the version, offers an Update button.
 Until the daemon restarts into a newly installed version, `status` says `installed=0.6.2
 running=0.6.1 restart=pending` and the footer offers a Restart button; `drmanhattan update`
 then restarts it, waiting for the queue as usual.
 
 `drmanhattan update --auto on` (or the footer's toggle) lets the daemon install newer
-releases of the same major version by itself, once the queue has been empty for 5 minutes
-(`DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS`); new work restarts that wait, and it never updates
-mid-job. A new major version only shows the notice. A failed update leaves the running version
-and is tried again an hour later. `status` (`auto_update_state=`) and the footer toggle's
-tooltip say where it stands: `up to date (checked 2:10 PM, next ~6:10 PM)`, `0.6.1 found,
-waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt failed: …`.
+releases of the same major version by itself, as soon as it finds one, the same way: between
+jobs, never mid-job, however busy the queue is. A new major version only shows the notice. A
+failed update leaves the running version and is tried again an hour later. `status`
+(`auto_update_state=`) and the footer toggle's tooltip say where it stands: `up to date
+(checked 2:10 PM, next ~6:10 PM)`, `updating to 0.6.1 between jobs` or `last attempt failed:
+…`. A daemon older than 0.9.1 waits for an empty queue instead, and doesn't know the hold;
+on a queue that is never empty, update it once with `drmanhattan update --now`, at a moment
+when ending the running jobs is fine. From then on updates happen between jobs.
 After an update the daemon's log says `auto-updated 0.6.1 → 0.6.2`, and the dashboard shows
 a note you can dismiss. It is off by default; `status` shows the setting.
 

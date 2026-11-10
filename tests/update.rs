@@ -89,16 +89,31 @@ fn an_unwritable_install_directory_points_at_the_installer() {
 }
 
 #[test]
-fn update_waits_for_the_queue_and_now_does_not() {
+fn update_holds_new_jobs_while_the_running_ones_finish_and_now_does_not_wait() {
     let d = Daemon::start(&[]);
+    d.set_slots(1);
     let r = releases(&d.root, "v99.0.0", true);
     let dir = installed(&d.root);
-    d.submit("busy", d.job("sleep 2"));
+    d.submit("busy", d.job("sleep 3"));
     d.wait_state("busy", "running", T);
-    let out = update(&d, &dir, &r, &[]);
-    assert!(out.status.success(), "{}", said(&out));
-    assert!(said(&out).contains("waiting for busy (running) to finish (or run with --now)"), "{}", said(&out));
-    assert_eq!(d.status_of("busy").unwrap()["state"], "succeeded", "it finished before the update went on");
+    std::thread::scope(|s| {
+        let updating = s.spawn(|| update(&d, &dir, &r, &[]));
+        wait_for(T, || (d.status_json()["update_hold"] == true).then_some(())).expect("the update holds new starts");
+        let text = String::from_utf8_lossy(&d.cmd(&["status"]).output().unwrap().stdout).into_owned();
+        assert!(text.contains("hold='update: new jobs wait"), "{text}");
+        d.submit("next", d.job("true"));
+        d.wait_state("next", "queued", T);
+        let out = updating.join().unwrap();
+        assert!(out.status.success(), "{}", said(&out));
+        assert!(
+            said(&out).contains("waiting for busy to finish; new jobs wait until the restart (or run with --now)"),
+            "{}",
+            said(&out)
+        );
+    });
+    assert_eq!(d.status_of("busy").unwrap()["state"], "succeeded", "it finished before the restart");
+    assert_eq!(d.status_of("next").unwrap()["state"], "queued", "the job behind it kept its place");
+    assert_eq!(version_of(&dir), "drmanhattan 99.0.0", "without waiting for the queue to empty");
 
     let d = Daemon::start(&[]);
     let r = releases(&d.root, "v99.0.0", true);
@@ -136,12 +151,7 @@ fn the_dashboard_offers_the_update_only_when_it_can_run() {
     assert_eq!(code, 403, "the write guards apply");
     d.submit("busy", d.job("sleep 30"));
     d.wait_state("busy", "running", T);
-    assert_eq!(d.api_state()["idle"], false);
-    let (code, _) = d.post("/api/update", "{}", WRITE_HEADERS);
-    assert_eq!(code, 409, "not while a job runs");
-    fs::write(d.inbox.join("busy.cancel"), "").unwrap();
-    d.wait_exit("busy", T);
-    wait_for(T, || (d.api_state()["idle"] == true).then_some(())).unwrap();
+    assert_eq!(d.api_state()["idle"], false, "the footer says new jobs will wait meanwhile");
     let (code, body) = d.post("/api/update", "{}", WRITE_HEADERS);
     assert_eq!(code, 202, "{body}");
     let _ = fs::remove_dir_all(&root);
@@ -212,4 +222,32 @@ fn a_failed_signature_keeps_the_installed_version() {
     assert_eq!(out.status.code(), Some(2));
     assert!(said(&out).contains("could not sign") && said(&out).contains("unchanged"), "{}", said(&out));
     assert_eq!(version_of(&dir), format!("drmanhattan {CURRENT}"));
+}
+
+#[test]
+fn a_hold_stops_new_starts_only_while_its_update_lives_and_a_restart_lifts_it() {
+    let mut d = Daemon::start(&[]);
+    let hold = d.state.join("update-hold");
+    let mut update = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    fs::write(&hold, format!("{}\n", update.id())).unwrap();
+    wait_for(T, || (d.status_json()["update_hold"] == true).then_some(())).expect("held");
+    d.submit("held", d.job("true"));
+    d.wait_state("held", "queued", T);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(d.status_of("held").unwrap()["state"], "queued", "nothing starts while the update waits");
+    // An update killed mid-wait leaves its file, which holds nothing.
+    update.kill().unwrap();
+    update.wait().unwrap();
+    assert_eq!(d.wait_exit("held", T), 0);
+    assert!(d.daemon_log().contains("new jobs wait while the running ones finish"), "{}", d.daemon_log());
+
+    let mut update = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+    fs::write(&hold, format!("{}\n", update.id())).unwrap();
+    d.stop_daemon();
+    d.launch();
+    assert!(!hold.exists(), "the daemon the update restarted lifts its hold");
+    d.submit("after", d.job("true"));
+    assert_eq!(d.wait_exit("after", T), 0);
+    update.kill().unwrap();
+    let _ = update.wait();
 }
