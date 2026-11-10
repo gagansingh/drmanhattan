@@ -18,7 +18,7 @@
   },
   "bb": {
     "name": "drmanhattan",
-    "description": "Queue builds and tests through drmanhattan: each thread shows its runs, and agents learn to use the queue.",
+    "description": "Makes agents in parallel threads take turns on builds and tests, and shows each thread its queued runs.",
     "branding": {
       "icon": "Layers"
     },
