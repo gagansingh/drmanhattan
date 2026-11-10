@@ -867,18 +867,18 @@ function renderVersion(d) {
   firstVersion = firstVersion || d.version;
   if (d.version && d.version !== firstVersion) { location.reload(); return; }
   const u = d.update;
-  const when = d.idle ? '' : 'disabled';
+  const between = d.idle ? '' : ': new jobs wait while the running ones finish, then it restarts';
   const offer = updating ? ''
     : d.installed
       ? ` · ${esc(d.installed)} installed, restart pending`
-        + `<button data-action="update" ${when} title="${d.idle ? `Restart into ${esc(d.installed)}` : 'Once nothing is running or waiting'}">Restart</button>`
+        + `<button data-action="update" title="Restart into ${esc(d.installed)}${between}">Restart</button>`
     : u
       ? ` · <a href="${esc(u.url)}" title="What is new">${esc(u.version)} available</a>`
-        + `<button data-action="update" ${when} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
+        + `<button data-action="update" title="Install ${esc(u.version)} and restart${between}">Update</button>`
     : '';
   const auto = `<button data-action="auto-update" aria-pressed="${!!d.auto_update}" title="${d.auto_update
-    ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves once the queue has been idle for 5 minutes. Click to turn off.`
-    : 'Click to install newer releases of this major version by themselves, once the queue has been idle for 5 minutes'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
+    ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves between jobs: new jobs wait while the running ones finish, then the queue restarts on the new version in a second. Click to turn off.`
+    : 'Click to install newer releases of this major version by themselves, between jobs'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
   const done = d.updated && recall('dismissed-updated') !== d.updated.to
     ? ` · <span class="updated">${d.updated.auto ? 'auto-' : ''}updated to <a href="${esc(d.updated.url)}">${esc(d.updated.to)}</a>`
       + `<button data-action="dismiss-updated" aria-label="Dismiss">✕</button></span>`

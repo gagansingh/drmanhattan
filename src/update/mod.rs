@@ -1,14 +1,16 @@
 //! Updating drmanhattan in place, and knowing when there is something to update to.
 //!
-//! `drmanhattan update [--now]` finds the latest release (`release`), waits until no job is
-//! running or queued (`--now` does not), downloads this platform's archive, checks its
-//! SHA-256, replaces both commands beside the running executable, and restarts the daemon
-//! (`restart`); with `sign` in `config.json` it signs them first (`sign`). A failed download,
-//! checksum or signature leaves the old version in place. The daemon looks for a newer
-//! release every 4 hours (`check`) and may install it itself (`auto`).
+//! `drmanhattan update [--now]` finds the latest release (`release`), downloads this
+//! platform's archive, checks its SHA-256, and with `sign` in `config.json` signs both
+//! commands (`sign`). Then it holds new starts until the jobs running on this machine have
+//! finished (`hold`; `--now` does not wait for them), replaces both commands beside the
+//! running executable, and restarts the daemon (`restart`). Queued jobs keep their places. A
+//! failed download, checksum or signature leaves the old version in place. The daemon looks
+//! for a newer release every 4 hours (`check`) and may install it itself (`auto`).
 
 mod auto;
 mod check;
+mod hold;
 mod installed;
 mod release;
 mod restart;
@@ -21,6 +23,7 @@ use std::time::Duration;
 
 pub(crate) use auto::{start_auto_updater, summary as auto_update_summary};
 pub(crate) use check::{available, start_checker, Available};
+pub(crate) use hold::{clear as clear_hold, held};
 pub(crate) use installed::{daemon_behind, installed_version};
 pub(crate) use release::current;
 use release::{asset, download, is_newer, latest_tag, releases_url, sha256};
@@ -47,9 +50,7 @@ pub(crate) fn update(now: bool) -> Result<i32> {
     if !is_newer(&tag, current()) {
         // Installed already, by an update whose restart has not happened: restart now.
         if let Some(running) = daemon_behind(crate::daemon::running(&paths).as_ref()) {
-            if !now {
-                wait_until_idle(&paths);
-            }
+            let _hold = if now { None } else { Some(drain(&paths)?) };
             restart::restart(&paths, &install_dir()?)?;
             println!("restarted the daemon: {running} → {}", current());
             return Ok(0);
@@ -69,7 +70,8 @@ pub(crate) fn update(now: bool) -> Result<i32> {
     }
     let swapped = stage_and_swap(&paths, &tag, &stage, &dir, now);
     let _ = std::fs::remove_dir_all(&stage);
-    swapped?;
+    // Held through the restart: the new daemon lifts it.
+    let _hold = swapped?;
     let to = tag.trim_start_matches('v');
     updated::record(&paths, current(), to);
     restart::restart(&paths, &dir)?;
@@ -77,7 +79,9 @@ pub(crate) fn update(now: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn stage_and_swap(paths: &Paths, tag: &str, stage: &Path, dir: &Path, now: bool) -> Result<()> {
+/// Downloads, checks and signs the release, then (unless `now`) holds new starts until the
+/// running jobs are done, and swaps the commands in. Returns the hold, for the restart.
+fn stage_and_swap(paths: &Paths, tag: &str, stage: &Path, dir: &Path, now: bool) -> Result<Option<hold::Hold>> {
     let name = asset(tag)?;
     let base = format!("{}/download/{tag}", releases_url());
     let archive = stage.join(&name);
@@ -97,11 +101,14 @@ fn stage_and_swap(paths: &Paths, tag: &str, stage: &Path, dir: &Path, now: bool)
         let programs: Vec<&str> = PROGRAMS.into_iter().filter(|p| new_dir.join(p).is_file()).collect();
         sign::sign(&config, &new_dir, &programs)?;
     }
-    if !now {
-        wait_until_idle(paths);
-    } else if !idle(paths) {
-        crate::log::warn(format_args!("updating now: running jobs end when the daemon restarts"));
-    }
+    let held = if now {
+        if !idle(paths) {
+            crate::log::warn(format_args!("updating now: running jobs end when the daemon restarts"));
+        }
+        None
+    } else {
+        Some(drain(paths)?)
+    };
     for program in PROGRAMS {
         let (from, to) = (new_dir.join(program), dir.join(program));
         if from.is_file() {
@@ -109,7 +116,7 @@ fn stage_and_swap(paths: &Paths, tag: &str, stage: &Path, dir: &Path, now: bool)
                 .map_err(|e| Error::Invalid(format!("could not replace {}: {e}", to.display())))?;
         }
     }
-    Ok(())
+    Ok(held)
 }
 
 /// The directory both commands live in: the running executable's.
@@ -118,28 +125,32 @@ fn install_dir() -> Result<PathBuf> {
     exe.parent().map(Path::to_path_buf).ok_or_else(|| Error::Invalid("no install directory".into()))
 }
 
-/// Jobs that hold the queue: running or queued, services aside (they restart with it).
-fn busy(paths: &Paths) -> Vec<String> {
+/// The jobs a restart would end: those running on this machine. Services start again with
+/// the new daemon, and runs on workers carry on there; queued jobs keep their places.
+fn running_here(paths: &Paths) -> Vec<String> {
     read_records(paths)
         .into_iter()
-        .filter(|r| !r.job.service && matches!(r.state, State::Running | State::Queued))
-        .map(|r| format!("{} ({})", r.job.label, r.state))
+        .filter(|r| r.state == State::Running && !r.job.service && r.machine.is_none())
+        .map(|r| r.job.label)
         .collect()
 }
 
-/// Nothing runs or waits, services aside.
+/// Nothing a restart would end is running.
 pub(crate) fn idle(paths: &Paths) -> bool {
-    busy(paths).is_empty()
+    running_here(paths).is_empty()
 }
 
-fn wait_until_idle(paths: &Paths) {
+/// Holds new starts, and waits until the jobs running on this machine have finished.
+fn drain(paths: &Paths) -> Result<hold::Hold> {
+    let held = hold::hold(paths)?;
     let mut said = String::new();
     loop {
-        let jobs = busy(paths);
+        let jobs = running_here(paths);
         if jobs.is_empty() {
-            return;
+            return Ok(held);
         }
-        let line = format!("waiting for {} to finish (or run with --now)", jobs.join(", "));
+        let line =
+            format!("waiting for {} to finish; new jobs wait until the restart (or run with --now)", jobs.join(", "));
         if line != said {
             println!("{line}");
             said = line;

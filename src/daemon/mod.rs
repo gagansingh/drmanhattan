@@ -74,6 +74,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
     crate::settings::remove_timed_overrides(&paths);
 
     let mut queue = Queue::new(paths.clone(), settings.clone(), inbox.clone(), patterns);
+    // A hold was for the daemon before this one: the update that held it restarted us.
+    crate::update::clear_hold(&paths);
     let recovery = queue.recover();
     let live = queue.prune_memory();
     prune_files(&paths, &inbox, &live, &settings);
@@ -196,6 +198,7 @@ fn run_loop(
     let mut stopping: Option<Instant> = None;
     let mut reloads_seen = 0;
     let mut reloading: Option<std::thread::JoinHandle<()>> = None;
+    let mut holding = false;
     loop {
         let signals = shutdown::signals();
         // One reload at a time; a request that arrives during one runs after it.
@@ -222,7 +225,13 @@ fn run_loop(
             shutdown::announce(shared, settings);
             shutdown::stop_services(shared);
         }
-        for admitted in scheduler.pass(shared, stopping.is_none()) {
+        let held = crate::update::held(&scheduler.paths);
+        if held != holding {
+            holding = held;
+            let what = if held { "new jobs wait while the running ones finish" } else { "starting jobs again" };
+            log::notice(log::Tone::Quiet, "updating", what);
+        }
+        for admitted in scheduler.pass(shared, stopping.is_none() && !held) {
             start_runner(shared, admitted);
         }
         if let Some(since) = stopping {

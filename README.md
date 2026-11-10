@@ -41,7 +41,8 @@ manhattan submit --wait -- make test   # in another terminal
 The first start asks once whether drmanhattan may run what is placed in its inbox;
 `--yes` answers for you. `submit --wait` prints the job's output and exits with its exit
 code, and Ctrl-C cancels the job. `drmanhattan status` shows the queue, `drmanhattan stop`
-stops it, and `drmanhattan update` installs the latest release once the queue is empty.
+stops it, and `drmanhattan update` installs the latest release between jobs: new jobs wait
+while the running ones finish, then the queue restarts on the new version in a second.
 
 ## With coding agents
 

@@ -122,11 +122,9 @@ fn service_action(req: Request, body: &str, ctx: &Ctx) {
     http::json(req, 200, &json!({ "run_id": run_id, "action": action }));
 }
 
-/// The footer's Update button: only while nothing runs or waits, and only to a newer release.
+/// The footer's Update button, only to a newer release. It installs between jobs: new ones
+/// wait while the running ones finish, then the daemon restarts.
 fn start_update(req: Request, ctx: &Ctx) {
-    if !crate::update::idle(&ctx.paths) {
-        return http::respond(req, 409, "jobs are running or waiting; update once the queue is idle", "text/plain");
-    }
     // Either a newer release, or one installed already that this daemon has yet to run.
     if crate::update::available(&ctx.paths).is_none() && crate::update::installed_version().is_none() {
         return http::error(req, "no newer release is known");
