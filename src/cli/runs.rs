@@ -18,7 +18,7 @@ use crate::fsutil;
 use crate::job::{is_job_name, JobFiles, Record, RunId};
 use crate::joblog;
 use crate::paths::{self, Paths};
-use crate::queue::read_records;
+use crate::queue::{read_record, read_records};
 
 const POLL: Duration = Duration::from_millis(200);
 /// `wait --timeout` ran out.
@@ -103,8 +103,7 @@ fn look(paths: &Paths, target: &mut Target) -> Seen {
         target.run_id = status.as_ref().and_then(|s| s["run_id"].as_str()).and_then(|id| id.parse().ok());
     }
     if let Some(id) = &target.run_id {
-        let record: Option<Record> = fsutil::read_json(&paths.run_record(id.as_str()));
-        let record = record.or_else(|| {
+        let record = read_record(paths, id).or_else(|| {
             // Pruned from the state directory: the status file, if it is still this run's.
             let s = status.as_ref().filter(|s| s["run_id"].as_str() == Some(id.as_str()))?;
             serde_json::from_value(s.clone()).ok()

@@ -19,6 +19,7 @@ use std::fs;
 use std::time::Duration;
 
 use crate::fsutil;
+use crate::job::RunId;
 use crate::job::{FileStatus, JobFiles, PrepareState, Record, State};
 use crate::log;
 use crate::process;
@@ -93,6 +94,7 @@ impl Queue {
         let mut records = read_records(&self.paths);
         records.sort_by_key(|r| r.queued_at);
         let died_by = self.daemon_died_by();
+        let mut rewritten: Vec<RunId> = Vec::new();
         for mut rec in records {
             match rec.state {
                 State::Queued => {
@@ -100,13 +102,13 @@ impl Queue {
                     rec.daemon_pid = std::process::id();
                     rec.slot = None;
                     self.restart_prepare(&mut rec, died_by);
-                    write_results(&self.paths, &rec);
+                    rewritten.push(rec.run_id.clone());
                 }
                 // On a worker: its runner follows it there again (`reattach`).
                 State::Running if rec.remote_run.is_some() => {
                     done.reattached += 1;
                     rec.daemon_pid = std::process::id();
-                    write_results(&self.paths, &rec);
+                    rewritten.push(rec.run_id.clone());
                 }
                 // Still being handed to a worker, which never got it: it waits again.
                 State::Running if rec.machine.is_some() => {
@@ -114,16 +116,20 @@ impl Queue {
                     rec.state = State::Queued;
                     (rec.slot, rec.started_at, rec.machine) = (None, None, None);
                     rec.daemon_pid = std::process::id();
-                    write_results(&self.paths, &rec);
+                    rewritten.push(rec.run_id.clone());
                 }
                 State::Running => {
                     done.abandoned += 1;
                     self.abandon(&mut rec, died_by);
-                    write_results(&self.paths, &rec);
+                    rewritten.push(rec.run_id.clone());
                 }
                 _ => done.finished += 1,
             }
             self.runs.insert(rec.run_id.clone(), Entry { rec, live: None, restart: false });
+        }
+        // Through `persist`, so a write that fails is retried and said so.
+        for run_id in rewritten {
+            self.persist(&run_id);
         }
         done.exits_rewritten = self.rewrite_missing_exits();
         done.reclaimed = self.reclaim_orphaned_job_files();
