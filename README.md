@@ -45,7 +45,9 @@ stops it, and `drmanhattan update` installs the latest release once the queue is
 
 ## With coding agents
 
-Add this to the instructions file your agent reads (`AGENTS.md`, `CLAUDE.md`,
+In [bb](#with-bb), install the plugin instead: it gives every thread these instructions,
+so there is nothing to copy. For other agents (Claude Code, Codex, Cursor and the like),
+add this to the instructions file your agent reads (`AGENTS.md`, `CLAUDE.md`,
 `.cursorrules` or similar):
 
 ```markdown
@@ -96,10 +98,18 @@ for it:
 drmanhattan bb install
 ```
 
-Threads then queue their builds and tests through drmanhattan without the snippet above, the
-row above each thread's composer shows its runs (running, waiting, and a button to cancel),
-the Info tab lists its recent results, and `bb drmanhattan runs` prints them. Each run on the
-dashboard links back to its thread. [More](docs/REFERENCE.md#bb).
+Threads then queue their builds and tests through drmanhattan without the snippet above:
+the plugin gives every thread the instructions. Then:
+
+- the row above each thread's composer shows its runs (running, waiting, and a button to
+  cancel), and the Info tab lists its recent results;
+- a drmanhattan page in bb's navigation shows the queue on each machine, each run linked to
+  the thread that queued it;
+- archiving or deleting a thread stops the dev servers and other services it started;
+- `bb drmanhattan runs` prints a thread's runs, and each run on the dashboard links back to
+  its thread.
+
+[More](docs/REFERENCE.md#bb).
 
 ## What else it does
 

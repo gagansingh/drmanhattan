@@ -2,11 +2,12 @@ import {
   createFakePluginHost,
   makeHostResponse,
   makePluginAgentConfigurationContext,
+  makeThreadResponse,
 } from "@get-bb/plugin-sdk/testing";
 import { describe, expect, it } from "vitest";
 import type { HostStatus } from "./contract.js";
 import { makeQueue } from "./fixtures.js";
-import plugin, { AGENT_INSTRUCTIONS, SKILL } from "./server.js";
+import plugin, { AGENT_INSTRUCTIONS, PAGE_FINISHED, SKILL } from "./server.js";
 
 interface Setup {
   status?: (hostId: string, input: { session: string | null; limit: number }) => HostStatus;
@@ -23,8 +24,8 @@ async function setup({ status, settings }: Setup = {}) {
     sdk: {
       hosts: {
         list: async () => [
-          makeHostResponse({ id: "mac", status: "connected" }),
-          makeHostResponse({ id: "linux", status: "connected" }),
+          makeHostResponse({ id: "mac", name: "MacBook", status: "connected" }),
+          makeHostResponse({ id: "linux", name: "devbox", status: "connected" }),
         ],
       },
       threads: {
@@ -38,6 +39,7 @@ async function setup({ status, settings }: Setup = {}) {
     experimental_callHostRpc: ({ method, input, hostId }) => {
       calls.push({ method, input, hostId });
       if (method === "cancel") return { ok: true, message: "state=cancelled" };
+      if (method === "stopServices") return { ok: true, stopped: ["npm run dev"], message: "Stopped npm run dev." };
       const fallback: HostStatus = { kind: "ok", binary: "/usr/local/bin/drmanhattan", queue: makeQueue() };
       return status?.(hostId, input as { session: string | null; limit: number }) ?? fallback;
     },
@@ -115,5 +117,67 @@ describe("the thread's runs", () => {
     const own = await harness.behavior.callRpc("cancelRun", { threadId: "thr_abc", runId: "1793647590-31236-aa01" });
     expect(own).toEqual({ ok: true, message: "state=cancelled" });
     expect(calls.at(-1)).toEqual({ method: "cancel", input: { runId: "1793647590-31236-aa01" }, hostId: "mac" });
+  });
+});
+
+describe("the drmanhattan page", () => {
+  it("lists every connected machine's queue with its newest finished runs", async () => {
+    const { harness, calls } = await setup({
+      status: (hostId) =>
+        hostId === "linux"
+          ? { kind: "missing", binary: null, message: "not installed" }
+          : { kind: "ok", binary: "/x/drmanhattan", queue: makeQueue() },
+    });
+    const result = (await harness.behavior.callRpc("machines", {})) as { machines: Array<{ hostId: string; name: string; status: { kind: string } }> };
+    expect(result.machines.map((machine) => [machine.hostId, machine.name, machine.status.kind])).toEqual([
+      ["mac", "MacBook", "ok"],
+      ["linux", "devbox", "missing"],
+    ]);
+    expect(calls.map((call) => call.input)).toEqual([
+      { session: null, limit: PAGE_FINISHED },
+      { session: null, limit: PAGE_FINISHED },
+    ]);
+  });
+
+  it("cancels a run that is running or waiting on that machine", async () => {
+    const { harness, calls } = await setup();
+    expect(await harness.behavior.callRpc("cancelMachineRun", { hostId: "linux", runId: "1-2-gone" })).toMatchObject({ ok: false });
+    expect(await harness.behavior.callRpc("cancelMachineRun", { hostId: "linux", runId: "1793647590-31236-aa01" })).toEqual({
+      ok: true,
+      message: "state=cancelled",
+    });
+    expect(calls.at(-1)).toEqual({ method: "cancel", input: { runId: "1793647590-31236-aa01" }, hostId: "linux" });
+  });
+});
+
+describe("archiving a thread", () => {
+  const archived = { thread: makeThreadResponse({ id: "thr_abc" }) };
+
+  it("stops the thread's services on every machine with drmanhattan", async () => {
+    const { harness, calls } = await setup({
+      status: (hostId) =>
+        hostId === "linux"
+          ? { kind: "missing", binary: null, message: "not installed" }
+          : { kind: "ok", binary: "/x/drmanhattan", queue: makeQueue() },
+    });
+    await probeOnce(harness, calls);
+    calls.length = 0;
+    expect((await harness.behavior.emitThreadEvent("thread.archived", archived)).errors).toEqual([]);
+    expect(calls).toEqual([{ method: "stopServices", input: { session: "thr_abc" }, hostId: "mac" }]);
+    calls.length = 0;
+    await harness.behavior.emitThreadEvent("thread.deleted", archived);
+    expect(calls.map((call) => call.method)).toEqual(["stopServices"]);
+  });
+
+  it("asks machines it has not looked at yet", async () => {
+    const { harness, calls } = await setup();
+    await harness.behavior.emitThreadEvent("thread.archived", archived);
+    expect(calls.map((call) => call.hostId).sort()).toEqual(["linux", "mac"]);
+  });
+
+  it("leaves services running when the setting is off", async () => {
+    const { harness, calls } = await setup({ settings: { stopServicesOnArchive: false } });
+    await harness.behavior.emitThreadEvent("thread.archived", archived);
+    expect(calls).toEqual([]);
   });
 });

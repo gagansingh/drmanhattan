@@ -1,10 +1,12 @@
 // @vitest-environment jsdom
-import { fireEvent } from "@testing-library/react";
+import { cleanup, fireEvent } from "@testing-library/react";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
-import { describe, expect, it } from "vitest";
-import { drmanhattanRpcContract, type ThreadRuns } from "./contract.js";
+import { afterEach, describe, expect, it } from "vitest";
+import { drmanhattanRpcContract, type MachineQueue, type ThreadRuns } from "./contract.js";
 import { makeQueue } from "./fixtures.js";
-import { InfoRuns, SegmentDetails, SegmentSummary } from "./app.js";
+import { InfoRuns, PAGE_PATH, QueuePage, SegmentDetails, SegmentSummary } from "./app.js";
+
+afterEach(cleanup);
 
 const ok: ThreadRuns = { kind: "ok", hostId: "mac", queue: makeQueue() };
 const threadProps = { threadId: "thr_abc", projectId: "proj_1", environment: { id: "env_1" } };
@@ -15,7 +17,12 @@ const segmentProps = {
   onToggle: () => {},
 };
 
-function rpc(runs: ThreadRuns, cancelled: string[] = []) {
+const machines: MachineQueue[] = [
+  { hostId: "mac", name: "MacBook", status: { kind: "ok", binary: "/x/drmanhattan", queue: makeQueue() } },
+  { hostId: "linux", name: "devbox", status: { kind: "missing", binary: null, message: "not installed" } },
+];
+
+function rpc(runs: ThreadRuns, cancelled: string[] = [], queues: MachineQueue[] = machines) {
   return {
     experimental_rpcContract: drmanhattanRpcContract,
     rpc: {
@@ -24,14 +31,21 @@ function rpc(runs: ThreadRuns, cancelled: string[] = []) {
         cancelled.push((input as { runId: string }).runId);
         return { ok: true, message: "cancelled" };
       },
+      machines: () => ({ machines: queues }),
+      cancelMachineRun: (input: unknown) => {
+        const { hostId, runId } = input as { hostId: string; runId: string };
+        cancelled.push(`${hostId}/${runId}`);
+        return { ok: true, message: "cancelled" };
+      },
     },
     openUrl: () => true,
   };
 }
 
 describe("app", () => {
-  it("registers a context segment and an Info section", async () => {
+  it("registers a context segment, an Info section and a page in bb's navigation", async () => {
     const app = await loadPluginApp(() => import("./app.js"));
+    expect(app.navPanels.map((panel) => [panel.title, panel.path, panel.icon])).toEqual([["drmanhattan", PAGE_PATH, "Layers"]]);
     expect(app.threadContextSegments.map((segment) => segment.id)).toEqual(["runs"]);
     expect(app.threadInfoSections.map((section) => section.id)).toEqual(["runs"]);
   });
@@ -68,5 +82,31 @@ describe("app", () => {
     );
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(slot.container.textContent).toBe("");
+  });
+});
+
+describe("the drmanhattan page", () => {
+  const pageProps = { subPath: "" };
+
+  it("shows each machine's queue, links runs to their threads, and cancels", async () => {
+    const cancelled: string[] = [];
+    const slot = renderSlot({ component: QueuePage }, pageProps, rpc(ok, cancelled));
+    expect(await slot.findByText("MacBook")).toBeTruthy();
+    expect(slot.getByText("1 of 1 slots in use · drmanhattan 0.8.0")).toBeTruthy();
+    expect(slot.getByText("Running · 1")).toBeTruthy();
+    expect(slot.getByText("Finished · 1")).toBeTruthy();
+    expect(slot.getByText("Not installed on devbox.")).toBeTruthy();
+    fireEvent.click(slot.getByRole("button", { name: "Cancel npm run build" }));
+    await expect.poll(() => cancelled).toEqual(["mac/1793647590-31236-aa01"]);
+    expect(slot.queryByRole("button", { name: "Cancel cargo clippy" })).toBeNull();
+    fireEvent.click(slot.getByRole("button", { name: "Open the thread that queued cargo test" }));
+    expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "thr_abc" });
+    fireEvent.click(slot.getByRole("button", { name: /Open the dashboard/ }));
+    expect(slot.inspection.navigateCalls).toContainEqual(expect.objectContaining({ url: "http://127.0.0.1:8417/" }));
+  });
+
+  it("says how to install drmanhattan when no machine has it", async () => {
+    const slot = renderSlot({ component: QueuePage }, pageProps, rpc(ok, [], [machines[1]!]));
+    expect(await slot.findByText(/not installed on any connected machine/)).toBeTruthy();
   });
 });

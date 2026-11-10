@@ -21,6 +21,7 @@ export function makeRun(overrides: Partial<Run> = {}): Run {
     exit: null,
     errorLine: null,
     log: "/home/me/.drmanhattan/inbox/cargo_test.log",
+    threadId: "thr_abc",
     ...overrides,
   };
 }

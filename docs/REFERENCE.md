@@ -111,7 +111,8 @@ drmanhattan status --session thr_7f3a9k2m4p --limit 3
 The session is the one `submit` recorded in the job's `source`. The first line and each
 waiter's position still describe the whole queue; `finished` (`finished run_id=… state=…
 exit=…` lines in text) lists the session's finished runs, newest first. Without `--session`,
-`status --json` gives each running and waiting run's `source` too.
+`status --json` gives each running and waiting run's `source` too, and `--limit N` adds the
+whole queue's newest N finished runs.
 
 `wait --timeout SECS` gives up with exit 124. `follow` prints the log's bytes unchanged, so
 a reader that loses its place (a dropped connection) resumes with `--from` set to the bytes
@@ -377,7 +378,7 @@ memory, temperature and battery (amber at 20% on battery, when it says to plug i
 for the daemon, which then decides); drag a waiting job to reorder it.
 
 Finished runs are listed 20 at a time, newest first, with "‹ newer" and "older ›" to step
-through every run still kept (`DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
+through every run still kept (the newest 400, for at most `DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
 passed, cancelled) and the search box (a run's name, command, folder or worker) count and page
 through all of them, not only the runs on screen. The newest page follows runs as they finish,
 except while the pointer is over the section, the keyboard is in it, or one of its runs' logs is
@@ -411,6 +412,13 @@ bb's plugin for drmanhattan, in [`integrations/bb`](../integrations/bb), goes fu
   waiting. Expanded, it lists them with their slot, place in line and time against their usual
   time, a button to cancel each, and a link to its log on the dashboard. The thread's Info tab
   lists its recent runs, passed or failed.
+- A drmanhattan page in bb's navigation shows the queue on every connected machine:
+  slots in use, running, waiting and the 15 newest finished runs (drmanhattan 0.9.0 or
+  later lists those), each with a link to its log, the thread that queued it and, while
+  active, a button to cancel it. It also opens the dashboard, which stays at its own address:
+  it refuses to be embedded in another page.
+- Archiving or deleting a thread stops the services it started (`--service`: dev servers,
+  databases) on every machine. A setting on the plugin's page turns this off.
 - `bb drmanhattan runs` lists a thread's runs, `bb drmanhattan status` the whole queue on a
   machine, and `bb drmanhattan cancel <run id>` cancels one of the thread's runs; `--json`
   for each.
@@ -469,6 +477,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `DRMANHATTAN_MAX_SKIP_SECONDS` | 600 | the longest a job can be passed over by shorter ones |
 | `DRMANHATTAN_LOG_RETENTION_DAYS` | 7 | how long results and logs are kept |
 | `DRMANHATTAN_MAX_LOG_MB` | 1024 | the most one job's log may hold; past it the earlier output is dropped |
+| `DRMANHATTAN_MAX_FINISHED` | 400 | finished runs kept for `status` and the dashboard, newest first (1 to 499) |
 | `DRMANHATTAN_ARCHIVE_DAYS` | 90 | how long finished runs' records are kept |
 | `DRMANHATTAN_POLL_MS` | 200 | how often the inbox is checked when no change is noticed |
 | `DRMANHATTAN_HEARTBEAT_SECONDS` | 30 | how often a running job's load is sampled |
@@ -537,8 +546,13 @@ drmanhattan cleans up after itself, so it can run for months:
   output is dropped and the newest kept, since errors are usually at the end.
 - The daemon keeps its own output in `drmanhattan.log` in the data directory, rotated at 5 MB
   with one older copy.
-- Records of finished runs are kept for 90 days (`DRMANHATTAN_ARCHIVE_DAYS`), and the timing
-  history keeps at most its newest 30,000 runs.
+- `status` and the dashboard know the newest 400 finished runs
+  (`DRMANHATTAN_MAX_FINISHED`), so that reading them stays quick however busy the queue
+  gets: every `status` reads each one. An older run's own files still answer `status
+  <run>`, `wait` and `follow` until they are deleted.
+- Records of finished runs are kept in the archive for 90 days (`DRMANHATTAN_ARCHIVE_DAYS`),
+  and the timing history, which expected times come from, keeps at most its newest 30,000
+  runs.
 
 ## Security
 

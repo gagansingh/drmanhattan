@@ -2,7 +2,8 @@ import { chmodSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { cancelRun, parseStatus, readStatus, versionAtLeast } from "./host.js";
+import { readFileSync } from "node:fs";
+import { cancelRun, parseStatus, readStatus, stopServices, versionAtLeast } from "./host.js";
 
 /** What `drmanhattan status --session thr_a --json` prints (0.8.0). */
 const STATUS = JSON.stringify({
@@ -102,6 +103,15 @@ describe("parseStatus", () => {
     expect(queue.finished[0]).toMatchObject({ state: "failed", exit: 101, durationSeconds: 41 });
   });
 
+  it("links a run to the bb thread that queued it", () => {
+    const queue = parseStatus(STATUS);
+    expect(queue.running.map((run) => run.threadId)).toEqual(["thr_a", null]);
+    const other = parseStatus(
+      JSON.stringify({ state: "busy", version: "0.9.0", running: [], waiters: [{ ...JSON.parse(STATUS).waiters[0], source: { tool: "Claude Code", session: "s1" } }] }),
+    );
+    expect(other.waiting[0]?.threadId).toBeNull();
+  });
+
   it("takes a document without --session's fields", () => {
     const queue = parseStatus(JSON.stringify({ state: "stopped", daemon: null, version: "0.7.1", running: [], waiters: [] }));
     expect(queue).toMatchObject({ dashboardUrl: null, finished: [], running: [], waiting: [] });
@@ -113,8 +123,23 @@ describe("readStatus", () => {
     const env = fakeDrmanhattan(`cat "$(dirname "$0")/status.json"`);
     const status = await readStatus({ session: "thr_a", limit: 5 }, signal, env);
     expect(status.kind).toBe("ok");
-    const { readFileSync } = await import("node:fs");
     expect(readFileSync(join(env.DIR!, "args"), "utf8")).toBe("status --json --session thr_a --limit 5\n");
+  });
+
+  it("asks for the whole queue's newest finished runs", async () => {
+    const env = fakeDrmanhattan(`cat "$(dirname "$0")/status.json"`);
+    expect((await readStatus({ session: null, limit: 15 }, signal, env)).kind).toBe("ok");
+    expect(readFileSync(join(env.DIR!, "args"), "utf8")).toBe("status --json --limit 15\n");
+  });
+
+  it("gives the queue without them from a drmanhattan before 0.9.0", async () => {
+    const env = fakeDrmanhattan(`case "$*" in
+      --version) echo "drmanhattan 0.8.2";;
+      *--limit*) echo "error: --limit goes with --session" >&2; exit 2;;
+      *) cat "$(dirname "$0")/status.json";;
+    esac`);
+    expect((await readStatus({ session: null, limit: 15 }, signal, env)).kind).toBe("ok");
+    expect(readFileSync(join(env.DIR!, "args"), "utf8")).toBe("status --json --limit 15\n--version\nstatus --json\n");
   });
 
   it("says when drmanhattan is not installed", async () => {
@@ -146,6 +171,26 @@ describe("cancelRun", () => {
     expect(await cancelRun("1793647588-31235-3799f0", signal, env)).toEqual({
       ok: true,
       message: "run_id=1793647588-31235-3799f0 state=cancelled",
+    });
+  });
+});
+
+describe("stopServices", () => {
+  it("cancels the session's running services and nothing else", async () => {
+    const env = fakeDrmanhattan(`case "$1" in
+      status) cat "$(dirname "$0")/status.json";;
+      cancel) echo "run_id=$2 state=cancelled";;
+    esac`);
+    expect(await stopServices("thr_a", signal, env)).toEqual({ ok: true, stopped: ["npm run dev"], message: "Stopped npm run dev." });
+    expect(readFileSync(join(env.DIR!, "args"), "utf8")).toBe(
+      "status --json --session thr_a --limit 0\ncancel 1793647589-31235-3799f1\n",
+    );
+  });
+
+  it("does nothing on a machine without drmanhattan", async () => {
+    expect(await stopServices("thr_a", signal, { PATH: "", DRMANHATTAN_BIN: "/nowhere/drmanhattan" })).toMatchObject({
+      ok: true,
+      stopped: [],
     });
   });
 });

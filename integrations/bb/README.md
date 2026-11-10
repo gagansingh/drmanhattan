@@ -22,7 +22,10 @@ or `bb plugin install git:https://github.com/gagansingh/drmanhattan.git@0.x --pl
   threads on machines that have it get the `drmanhattan` skill and, unless the setting is
   off, instructions to submit heavy commands. It also serves the app's RPC, checking that a
   run belongs to the thread before cancelling it, and the `bb drmanhattan` command.
-- `app.tsx` adds the segment above a thread's composer and the section in its Info tab.
+- `server.ts` also stops a thread's services (`stopServices` on each machine) when bb
+  announces that the thread was archived or deleted.
+- `app.tsx` adds the segment above a thread's composer, the section in its Info tab, and
+  the drmanhattan page in bb's navigation (`machines` and `cancelMachineRun` RPCs).
 - `submit` itself records the thread: bb gives each thread's shell `BB_THREAD_ID`.
 
 ## Develop
