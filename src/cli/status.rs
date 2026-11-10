@@ -61,6 +61,9 @@ struct StatusDoc<'a> {
     auto_update: bool,
     /// What auto-update is doing, in words.
     auto_update_state: String,
+    /// An update is holding new starts until the running jobs finish, then restarts.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    update_hold: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     update: Option<crate::update::Available>,
     /// The session `--session` asked for; running and waiters then hold only its runs.
@@ -264,6 +267,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
         installed,
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(paths),
+        update_hold: crate::update::held(paths),
         update: crate::update::available(paths),
         session: filter.and_then(|f| f.session),
         finished,
@@ -346,6 +350,9 @@ fn print_text(doc: &StatusDoc) {
     }
     if doc.auto_update {
         head.push(kv("auto_update_state", &doc.auto_update_state));
+    }
+    if doc.update_hold {
+        head.push(kv("hold", "update: new jobs wait until the running ones finish and it restarts"));
     }
     if let Some(d) = &doc.daemon {
         head.push(kv("daemon_pid", d.pid));
