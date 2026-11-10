@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-drmanhattan",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "type": "module",
   "description": "Shows each bb thread's drmanhattan runs and tells bb's agents to queue heavy commands through drmanhattan.",
   "license": "MIT",

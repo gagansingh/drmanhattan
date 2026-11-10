@@ -50,7 +50,7 @@ function stateIcon(run: Run): { name: string; label: string; className: string }
   if (run.state === "waiting") return { name: "Clock", label: "Waiting", className: "text-muted-foreground" };
   if (isActive(run)) return { name: "Spinner", label: "Running", className: "animate-spin text-muted-foreground" };
   if (run.state === "succeeded") return { name: "CircleCheck", label: "Succeeded", className: "text-success" };
-  if (run.state === "cancelled") return { name: "Square", label: "Cancelled", className: "text-muted-foreground" };
+  if (run.state === "cancelled") return { name: "Unavailable", label: "Cancelled", className: "text-muted-foreground" };
   return { name: "CircleX", label: "Failed", className: "text-destructive" };
 }
 
@@ -110,7 +110,7 @@ function CancelButton({ threadId, run, onDone }: { threadId: string; run: Run; o
           );
         }}
       >
-        <Icon name="Square" className="size-3.5" aria-hidden />
+        <Icon name="X" className="size-3.5" aria-hidden />
       </button>
     </>
   );
