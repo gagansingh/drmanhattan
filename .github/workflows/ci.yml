@@ -41,3 +41,22 @@ jobs:
       - uses: dtolnay/rust-toolchain@1.75
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --locked --all-targets
+  # The plugin for bb (integrations/bb): its tests, types, and a real `bb plugin build`.
+  bb-plugin:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: integrations/bb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: integrations/bb/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+        env:
+          BB_TELEMETRY: "false"

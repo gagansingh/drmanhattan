@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::cli::args::{self, Spec};
 use crate::daemon;
 use crate::error::Result;
-use crate::job::{PrepareState, Record, RunId, State};
+use crate::job::{PrepareState, Record, RunId, Source, State};
 use crate::paths::Paths;
 use crate::queue::{rank, read_records};
 use crate::settings::{effective_capacity, read_manual_order};
@@ -20,19 +20,27 @@ use crate::time::{human, Timestamp};
 const STATUS: Spec = Spec {
     usage: "\
 usage: drmanhattan status [<run>] [--json] [--inbox DIR]
+       drmanhattan status --session ID [--limit N] [--json]
 
 Shows the queue: whether the daemon is running, the slots in use, and the waiting jobs in
 the order they will start. Text output is one `key=value` line per item (values with
 spaces are quoted); --json prints the same as one JSON document.
 
+--session ID shows only the runs one session or thread submitted (its source's session,
+as `submit` records it), and adds its newest finished runs, at most N (default 10). The
+first line, and each waiter's position, still describe the whole queue.
+
 With <run> (a run id, its short id, or a job's name), shows that run instead: one line
 run_id=… state=… job=… exit=…, or with --json its whole record as .status.json has it,
 plus `state` (also `submitted` for a job file not yet picked up) and `exit` once it is over.
 ",
-    values: &["inbox"],
+    values: &["inbox", "session", "limit"],
     switches: &["json"],
     positional: 1,
 };
+
+/// Finished runs `--session` lists when `--limit` does not say.
+const DEFAULT_FINISHED: usize = 10;
 
 #[derive(Serialize)]
 struct StatusDoc<'a> {
@@ -54,8 +62,14 @@ struct StatusDoc<'a> {
     auto_update_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     update: Option<crate::update::Available>,
+    /// The session `--session` asked for; running and waiters then hold only its runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    session: Option<&'a str>,
     running: Vec<RunningDoc<'a>>,
     waiters: Vec<WaiterDoc<'a>>,
+    /// With `--session`: its newest finished runs, newest first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    finished: Option<Vec<FinishedDoc<'a>>>,
     /// The workers in config.json (see `drmanhattan workers`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     workers: Vec<serde_json::Value>,
@@ -93,6 +107,8 @@ struct RunningDoc<'a> {
     expected_seconds: Option<u64>,
     log: &'a PathBuf,
     job_file: &'a PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a Source>,
 }
 
 #[derive(Serialize)]
@@ -120,6 +136,44 @@ struct WaiterDoc<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     lane_reason: Option<&'a str>,
     job_file: &'a PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a Source>,
+}
+
+#[derive(Serialize)]
+struct FinishedDoc<'a> {
+    run_id: &'a RunId,
+    label: &'a str,
+    category: &'a str,
+    state: &'static str,
+    exit: Option<i32>,
+    cwd: &'a PathBuf,
+    started_at: Option<Timestamp>,
+    finished_at: Option<Timestamp>,
+    /// From start to finish; none for a run that never started.
+    duration_seconds: Option<u64>,
+    #[serde(skip)]
+    duration: Option<std::time::Duration>,
+    /// For a failed run: the line of its log to read first.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_line: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    failure_reason: Option<&'a str>,
+    log: &'a PathBuf,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<&'a Source>,
+}
+
+/// What `--session` narrows the document to.
+struct SessionFilter<'a> {
+    session: &'a str,
+    limit: usize,
+}
+
+impl SessionFilter<'_> {
+    fn has(&self, r: &Record) -> bool {
+        r.job.source.as_ref().and_then(|s| s.session.as_deref()) == Some(self.session)
+    }
 }
 
 pub(super) fn status(rest: &[String]) -> Result<i32> {
@@ -127,9 +181,18 @@ pub(super) fn status(rest: &[String]) -> Result<i32> {
     if let Some(run) = a.positional.first() {
         return super::runs::status_of(&a, run);
     }
+    let session = match a.get("session").map(str::trim) {
+        Some("") => return crate::error::invalid("--session needs a session or thread id"),
+        Some(session) => {
+            let limit: Option<usize> = a.parsed("limit", "a number of runs")?;
+            Some(SessionFilter { session, limit: limit.unwrap_or(DEFAULT_FINISHED) })
+        }
+        None if a.get("limit").is_some() => return crate::error::invalid("--limit goes with --session"),
+        None => None,
+    };
     let paths = Paths::from_env();
     let records = read_records(&paths);
-    let doc = build(&paths, &records)?;
+    let doc = build(&paths, &records, session.as_ref())?;
     if a.has("json") {
         println!("{}", serde_json::to_string_pretty(&doc).map_err(|e| crate::error::Error::Invalid(e.to_string()))?);
     } else {
@@ -138,7 +201,8 @@ pub(super) fn status(rest: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
+fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter<'a>>) -> Result<StatusDoc<'a>> {
+    let mine = |r: &Record| filter.map_or(true, |f| f.has(r));
     let now = Timestamp::now();
     let daemon = daemon::running(paths);
     let capacity = effective_capacity(paths, daemon::slots_env(daemon.as_ref()).as_deref())?;
@@ -158,6 +222,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         .iter()
         .filter_map(|w| by_id.get(&w.run_id).map(|r| (*r, w)))
         .enumerate()
+        .filter(|(_, (r, _))| mine(r))
         .map(|(i, (r, w))| WaiterDoc {
             position: i + 1,
             run_id: &r.run_id,
@@ -175,8 +240,15 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
             quick: r.quick,
             lane_reason: r.lane_reason.as_deref(),
             job_file: &r.job.job_file,
+            source: r.job.source.as_ref(),
         })
         .collect();
+    let finished = filter.map(|f| {
+        let mut done: Vec<&Record> = records.iter().filter(|r| r.state.is_terminal() && f.has(r)).collect();
+        done.sort_by_key(|r| std::cmp::Reverse(r.finished_at.unwrap_or(r.queued_at)));
+        done.truncate(f.limit);
+        done.into_iter().map(finished_doc).collect()
+    });
     let (version, installed) = versions(daemon.as_ref());
     let daemon_quick = daemon.as_ref().and_then(|d| d.info.as_ref()).and_then(|i| i.max_quick);
     Ok(StatusDoc {
@@ -194,8 +266,11 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
+        session: filter.map(|f| f.session),
+        finished,
         running: running
             .into_iter()
+            .filter(|r| mine(r))
             .map(|r| RunningDoc {
                 slot: r.slot,
                 machine: r.machine.as_deref(),
@@ -212,10 +287,31 @@ fn build<'a>(paths: &Paths, records: &'a [Record]) -> Result<StatusDoc<'a>> {
                 expected_seconds: r.expected_seconds,
                 log: &r.job.log,
                 job_file: &r.job.job_file,
+                source: r.job.source.as_ref(),
             })
             .collect(),
         waiters,
     })
+}
+
+fn finished_doc(r: &Record) -> FinishedDoc<'_> {
+    let duration = r.started_at.zip(r.finished_at).map(|(start, end)| start.until(end));
+    FinishedDoc {
+        run_id: &r.run_id,
+        label: &r.job.label,
+        category: &r.job.category,
+        state: r.state.as_str(),
+        exit: r.exit_status,
+        cwd: &r.job.cwd,
+        started_at: r.started_at,
+        finished_at: r.finished_at,
+        duration_seconds: duration.map(|d| d.as_secs()),
+        duration,
+        error_line: r.error_line.as_deref(),
+        failure_reason: r.failure_reason.as_deref(),
+        log: &r.job.log,
+        source: r.job.source.as_ref(),
+    }
 }
 
 /// The running daemon's version, and this command's when the daemon has yet to restart into it.
@@ -303,6 +399,14 @@ fn print_text(doc: &StatusDoc) {
         line.extend(w.group.map(|g| kv("group", g)));
         line.push(kv("lane", if w.quick { "quick" } else { "slot" }));
         line.extend(w.lane_reason.map(|r| kv("reason", r)));
+        println!("{}", line.join(" "));
+    }
+    for f in doc.finished.iter().flatten() {
+        let mut line = vec!["finished".to_string(), kv("run_id", f.run_id), kv("state", f.state)];
+        line.extend(f.exit.map(|e| kv("exit", e)));
+        line.extend([kv("label", f.label), kv("category", f.category)]);
+        line.extend(f.duration.map(|d| kv("duration", human(d))));
+        line.extend(f.finished_at.map(|t| kv("ago", human(t.until(Timestamp::now())))));
         println!("{}", line.join(" "));
     }
 }

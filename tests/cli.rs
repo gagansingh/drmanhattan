@@ -168,6 +168,62 @@ fn source_is_recorded_from_job_files_and_detected_by_submit() {
     );
 }
 
+#[test]
+fn a_bb_thread_finds_its_own_runs_with_status_session() {
+    let d = Daemon::start(&[]);
+    let from = |thread: &str, name: &str, wait: bool, script: &str| {
+        let mut args = vec!["submit", "--name", name];
+        if wait {
+            args.push("--wait");
+        }
+        args.extend(["--", "sh", "-c", script]);
+        let out = d
+            .cmd(&args)
+            .env("BB_THREAD_ID", thread)
+            .env("BB_SERVER_URL", "http://127.0.0.1:38886")
+            .env("CLAUDE_CODE_SESSION_ID", "cc-inside-bb")
+            .current_dir(&d.work)
+            .output()
+            .unwrap();
+        out.status.code()
+    };
+    assert_eq!(from("thr_a", "a1", true, "true"), Some(0));
+    assert_eq!(from("thr_a", "a2", true, "echo broken; exit 3"), Some(3));
+    assert_eq!(from("thr_b", "b1", true, "true"), Some(0));
+    assert_eq!(from("thr_a", "a3", false, "sleep 30"), Some(0));
+    d.wait_state("a3", "running", T);
+    assert_eq!(
+        d.status_of("a1").unwrap()["source"],
+        json!({"tool": "bb", "session": "thr_a", "url": "http://127.0.0.1:38886/threads/thr_a"}),
+        "bb's thread wins over the Claude Code session it runs"
+    );
+
+    let status = |extra: &[&str]| {
+        let mut args = vec!["status", "--session", "thr_a"];
+        args.extend(extra);
+        d.cmd(&args).output().unwrap()
+    };
+    let doc: serde_json::Value = serde_json::from_slice(&status(&["--json"]).stdout).unwrap();
+    assert_eq!(doc["session"], "thr_a");
+    let running = doc["running"].as_array().unwrap();
+    assert_eq!(running.len(), 1, "{doc}");
+    assert_eq!(running[0]["source"]["session"], "thr_a");
+    let finished: Vec<_> = doc["finished"].as_array().unwrap().iter().map(|f| f["run_id"].clone()).collect();
+    assert_eq!(finished, [d.status_of("a2").unwrap()["run_id"].clone(), d.status_of("a1").unwrap()["run_id"].clone()]);
+    assert_eq!((&doc["finished"][0]["state"], &doc["finished"][0]["exit"]), (&json!("failed"), &json!(3)));
+    let limited: serde_json::Value = serde_json::from_slice(&status(&["--json", "--limit", "1"]).stdout).unwrap();
+    assert_eq!(limited["finished"].as_array().unwrap().len(), 1);
+    let text = String::from_utf8_lossy(&status(&[]).stdout).into_owned();
+    assert!(text.contains("finished run_id=") && text.contains("state=failed exit=3"), "{text}");
+    assert!(!text.contains("b1"), "{text}");
+    // Without --session, nothing changes but each run's source.
+    let all = d.status_json();
+    assert!(all.get("finished").is_none() && all.get("session").is_none());
+    assert_eq!(all["running"][0]["source"]["tool"], "bb");
+    assert_eq!(d.cmd(&["status", "--limit", "3"]).output().unwrap().status.code(), Some(2));
+    assert_eq!(d.cmd(&["cancel", "a3"]).output().unwrap().status.code(), Some(0));
+}
+
 /// Runs a command, killing it if it has not finished within `limit`.
 fn output_within(mut cmd: std::process::Command, limit: Duration) -> std::process::Output {
     let mut child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn().unwrap();

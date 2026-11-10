@@ -1,6 +1,7 @@
 //! The `drmanhattan` (alias `manhattan`) command.
 
 mod args;
+mod bb;
 mod commands;
 mod runs;
 mod service;
@@ -32,6 +33,7 @@ usage:
   drmanhattan slots [N]                   show or set how many jobs may run at once
   drmanhattan lan [on|off|new-key]        the dashboard on this network, for a phone
   drmanhattan paths                       where the inbox, state and data live
+  drmanhattan bb [install]                the plugin for bb, the editor that runs agents in threads
   drmanhattan --version | --help
 
 `drmanhattan <command> --help` describes a command's options. Jobs are JSON files in the inbox;
@@ -94,6 +96,7 @@ fn dispatch(args: &[String]) -> crate::error::Result<i32> {
         "slots" => commands::slots(rest),
         "lan" => commands::lan(rest),
         "paths" => commands::paths(rest),
+        "bb" => bb::bb(rest),
         other => crate::error::invalid(format!("unknown command: {other} (see --help)")),
     }
 }

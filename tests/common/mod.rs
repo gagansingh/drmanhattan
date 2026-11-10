@@ -102,6 +102,7 @@ impl Daemon {
             let ours = self.env.iter().any(|(set, _)| *set == k);
             if (k.starts_with("DRMANHATTAN_") && !ours)
                 || k == "CLAUDE_CODE_SESSION_ID"
+                || k.starts_with("BB_")
                 || k == "TERM_PROGRAM"
                 || k.starts_with("CODEX_")
                 || k.starts_with("CURSOR_")
