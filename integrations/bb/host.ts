@@ -36,6 +36,8 @@ const rawRunning = z.object({
   machine: text,
   service: z.boolean().default(false),
   quick: z.boolean().default(false),
+  // A run in the light lane (drmanhattan 0.10.0): beside the slots, like a quick one.
+  light_lane: z.boolean().default(false),
   ready: z.boolean().nullish(),
   cwd: text,
   started_at: timestamp,
@@ -113,7 +115,7 @@ export function parseStatus(stdout: string): Queue {
       state: run.service && run.ready === false ? "starting" : "running",
       service: run.service,
       quick: run.quick,
-      slot: run.service || run.quick ? null : (run.slot ?? null),
+      slot: run.service || run.quick || run.light_lane ? null : (run.slot ?? null),
       machine: run.machine,
       cwd: run.cwd,
       startedAt: run.started_at,
