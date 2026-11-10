@@ -3,7 +3,7 @@
 //! A job may name its source: a tool, a session or thread id, a URL. The dashboard shows it
 //! with a link that opens the session, chosen in this order:
 //!
-//! 1. the URL the job gave, when it is safe to open;
+//! 1. the URL the job gave, when it is safe to open (`submit` gives a bb thread's page);
 //! 2. a Claude Code session in the desktop app (`claude://…`, with its title and whether it
 //!    is still running), from the app's session files;
 //! 3. a Codex thread in the ChatGPT app (`codex://threads/<id>`, titled from Codex's thread
@@ -46,8 +46,11 @@ fn encode_path(path: &str) -> String {
         .collect()
 }
 
+/// The source name of a job submitted from a bb thread (see `cli::source`).
+pub(crate) const BB: &str = "bb";
+
 /// An id that may go into a URL path as it is.
-fn plain_id(id: &str) -> bool {
+pub(crate) fn plain_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 128 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
@@ -141,7 +144,11 @@ pub(crate) fn view(source: Option<&Source>, sessions: &Sessions, cwd: &Path) -> 
     let mut v = SourceView {
         tool: src.tool.clone(),
         id: src.session.clone(),
-        short: sid.chars().take(8).collect(),
+        // bb's thread ids all start `thr_`; the part after it tells them apart.
+        short: if src.tool.as_deref() == Some(BB) { sid.strip_prefix("thr_").unwrap_or(sid) } else { sid }
+            .chars()
+            .take(8)
+            .collect(),
         name: None,
         status: None,
         live: None,
@@ -220,6 +227,14 @@ mod tests {
         assert_eq!(link(src(Some("Cursor"), None)).url.as_deref(), Some("cursor://file/w/my%20app"));
         assert_eq!(link(src(Some("Copilot"), None)).url.as_deref(), Some("vscode://file/w/my%20app"));
         assert_eq!(link(src(Some("nightly cron"), None)).url, None);
+        let bb = link(Source {
+            url: Some("http://127.0.0.1:38886/threads/thr_7f3a9k2m4p".into()),
+            ..src(Some(BB), Some("thr_7f3a9k2m4p"))
+        });
+        assert_eq!(
+            (bb.short.as_str(), bb.url.as_deref()),
+            ("7f3a9k2m", Some("http://127.0.0.1:38886/threads/thr_7f3a9k2m4p"))
+        );
         assert_eq!(link(src(Some("Codex"), Some("../../etc"))).url, None, "only plain ids go into a URL");
         let given = Source { url: Some("https://ci.example/run/7".into()), ..src(Some("Codex"), Some("019a-7c")) };
         assert_eq!(link(given).url.as_deref(), Some("https://ci.example/run/7"));

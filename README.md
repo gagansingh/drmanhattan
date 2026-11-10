@@ -87,6 +87,20 @@ Agents sharing a machine then run their builds one after another, and their quic
 do not wait behind those builds. When the queue is not running, `submit --wait` says so at
 once instead of queueing a job that would never start.
 
+## With bb
+
+[bb](https://github.com/get-bb/bb) runs coding agents in threads. drmanhattan has a plugin
+for it:
+
+```
+drmanhattan bb install
+```
+
+Threads then queue their builds and tests through drmanhattan without the snippet above, the
+row above each thread's composer shows its runs (running, waiting, and a button to cancel),
+the Info tab lists its recent results, and `bb drmanhattan runs` prints them. Each run on the
+dashboard links back to its thread. [More](docs/REFERENCE.md#bb).
+
 ## What else it does
 
 Each item links to its section of [docs/REFERENCE.md](docs/REFERENCE.md).
@@ -101,9 +115,6 @@ Each item links to its section of [docs/REFERENCE.md](docs/REFERENCE.md).
   run dev` returns once it is listening.
 - **[Workers](docs/REFERENCE.md#workers-running-jobs-on-other-machines)**: jobs can run on
   other machines over SSH, each running its own drmanhattan.
-- **[Agent goals and loops](docs/REFERENCE.md#goals-and-loops-for-coding-agents)**:
-  `examples/agent-runner.sh` runs a headless coding agent as a job until a check passes,
-  or on an interval.
 - **[Prepare](docs/REFERENCE.md#preparing-while-waiting),
   [groups](docs/REFERENCE.md#one-at-a-time-groups),
   [fail patterns](docs/REFERENCE.md#failing-on-output) and

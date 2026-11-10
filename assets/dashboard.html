@@ -689,7 +689,8 @@ function runCell(run, extraNotes, detail = '') {
 function sourceCell(source) {
   if (!source) return `<td class="source">${nothing('no source')}</td>`;
   // The session's name, else its short id; the tool, the same on most rows, is in the tooltip.
-  const label = esc(source.name || (source.short ? `session ${source.short}` : source.tool || 'source'));
+  const kind = source.tool === 'bb' ? 'bb thread' : 'session';
+  const label = esc(source.name || (source.short ? `${kind} ${source.short}` : source.tool || 'source'));
   const title = esc([source.tool, source.name, [source.id, source.status].filter(Boolean).join(' · '),
     source.live === false ? 'the session has ended' : ''].filter(Boolean).join('\n'));
   const name = source.url ? `<a href="${esc(source.url)}" title="${title}">${label}</a>` : `<span title="${title}">${label}</span>`;
@@ -1829,6 +1830,9 @@ async function poll() {
   }
 }
 
+// `#run=<run id>` opens that run's log: other tools (bb's drmanhattan plugin) link to a run so.
+const linked = /^#run=([\w.-]+)$/.exec(location.hash);
+if (linked) openLog(linked[1]);
 tick();
 </script>
 </body>

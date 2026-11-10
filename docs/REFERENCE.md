@@ -13,8 +13,8 @@ Everything drmanhattan does, in detail. The [README](../README.md) is the short 
 - [Progress markers](#progress-markers)
 - [The jobs' environment and terminal](#the-jobs-environment-and-terminal)
 - [Workers: running jobs on other machines](#workers-running-jobs-on-other-machines)
-- [Goals and loops for coding agents](#goals-and-loops-for-coding-agents)
 - [Dashboard](#dashboard)
+- [bb](#bb)
 - [Configuration](#configuration)
 - [Running as a service](#running-as-a-service)
 - [Updating](#updating)
@@ -100,6 +100,18 @@ drmanhattan follow tests                 # its log as it grows; exits with its e
 drmanhattan follow tests --from 18734    # carry on from 18734 bytes of output in
 drmanhattan cancel '#094a70'             # as tests.cancel does
 ```
+
+One session's runs, as a tool shows them beside the session (bb's plugin does):
+
+```
+drmanhattan status --session thr_7f3a9k2m4p --json   # its running and waiting runs, and its 10 newest finished
+drmanhattan status --session thr_7f3a9k2m4p --limit 3
+```
+
+The session is the one `submit` recorded in the job's `source`. The first line and each
+waiter's position still describe the whole queue; `finished` (`finished run_id=… state=…
+exit=…` lines in text) lists the session's finished runs, newest first. Without `--session`,
+`status --json` gives each running and waiting run's `source` too.
 
 `wait --timeout SECS` gives up with exit 124. `follow` prints the log's bytes unchanged, so
 a reader that loses its place (a dropped connection) resumes with `--from` set to the bytes
@@ -355,31 +367,6 @@ load, memory, temperature and battery, and why it is not taking work while that 
 leaf per slot, holding its running job or free. `DRMANHATTAN_SSH` and `DRMANHATTAN_RSYNC` name other `ssh` and `rsync` programs; `DRMANHATTAN_WORKER_POLL_SECONDS`
 (15) sets how often each worker is asked for its readings.
 
-## Goals and loops for coding agents
-
-[`examples/agent-runner.sh`](../examples/agent-runner.sh) runs a headless coding agent as a
-drmanhattan job, either until a goal is met or on an interval. Copy it onto your `PATH`.
-
-```
-# Rounds of: the agent works on the goal, then the check runs. Stops when the check passes.
-manhattan submit --label "fix tests" -- agent-runner.sh goal \
-  --goal "Make the test suite pass without changing the tests" --check "cargo test" --max-rounds 5
-
-# The same prompt every 10 minutes, until the pull request's checks pass.
-manhattan submit --label "watch CI" -- agent-runner.sh loop \
-  --prompt "Look at the failing CI checks on this branch's pull request and fix them" \
-  --every 10m --until "gh pr checks" --max-minutes 120
-```
-
-Goal mode stops after 8 rounds or 60 minutes unless `--max-rounds` and `--max-minutes` say
-otherwise; loop mode runs until its `--until` check passes, `--max-runs` or `--max-minutes`
-is reached, or it is cancelled. Each round shows as a step on the dashboard, and cancelling
-the job stops the agent and anything it started. The agent is `claude -p --continue` unless
-`--agent` names another; any agent CLI that takes the prompt as its last argument works. The
-rounds share one conversation of their own, or each starts afresh with `--fresh`. The agent
-must be able to run headless on this machine: signed in, and allowed to edit files and run
-commands without asking. `agent-runner.sh --help` lists the options.
-
 ## Dashboard
 
 `http://127.0.0.1:8417/` (`drmanhattan paths` prints it if that port was busy) shows each
@@ -403,6 +390,45 @@ Commands are shown as a person reads them: the program and its subcommand stand 
 `via` tag, the job's folder is `.` and the home folder `~`, and flags, settings, quoted strings and
 shell operators each have a colour; hover a job's name to see its command.
 
+A run's source links back to the session that submitted it: a bb thread, a Claude Code
+session, a Codex thread, or the folder in Cursor or VS Code. `http://127.0.0.1:8417/#run=<run
+id>` opens the page with that run's log showing.
+
+## bb
+
+[bb](https://github.com/get-bb/bb) is an editor that runs coding agents in threads. A run
+submitted from a bb thread records the thread (bb gives each thread's shell `BB_THREAD_ID`
+and `BB_SERVER_URL`), and the dashboard shows it as `bb thread <id>`, linking to the thread.
+That holds even when the thread's agent is Claude Code or Codex, whose own markers are also
+set there.
+
+bb's plugin for drmanhattan, in [`integrations/bb`](../integrations/bb), goes further:
+
+- Threads on a machine with drmanhattan 0.8.0 or later are told to run builds and tests
+  with `manhattan submit --wait`, and get a `drmanhattan` skill. A setting on the plugin's page
+  turns the instructions off; machines without drmanhattan are left alone.
+- While a thread has runs going, the row above its composer says how many are running and
+  waiting. Expanded, it lists them with their slot, place in line and time against their usual
+  time, a button to cancel each, and a link to its log on the dashboard. The thread's Info tab
+  lists its recent runs, passed or failed.
+- `bb drmanhattan runs` lists a thread's runs, `bb drmanhattan status` the whole queue on a
+  machine, and `bb drmanhattan cancel <run id>` cancels one of the thread's runs; `--json`
+  for each.
+
+Install it with:
+
+```
+drmanhattan bb install
+```
+
+which runs `bb plugin install git:https://github.com/gagansingh/drmanhattan.git@0.x --plugin
+drmanhattan` (bb asks before installing; `drmanhattan bb` prints the command). bb installs
+the newest release tag and `bb plugin update` follows later releases of the same major
+version. The `bb` command must be on `PATH`: in bb, Settings → General → Command line →
+Install. The plugin calls the `drmanhattan` it finds on `PATH`, in `~/.local/bin` or
+`~/.cargo/bin` (`DRMANHATTAN_BIN` names another) on the thread's machine, so each machine
+with threads needs its own drmanhattan running.
+
 ## On your phone
 
 `drmanhattan lan on` serves the dashboard on this machine's network address too, and prints a
@@ -420,8 +446,8 @@ read the pages and the key. Use it on a network you trust, and keep it off elsew
 ## Configuration
 
 Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `follow`,
-`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `lan [on|off|new-key]` and
-`paths`. Each has `--help`.
+`cancel`, `workers`, `machine-stats`, `update [--now]`, `reload-env`, `stop [<name>]`, `slots [N]`, `lan [on|off|new-key]`,
+`paths` and `bb [install]`. Each has `--help`.
 
 | option | default | meaning |
 | --- | --- | --- |
@@ -451,7 +477,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 
 Waiting jobs start in this order: priority jobs, jobs you dragged, jobs that have waited past
 their limit, then the shortest expected job first. `submit` records who submitted a job
-(`--source`, or detected for Claude Code, Codex, Cursor, VS Code and Copilot).
+(`--source`, or detected for bb, Claude Code, Codex, Cursor, VS Code and Copilot).
 
 ## Running as a service
 
@@ -530,7 +556,7 @@ drmanhattan cleans up after itself, so it can run for months:
 ## Uses
 
 - **Coding agents sharing one machine.** With the README's snippet in each one's instructions,
-  their builds run one after another instead of all at once.
+  or bb's plugin, their builds run one after another instead of all at once.
 - **A nightly test run that waits its turn.** In `crontab -e`:
   `0 2 * * * $HOME/.local/bin/manhattan submit --label nightly --cwd $HOME/app -- make test`
 - **An editor task that deploys and reports the result.** Run
