@@ -1,4 +1,4 @@
-Queue your threads' builds and tests through [drmanhattan](https://github.com/gagansingh/drmanhattan), a local job queue, and see each thread's runs where you follow the thread.
+[drmanhattan](https://github.com/gagansingh/drmanhattan) is a local job queue for heavy commands. With this plugin, bb's agents send their builds and tests through it, so several threads working at once take turns instead of all compiling at the same time.
 
 ## What you get
 
@@ -21,4 +21,4 @@ Add `--json` for machine-readable output.
 
 ## Requirements
 
-drmanhattan 0.8.0 or later on each machine whose threads should use it, started once with `drmanhattan --yes &` or as a service. Machines without it are left alone.
+drmanhattan 0.8.1 or later on each machine whose threads should use it, running as a daemon (`drmanhattan --yes &`, or as a service). It is free, open source, and runs on macOS and Linux (x86_64); the [install instructions](https://github.com/gagansingh/drmanhattan#install) take one command. Machines without it are left alone.
