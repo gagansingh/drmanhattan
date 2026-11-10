@@ -47,6 +47,8 @@ options:
   --variant TEXT      a finer grouping for estimates, such as a cold or warm build
   --timeout SECS      seconds of running time allowed
   --priority          run ahead of everything not marked priority
+  --light             it leaves the machine mostly free (it waits on a device or a network):
+                      it may start beside the slots, in the light lane
   --cwd DIR           where it runs (default: here)
   --env KEY=VALUE     set an environment variable (repeatable)
   --name NAME         the job file's name (default: the label and a unique id)
@@ -98,7 +100,7 @@ options:
         "ready-timeout",
         "ttl",
     ],
-    switches: &["priority", "wait", "sync-git", "service", "restart", "tty"],
+    switches: &["priority", "light", "wait", "sync-git", "service", "restart", "tty"],
     positional: 0,
 };
 
@@ -188,6 +190,7 @@ pub(super) fn submit(rest: &[String]) -> Result<i32> {
         sync: a.all("sync").iter().map(|p| SyncSpec::Path(absolute(p))).collect(),
         sync_git: a.has("sync-git"),
         tty: a.has("tty"),
+        light: a.has("light"),
         env_forward: Vec::new(),
         dispatched_from: None,
         dispatch_id: None,

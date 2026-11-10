@@ -43,6 +43,12 @@ pub(crate) struct DaemonInfo {
     /// How many quick runs it lets run at once. Absent before 0.7.0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) max_quick: Option<usize>,
+    /// How many light runs it lets run at once, and the memory pressure that closes the
+    /// light lane (`warn`, `critical` or `off`). Absent before 0.10.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) max_light: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) light_guard: Option<String>,
     /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_env: Option<String>,

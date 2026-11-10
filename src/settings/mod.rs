@@ -52,6 +52,11 @@ pub(crate) struct Settings {
     /// The most quick runs at once (`DRMANHATTAN_QUICK`, the number of cores by default);
     /// they take no slots either. 0 turns the quick lane off: every job waits for a slot.
     pub(crate) max_quick: usize,
+    /// The most light runs at once beside the slots (`DRMANHATTAN_LIGHT`, 2 by default); 0
+    /// turns the light lane off: a job that says `light` waits for a slot like any other.
+    pub(crate) max_light: usize,
+    /// When the machine is too short of memory for the light lane (`DRMANHATTAN_LIGHT_PRESSURE`).
+    pub(crate) light_guard: LightGuard,
     /// Give jobs the user's login shell environment (`DRMANHATTAN_SHELL_ENV`, on unless `0`).
     pub(crate) shell_env: bool,
     /// How long that shell may take to print it.
@@ -59,6 +64,51 @@ pub(crate) struct Settings {
 }
 
 const DAY: u64 = 86_400;
+
+/// The memory pressure at which the light lane stops taking runs. A light run adds little
+/// load of its own, but on a machine already short of memory any extra process is paid for
+/// in swapping by everything running; so the lane closes and its waiters take slots in turn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum LightGuard {
+    /// Closed while the kernel reports `warn` or `critical`: the default.
+    Warn,
+    /// Closed only while it reports `critical`.
+    Critical,
+    /// Never closed.
+    Off,
+}
+
+impl LightGuard {
+    fn from_env() -> Result<LightGuard> {
+        match std::env::var("DRMANHATTAN_LIGHT_PRESSURE").as_deref().map(str::trim) {
+            Err(_) | Ok("warn") => Ok(LightGuard::Warn),
+            Ok("critical") => Ok(LightGuard::Critical),
+            Ok("off") => Ok(LightGuard::Off),
+            Ok(other) => invalid(format!("DRMANHATTAN_LIGHT_PRESSURE must be warn, critical or off, not {other:?}")),
+        }
+    }
+
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            LightGuard::Warn => "warn",
+            LightGuard::Critical => "critical",
+            LightGuard::Off => "off",
+        }
+    }
+
+    pub(crate) fn named(name: &str) -> Option<LightGuard> {
+        [LightGuard::Warn, LightGuard::Critical, LightGuard::Off].into_iter().find(|g| g.name() == name)
+    }
+
+    /// Whether the lane is closed at this memory pressure (`normal`, `warn` or `critical`;
+    /// None where the machine gives no reading, which closes nothing).
+    pub(crate) fn closes_at(self, pressure: Option<&str>) -> bool {
+        matches!(
+            (self, pressure),
+            (LightGuard::Warn, Some("warn" | "critical")) | (LightGuard::Critical, Some("critical"))
+        )
+    }
+}
 
 impl Settings {
     pub(crate) fn from_env() -> Result<Settings> {
@@ -91,6 +141,8 @@ impl Settings {
                 |v| *v <= 256,
                 "a whole number from 0 to 256",
             )?,
+            max_light: env_or("DRMANHATTAN_LIGHT", 2, |v| *v <= 256, "a whole number from 0 to 256")?,
+            light_guard: LightGuard::from_env()?,
             worker_poll: seconds_env("DRMANHATTAN_WORKER_POLL_SECONDS", 15.0, 0.1)?,
             max_prepares: env_or(
                 "DRMANHATTAN_MAX_PREPARES",
@@ -132,4 +184,21 @@ fn days_env(name: &str, default: u64) -> Result<Duration> {
     let max_days = MAX_SETTING.as_secs() / DAY;
     let days = env_or(name, default, |d| *d <= max_days, &format!("a whole number of days, at most {max_days}"))?;
     Ok(Duration::from_secs(days * DAY))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_light_lane_closes_at_its_guards_pressure_and_never_without_a_reading() {
+        let closed = |g: LightGuard| ["normal", "warn", "critical"].map(|p| g.closes_at(Some(p)));
+        assert_eq!(closed(LightGuard::Warn), [false, true, true]);
+        assert_eq!(closed(LightGuard::Critical), [false, false, true]);
+        assert_eq!(closed(LightGuard::Off), [false, false, false]);
+        for guard in [LightGuard::Warn, LightGuard::Critical, LightGuard::Off] {
+            assert!(!guard.closes_at(None), "no reading closes nothing");
+            assert_eq!(LightGuard::named(guard.name()), Some(guard));
+        }
+    }
 }

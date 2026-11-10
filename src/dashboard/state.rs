@@ -377,7 +377,12 @@ pub(super) fn build(ctx: &Ctx, query: &Query) -> StateDoc {
     let slots_env = ctx.settings.slots_env.as_deref();
     let capacity = effective_capacity(&ctx.paths, slots_env).unwrap_or(1);
     let quick_room = ctx.settings.max_quick.saturating_sub(running.iter().filter(|r| r.is_quick()).count());
-    estimate_starts(&running, &mut queued, capacity, quick_room, now);
+    let light_room = if ctx.settings.light_guard.closes_at(crate::sysinfo::memory_pressure()) {
+        0
+    } else {
+        ctx.settings.max_light.saturating_sub(running.iter().filter(|r| r.is_light()).count())
+    };
+    estimate_starts(&running, &mut queued, capacity, (quick_room, light_room), now);
     // A quick run's number is not one of the slots.
     let used: Vec<(u32, &crate::job::RunId)> = snap
         .running
@@ -466,18 +471,22 @@ fn machines(ctx: &Ctx, snap: &Snapshot, capacity: u32) -> Vec<MachineView> {
     out
 }
 
-/// When each waiter should start, shown as its estimated start. A quick waiter that the
-/// quick lane has room for, and whose group is free, starts now; any other is reckoned with
-/// the slots, which it takes when the lane is full.
-fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, quick_room: usize, now: Timestamp) {
+/// When each waiter should start, shown as its estimated start. A quick or light waiter
+/// that its lane has room for (`room`: quick, light), and whose group is free, starts now;
+/// any other is reckoned with the slots, which it takes when its lane is full.
+fn estimate_starts(running: &[RunView], queued: &mut [RunView], capacity: u32, room: (usize, usize), now: Timestamp) {
     let now = now.epoch_seconds();
-    let busy = running.iter().filter(|r| !r.is_quick()).map(|r| r.timing.remaining_estimate.map(|left| now + left));
+    let busy = running
+        .iter()
+        .filter(|r| !r.is_quick() && !r.is_light())
+        .map(|r| r.timing.remaining_estimate.map(|left| now + left));
     let mut free_at: Vec<Option<f64>> = busy.collect();
     free_at.resize(free_at.len().max(capacity as usize), Some(now));
-    let mut room = quick_room;
+    let (mut quick_room, mut light_room) = room;
     let (quick, slot): (Vec<&mut RunView>, Vec<&mut RunView>) = queued.iter_mut().partition(|v| {
-        let starts_now = v.is_quick() && v.group_busy != Some(true) && room > 0;
-        room -= usize::from(starts_now);
+        let room = if v.is_quick() { &mut quick_room } else { &mut light_room };
+        let starts_now = (v.is_quick() || v.is_light()) && v.group_busy != Some(true) && *room > 0;
+        *room -= usize::from(starts_now);
         starts_now
     });
     for view in quick {

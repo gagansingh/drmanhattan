@@ -53,6 +53,12 @@ struct StatusDoc<'a> {
     /// Quick runs here now, and how many may run at once; they take no slot.
     quick: usize,
     quick_capacity: usize,
+    /// Light runs here now beside the slots, and how many may run at once.
+    light: usize,
+    light_capacity: usize,
+    /// Why the light lane takes nothing now, when it does: the machine is short of memory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    light_closed: Option<String>,
     /// The running daemon's version, or this command's when none runs.
     version: String,
     /// This command's version, when the daemon still runs another: it restarts into it.
@@ -94,6 +100,9 @@ struct RunningDoc<'a> {
     /// A quick run: it takes no slot either; `slot` is only its `DRMANHATTAN_SLOT`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     quick: bool,
+    /// A run in the light lane: it takes no slot either.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    light_lane: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     ready: Option<bool>,
     run_id: &'a RunId,
@@ -134,6 +143,9 @@ struct WaiterDoc<'a> {
     group: Option<&'a str>,
     /// Whether it starts without waiting for a slot, and why (see `HistoryIndex::lane`).
     quick: bool,
+    /// Whether it waits for a place in the light lane (its job says `light`).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    light_lane: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     lane_reason: Option<&'a str>,
     job_file: &'a PathBuf,
@@ -211,6 +223,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
     let ranked = rank(records.iter().filter(|r| r.state == State::Queued), &read_manual_order(paths), now);
     let here = running.iter().filter(|r| r.machine.is_none() && r.holds_slot()).count();
     let quick = running.iter().filter(|r| r.quick).count();
+    let light = running.iter().filter(|r| r.light_lane).count();
     let state = match &daemon {
         None => "stopped",
         Some(_) if running.is_empty() => "idle",
@@ -237,6 +250,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
             prepare: r.prepare_status.as_ref().map(|p| p.state),
             group: r.job.group.as_deref(),
             quick: r.quick,
+            light_lane: r.light_lane,
             lane_reason: r.lane_reason.as_deref(),
             job_file: &r.job.job_file,
             source: r.job.source.as_ref(),
@@ -250,6 +264,18 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
     });
     let (version, installed) = versions(daemon.as_ref());
     let daemon_quick = daemon.as_ref().and_then(|d| d.info.as_ref()).and_then(|i| i.max_quick);
+    // The daemon's own settings; with none running (or one from before the light lane), this
+    // command's.
+    let own = crate::settings::Settings::from_env().ok();
+    let info = daemon.as_ref().and_then(|d| d.info.as_ref());
+    let light_capacity = info.and_then(|i| i.max_light).or(own.as_ref().map(|s| s.max_light)).unwrap_or(0);
+    let guard = info
+        .and_then(|i| i.light_guard.as_deref())
+        .and_then(crate::settings::LightGuard::named)
+        .or(own.as_ref().map(|s| s.light_guard));
+    let pressure = crate::sysinfo::memory_pressure();
+    let light_closed = (light_capacity > 0 && guard.is_some_and(|g| g.closes_at(pressure)))
+        .then(|| format!("memory pressure is {}", pressure.unwrap_or("unknown")));
     Ok(StatusDoc {
         state,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
@@ -258,8 +284,10 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
         capacity,
         quick,
         // The daemon's own; with none running (or one from before 0.7.0), this command's.
-        quick_capacity: daemon_quick
-            .unwrap_or_else(|| crate::settings::Settings::from_env().map_or(0, |s| s.max_quick)),
+        quick_capacity: daemon_quick.or(own.as_ref().map(|s| s.max_quick)).unwrap_or(0),
+        light,
+        light_capacity,
+        light_closed,
         version,
         installed,
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
@@ -275,6 +303,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
                 machine: r.machine.as_deref(),
                 service: r.job.service,
                 quick: r.quick,
+                light_lane: r.light_lane,
                 ready: r.job.service.then_some(r.ready_at.is_some()),
                 run_id: &r.run_id,
                 label: &r.job.label,
@@ -338,9 +367,11 @@ fn print_text(doc: &StatusDoc) {
         kv("active", doc.active),
         kv("capacity", doc.capacity),
         kv("quick", format!("{}/{}", doc.quick, doc.quick_capacity)),
+        kv("light", format!("{}/{}", doc.light, doc.light_capacity)),
         kv("version", &doc.version),
         kv("auto_update", if doc.auto_update { "on" } else { "off" }),
     ];
+    head.extend(doc.light_closed.as_ref().map(|why| kv("light_closed", why)));
     if let Some(installed) = doc.installed {
         head.extend([kv("installed", installed), kv("running", &doc.version), kv("restart", "pending")]);
     }
@@ -356,7 +387,13 @@ fn print_text(doc: &StatusDoc) {
         println!("update available={} url={} run=`drmanhattan update`", u.version, u.url);
     }
     for r in &doc.running {
-        let mut line = vec![if r.quick { kv("lane", "quick") } else { kv("slot", r.slot.unwrap_or(0)) }];
+        let mut line = vec![if r.quick {
+            kv("lane", "quick")
+        } else if r.light_lane {
+            kv("lane", "light")
+        } else {
+            kv("slot", r.slot.unwrap_or(0))
+        }];
         line.extend(r.machine.map(|m| kv("machine", m)));
         if r.service {
             line.push(kv("service", if r.ready == Some(true) { "ready" } else { "starting" }));
@@ -396,7 +433,16 @@ fn print_text(doc: &StatusDoc) {
         let mut line = line.to_vec();
         line.extend(w.prepare.map(|p| kv("prepare", p.as_str())));
         line.extend(w.group.map(|g| kv("group", g)));
-        line.push(kv("lane", if w.quick { "quick" } else { "slot" }));
+        line.push(kv(
+            "lane",
+            if w.quick {
+                "quick"
+            } else if w.light_lane {
+                "light"
+            } else {
+                "slot"
+            },
+        ));
         line.extend(w.lane_reason.map(|r| kv("reason", r)));
         println!("{}", line.join(" "));
     }
