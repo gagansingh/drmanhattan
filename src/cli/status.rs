@@ -20,7 +20,7 @@ use crate::time::{human, Timestamp};
 const STATUS: Spec = Spec {
     usage: "\
 usage: drmanhattan status [<run>] [--json] [--inbox DIR]
-       drmanhattan status --session ID [--limit N] [--json]
+       drmanhattan status [--session ID] [--limit N] [--json]
 
 Shows the queue: whether the daemon is running, the slots in use, and the waiting jobs in
 the order they will start. Text output is one `key=value` line per item (values with
@@ -28,7 +28,8 @@ spaces are quoted); --json prints the same as one JSON document.
 
 --session ID shows only the runs one session or thread submitted (its source's session,
 as `submit` records it), and adds its newest finished runs, at most N (default 10). The
-first line, and each waiter's position, still describe the whole queue.
+first line, and each waiter's position, still describe the whole queue. --limit N without
+--session adds the whole queue's newest N finished runs.
 
 With <run> (a run id, its short id, or a job's name), shows that run instead: one line
 run_id=… state=… job=… exit=…, or with --json its whole record as .status.json has it,
@@ -67,7 +68,7 @@ struct StatusDoc<'a> {
     session: Option<&'a str>,
     running: Vec<RunningDoc<'a>>,
     waiters: Vec<WaiterDoc<'a>>,
-    /// With `--session`: its newest finished runs, newest first.
+    /// With `--session` or `--limit`: the newest finished runs (the session's), newest first.
     #[serde(skip_serializing_if = "Option::is_none")]
     finished: Option<Vec<FinishedDoc<'a>>>,
     /// The workers in config.json (see `drmanhattan workers`).
@@ -164,15 +165,16 @@ struct FinishedDoc<'a> {
     source: Option<&'a Source>,
 }
 
-/// What `--session` narrows the document to.
+/// What `--session` narrows the document to, and how many finished runs it adds
+/// (`--limit`, also without `--session`).
 struct SessionFilter<'a> {
-    session: &'a str,
+    session: Option<&'a str>,
     limit: usize,
 }
 
 impl SessionFilter<'_> {
     fn has(&self, r: &Record) -> bool {
-        r.job.source.as_ref().and_then(|s| s.session.as_deref()) == Some(self.session)
+        self.session.map_or(true, |session| r.job.source.as_ref().and_then(|s| s.session.as_deref()) == Some(session))
     }
 }
 
@@ -181,14 +183,11 @@ pub(super) fn status(rest: &[String]) -> Result<i32> {
     if let Some(run) = a.positional.first() {
         return super::runs::status_of(&a, run);
     }
+    let limit: Option<usize> = a.parsed("limit", "a number of runs")?;
     let session = match a.get("session").map(str::trim) {
         Some("") => return crate::error::invalid("--session needs a session or thread id"),
-        Some(session) => {
-            let limit: Option<usize> = a.parsed("limit", "a number of runs")?;
-            Some(SessionFilter { session, limit: limit.unwrap_or(DEFAULT_FINISHED) })
-        }
-        None if a.get("limit").is_some() => return crate::error::invalid("--limit goes with --session"),
-        None => None,
+        Some(session) => Some(SessionFilter { session: Some(session), limit: limit.unwrap_or(DEFAULT_FINISHED) }),
+        None => limit.map(|limit| SessionFilter { session: None, limit }),
     };
     let paths = Paths::from_env();
     let records = read_records(&paths);
@@ -266,7 +265,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
         auto_update_state: crate::update::auto_update_summary(paths),
         update: crate::update::available(paths),
-        session: filter.map(|f| f.session),
+        session: filter.and_then(|f| f.session),
         finished,
         running: running
             .into_iter()
