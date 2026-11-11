@@ -99,6 +99,8 @@ pub(crate) fn serve(paths: Paths, settings: Settings, opts: ServeOptions) -> Res
         url: None,
         slots_env: settings.slots_env.clone(),
         max_quick: Some(settings.max_quick),
+        max_light: Some(settings.max_light),
+        light_guard: Some(settings.light_guard.name().to_string()),
         shell_env: Some(shell_env.summary.clone()),
         shell_env_read_at: shell_env.read_at,
         shell_env_reload: None,

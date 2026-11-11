@@ -303,3 +303,87 @@ fn a_quick_job_takes_a_free_slot_when_the_quick_lane_is_full() {
     d.wait_exit("q1", T);
     d.wait_exit("q2", T);
 }
+
+/// The light lane, open whatever the test machine's memory pressure.
+fn light_daemon(extra: &[(&'static str, &'static str)]) -> Daemon {
+    let mut env = vec![("DRMANHATTAN_LIGHT_PRESSURE", "off")];
+    env.extend_from_slice(extra);
+    Daemon::start(&env)
+}
+
+#[test]
+fn light_jobs_start_beside_a_busy_slot_up_to_the_lanes_limit() {
+    let d = light_daemon(&[("DRMANHATTAN_LIGHT", "1")]);
+    d.submit("blocker", d.job("sleep 30"));
+    d.wait_state("blocker", "running", T);
+    let light = |secs: &str| json!({"command": ["sleep", secs], "cwd": d.work, "light": true});
+    d.submit("l1", light("3"));
+    let l1 = d.wait_state("l1", "running", T);
+    assert_eq!(l1["light_lane"], true, "{l1}");
+    assert!(l1["slot"].as_u64().unwrap() > 256, "its DRMANHATTAN_SLOT is above any slot: {l1}");
+    assert!(d.log_of("l1").contains("started beside the slots (light)"), "{}", d.log_of("l1"));
+    // One place in the lane: the second light job waits for it. A job that does not say it
+    // is light waits for the slot, however short.
+    d.submit("l2", light("1"));
+    d.submit("plain", d.job("sleep 1"));
+    let l2 = d.wait_state("l2", "queued", T);
+    assert_eq!(l2["light_lane"], true, "{l2}");
+    let st = d.status_json();
+    assert_eq!((&st["active"], &st["light"], &st["light_capacity"]), (&json!(1), &json!(1), &json!(1)), "{st}");
+    let waiter = |label: &str| {
+        let w = st["waiters"].as_array().unwrap().iter().find(|w| w["label"] == label).cloned();
+        w.unwrap_or_else(|| panic!("{label} is not waiting: {st}"))
+    };
+    assert_eq!(waiter("l2")["lane_reason"], "it says it is light", "{st}");
+    assert_eq!(waiter("l2")["light_lane"], true, "{st}");
+    assert_eq!(d.wait_exit("l2", T), 0);
+    assert!(started(&d, "l2") >= epoch(&d.status_of("l1").unwrap()["finished_at"]) - 0.5);
+    assert_eq!(d.status_of("l2").unwrap()["light_lane"], true, "it ran in the lane, beside the blocker");
+    assert_eq!(d.status_of("plain").unwrap()["state"], "queued", "the slot is still the blocker's");
+    fs::write(d.inbox.join("blocker.cancel"), "").unwrap();
+    assert_eq!(d.wait_exit("plain", T), 0);
+    assert!(d.status_of("plain").unwrap().get("light_lane").is_none());
+}
+
+#[test]
+fn a_light_job_takes_a_free_slot_when_the_light_lane_is_full_or_off() {
+    let d = light_daemon(&[("DRMANHATTAN_LIGHT", "1"), ("DRMANHATTAN_SLOTS", "2")]);
+    let light = || json!({"command": ["sleep", "4"], "cwd": d.work, "light": true});
+    d.submit("l1", light());
+    assert_eq!(d.wait_state("l1", "running", T)["light_lane"], true);
+    d.submit("l2", light());
+    let l2 = d.wait_state("l2", "running", T);
+    assert!(l2.get("light_lane").is_none() && l2["slot"].as_u64().unwrap() <= 2, "it took a slot: {l2}");
+    assert_eq!(d.status_json()["active"], 1, "only the one in a slot holds one");
+    // A worker reports only what holds its slots.
+    let stats = d.cmd(&["machine-stats"]).output().unwrap();
+    let stats: serde_json::Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["running"], 1, "{stats}");
+    d.wait_exit("l1", T);
+    d.wait_exit("l2", T);
+
+    // Off: `light` changes nothing, and the waiter says why.
+    let d = light_daemon(&[("DRMANHATTAN_LIGHT", "0")]);
+    d.submit("blocker", d.job("sleep 3"));
+    d.wait_state("blocker", "running", T);
+    d.submit("l", json!({"command": ["true"], "cwd": d.work, "light": true}));
+    let w = d.wait_state("l", "queued", T);
+    assert!(w.get("light_lane").is_none() && w["lane_reason"].as_str().unwrap().contains("light lane is off"), "{w}");
+    assert_eq!(d.wait_exit("l", T), 0);
+    assert!(started(&d, "l") >= epoch(&d.status_of("blocker").unwrap()["finished_at"]) - 0.5);
+}
+
+#[test]
+fn a_light_job_keeps_its_group_and_a_service_cannot_be_light() {
+    let d = light_daemon(&[]);
+    let job = |secs: &str| json!({"command": ["sleep", secs], "cwd": d.work, "light": true, "group": "device"});
+    d.submit("g1", job("3"));
+    d.wait_state("g1", "running", T);
+    d.submit("g2", job("1"));
+    assert_eq!(d.wait_state("g2", "queued", T)["light_lane"], true, "the lane has room, its group does not");
+    assert_eq!(d.wait_exit("g2", T), 0);
+    assert!(started(&d, "g2") >= epoch(&d.status_of("g1").unwrap()["finished_at"]) - 0.5);
+    d.submit("svc", json!({"command": ["sleep", "5"], "cwd": d.work, "service": true, "light": true}));
+    let rejected = wait_for(T, || d.status_of("svc").filter(|s| s["state"] == "rejected" || s.get("error").is_some()));
+    assert!(rejected.is_some_and(|s| s.to_string().contains("light")), "a service that says light is refused");
+}

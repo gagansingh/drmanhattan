@@ -53,7 +53,9 @@ pub(super) struct RunView {
     service: bool,
     /// A quick run, or a quick waiter: it starts without waiting for a slot.
     quick: bool,
-    /// Why it is quick, or waits for a slot.
+    /// A run in the light lane, or a waiter for it: it starts beside the slots.
+    light: bool,
+    /// Why it is quick or light, or waits for a slot.
     lane_reason: Option<String>,
     /// A service's port, when it is ready by its port.
     port: Option<u16>,
@@ -125,6 +127,10 @@ impl RunView {
         self.quick
     }
 
+    pub(super) fn is_light(&self) -> bool {
+        self.light
+    }
+
     /// The (load-scaled) typical duration the view shows.
     pub(super) fn typical_seconds(&self) -> Option<f64> {
         self.typical_seconds
@@ -166,6 +172,7 @@ impl RunView {
             remote_fallback: rec.remote_fallback.clone(),
             service: job.service,
             quick: rec.quick,
+            light: rec.light_lane,
             lane_reason: rec.lane_reason.clone(),
             port: match &job.ready {
                 Some(crate::job::Ready::Port(p)) => Some(*p),

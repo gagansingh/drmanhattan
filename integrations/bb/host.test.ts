@@ -103,6 +103,12 @@ describe("parseStatus", () => {
     expect(queue.finished[0]).toMatchObject({ state: "failed", exit: 101, durationSeconds: 41 });
   });
 
+  it("gives a run in the light lane no slot: its number is not one", () => {
+    const running = [{ ...JSON.parse(STATUS).running[0], slot: 257, light_lane: true }];
+    const queue = parseStatus(JSON.stringify({ ...JSON.parse(STATUS), running }));
+    expect(queue.running.map((run) => [run.state, run.slot])).toEqual([["running", null]]);
+  });
+
   it("links a run to the bb thread that queued it", () => {
     const queue = parseStatus(STATUS);
     expect(queue.running.map((run) => run.threadId)).toEqual(["thr_a", null]);

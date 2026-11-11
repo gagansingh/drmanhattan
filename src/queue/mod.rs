@@ -77,6 +77,8 @@ pub(crate) struct Queue {
     pub(crate) settings: Settings,
     pub(crate) inbox: PathBuf,
     pub(crate) runs: BTreeMap<RunId, Entry>,
+    /// The light lane is taking nothing: the machine is short of memory (see `admit`).
+    light_closed: bool,
     /// The newest rows of `history.jsonl`, which the load model reads.
     pub(crate) history: Vec<HistoryRow>,
     /// All of it, by what the estimates and lanes match on.
@@ -89,6 +91,10 @@ pub(crate) struct Queue {
     /// The activity patterns of a job that gives none: `config.json`'s, else the markers.
     pub(crate) default_patterns: Arc<Patterns>,
 }
+
+/// A waiting run's lanes: whether it is quick, whether it waits for the light lane, and why
+/// (see `Queue::lanes`).
+type Lanes = (bool, bool, Option<String>);
 
 pub(crate) type Shared = Arc<Mutex<Queue>>;
 
@@ -111,6 +117,7 @@ impl Queue {
             settings,
             inbox,
             runs: BTreeMap::new(),
+            light_closed: false,
         }
     }
 
@@ -164,21 +171,35 @@ impl Queue {
         Some(self.index.lane(&job.category, &job.label, job.variant.as_deref().unwrap_or_default(), script))
     }
 
+    /// Where a waiting job starts: (quick, light, why), as `Lanes`. A quick job is quick whatever it says
+    /// of itself; a job that says it is light goes to the light lane when it runs here, on
+    /// this machine's own account, and the lane is on.
+    fn lanes(&self, job: &Job) -> Lanes {
+        let lane = self.lane(job);
+        let quick = lane.as_ref().is_some_and(|l| l.quick);
+        if quick || !job.light || job.service || job.remote != RemoteMode::Never || job.dispatched_from.is_some() {
+            return (quick, false, lane.map(|l| l.reason));
+        }
+        if self.settings.max_light == 0 {
+            return (false, false, Some("the light lane is off (DRMANHATTAN_LIGHT=0)".into()));
+        }
+        (false, true, Some("it says it is light".into()))
+    }
+
     /// Decides the lane of every waiting run again: a run that finished may have shown a
     /// command to be quick, or not. Persists the runs whose lane changed.
     pub(crate) fn refresh_lanes(&mut self) {
-        let changed: Vec<(RunId, Option<Lane>)> = self
+        let changed: Vec<(RunId, Lanes)> = self
             .records(State::Queued)
             .filter_map(|r| {
-                let lane = self.lane(&r.job);
-                let now = (lane.as_ref().is_some_and(|l| l.quick), lane.as_ref().map(|l| &l.reason));
-                (now != (r.quick, r.lane_reason.as_ref())).then(|| (r.run_id.clone(), lane))
+                let lanes = self.lanes(&r.job);
+                let now = (lanes.0, lanes.1, lanes.2.as_ref());
+                (now != (r.quick, r.light_lane, r.lane_reason.as_ref())).then(|| (r.run_id.clone(), lanes))
             })
             .collect();
-        for (run_id, lane) in changed {
+        for (run_id, (quick, light, reason)) in changed {
             if let Some(e) = self.runs.get_mut(&run_id) {
-                e.rec.quick = lane.as_ref().is_some_and(|l| l.quick);
-                e.rec.lane_reason = lane.map(|l| l.reason);
+                (e.rec.quick, e.rec.light_lane, e.rec.lane_reason) = (quick, light, reason);
                 self.persist(&run_id);
             }
         }
@@ -202,10 +223,9 @@ impl Queue {
         ];
         log::event(Tone::Quiet, "queued", &job.label, Some(&run_id), &details);
         let group = job.group.clone();
-        let lane = self.lane(&job);
+        let lanes = self.lanes(&job);
         let mut rec = Record::new(run_id.clone(), job, expected, skip_after);
-        rec.quick = lane.as_ref().is_some_and(|l| l.quick);
-        rec.lane_reason = lane.map(|l| l.reason);
+        (rec.quick, rec.light_lane, rec.lane_reason) = lanes;
         self.runs.insert(run_id.clone(), Entry { rec, live: None, restart: false });
         self.persist(&run_id);
         if let Some(group) = group {

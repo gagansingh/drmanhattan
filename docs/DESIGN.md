@@ -50,6 +50,16 @@ a run finishes or the daemon recovers; the record keeps it with its reason (`qui
 `lane_reason`). A quick run's `DRMANHATTAN_SLOT` is the lowest number above any slot there can
 be (257 up) that no run here holds, and nothing that counts slots counts it.
 
+A light waiter (its job says `light`) is admitted the same way into a lane of its own, of
+`DRMANHATTAN_LIGHT` places. The two lanes answer different questions. Quick is about time,
+which history knows: a command that ends within seconds cannot hold anything up. Light is
+about what a job uses, which history does not record: a job may run for minutes and leave
+the machine idle. So quick is inferred and light is declared, and what bounds a wrong
+declaration is the lane's size. The lane also closes while the kernel reports memory
+pressure (`LightGuard`): on a machine that is swapping, one more process slows every run,
+and waiting for a slot costs a light job nothing it would not have paid before the lane
+existed. The pressure is read only on a pass where a light job is waiting.
+
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting
 forever behind a stream of short ones.

@@ -8,6 +8,7 @@ Everything drmanhattan does, in detail. The [README](../README.md) is the short 
 - [Services: servers that keep running](#services-servers-that-keep-running)
 - [Preparing while waiting](#preparing-while-waiting)
 - [Quick commands](#quick-commands)
+- [Light jobs](#light-jobs)
 - [One at a time: groups](#one-at-a-time-groups)
 - [Failing on output](#failing-on-output)
 - [Progress markers](#progress-markers)
@@ -51,11 +52,12 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `group` | a concurrency group: one of its jobs runs at a time, and only the newest waits (see below) |
 | `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
 | `tty` | `true` runs it under a pseudo-terminal (see below) |
+| `light` | `true`: it leaves the machine mostly free and may start beside the slots (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
-`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 257 up)
+`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick or light run, a number from 257 up)
 set, besides its `env`. No two jobs running here at once share a `DRMANHATTAN_SLOT` (a
 service gets 0), so it can name a per-slot cache or scratch directory.
 
@@ -196,6 +198,39 @@ may run on a worker, and jobs sent from another machine are never quick.
   each waiter; `.status.json` has `quick` and `lane_reason`. The dashboard marks quick runs
   and gives each waiter's reason on hover. A quick run's log starts
   `… started at once (quick)`.
+
+## Light jobs
+
+A slot is for a job that uses the machine: a build, a test suite. Some jobs take minutes
+and use almost none of it, because they wait on something else: tests that drive a phone or
+an emulator, a deploy that waits on a remote build, a sync over the network. Behind one
+slot they queue for nothing. The queue cannot tell such a job from a build, since history
+records how long a command took and not what it used, so the job says it itself:
+
+```json
+{"command": ["./run-device-tests.sh"], "light": true}
+```
+
+- A light job starts beside the slots, in the light lane, while fewer than
+  `DRMANHATTAN_LIGHT` light jobs (2) are running there. When the lane is full it waits for
+  a place in it, or takes a free slot. `DRMANHATTAN_LIGHT=0` turns the lane off: `light`
+  then changes nothing.
+- The lane takes nothing while the machine is short of memory: the kernel's memory
+  pressure is `warn` or `critical` (macOS; elsewhere there is no reading and the lane stays
+  open). Light jobs then take slots in turn like any other.
+  `DRMANHATTAN_LIGHT_PRESSURE=critical` closes it only at `critical`, and `off` never. The
+  daemon's log says when the lane closes and opens (`light closed`, `light open`).
+- Light jobs keep their place in the order: priority, overdue and shortest-first apply
+  among them as among the rest. A group still runs one job at a time.
+- It is the submitter's word, and the limit is what bounds a wrong one: at most
+  `DRMANHATTAN_LIGHT` jobs ever run beside the slots this way. Mark only commands that
+  leave the cores and memory free, not ones that are merely short: two builds side by side
+  are what slots exist to prevent.
+- A job that history shows to be quick is quick, whatever it says. A service, a job that
+  may run on a worker, and a job sent from another machine are never light.
+- `submit --light` sets it. `status` shows `light=N/M`, `lane=light` for a light run and
+  for a waiter, and `light_closed=…` while the lane is closed; `.status.json` has
+  `light_lane`. A light run's log starts `… started beside the slots (light)`.
 
 ## One at a time: groups
 
@@ -468,6 +503,8 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once, up to 256 (also `drmanhattan slots N`) |
 | `DRMANHATTAN_QUICK` | cores | quick jobs that may run at once, beside the slots; `0` turns them off |
+| `DRMANHATTAN_LIGHT` | 2 | jobs that say `light` that may run at once, beside the slots; `0` turns them off |
+| `DRMANHATTAN_LIGHT_PRESSURE` | warn | the memory pressure that closes the light lane: `warn`, `critical` or `off` |
 | `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
 | `DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS` | 10 | how long the login shell may take to print its environment |
 | `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |

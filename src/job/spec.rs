@@ -96,6 +96,10 @@ pub(crate) struct JobSpec {
     /// Run under a pseudo-terminal, for commands that need one.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) tty: bool,
+    /// The job leaves this machine's cores and memory mostly free (it waits on a device, an
+    /// emulator, a network): it may start beside the slots, in the light lane.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) light: bool,
 }
 
 /// A command as an argv list, or a string run with `/bin/sh -c`.
@@ -185,6 +189,9 @@ pub(crate) struct Job {
     pub(crate) ttl: Option<u64>,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) tty: bool,
+    /// Says it needs no slot to itself (see `JobSpec::light`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) light: bool,
     /// The claimed job file's identity, so recovery can tell this job's file from that of a
     /// later job reusing the name. Set when the file is claimed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -237,6 +244,9 @@ impl JobSpec {
             Patterns::compile(cfg)?; // a bad regex is reported now, not when the job runs
         }
         compile_fail_patterns(&self.fail_patterns)?;
+        if self.service && self.light {
+            return invalid("a service takes no slot as it is: drop \"light\"");
+        }
         if !self.service && (self.ready.is_some() || self.ready_timeout.is_some() || self.ttl.is_some()) {
             return invalid("ready, ready_timeout and ttl are for services: add \"service\": true");
         }
@@ -279,6 +289,7 @@ impl JobSpec {
             ready: self.ready,
             service: self.service,
             tty: self.tty,
+            light: self.light,
             claim: None,
         })
     }
@@ -421,6 +432,7 @@ mod tests {
             (r#"{"command": ["true"], "service": true, "ready": {"log": "("}}"#, "ready.log"),
             (r#"{"command": ["true"], "service": true, "ready": {"pid": 1}}"#, "unknown variant"),
             (r#"{"command": ["true"], "service": true, "ttl": -1}"#, "ttl must be"),
+            (r#"{"command": ["true"], "service": true, "light": true}"#, "drop \"light\""),
             (r#"{"command": ["true"], "sync": ["relative/path"]}"#, "sync paths must be absolute"),
             (r#"{"command": ["true"], "sync": [{"path": "/a", "exclud": []}]}"#, "each sync entry"),
         ] {
@@ -459,6 +471,7 @@ mod tests {
             ready_timeout: None,
             ttl: None,
             tty: false,
+            light: false,
         };
         let text = serde_json::to_string(&spec).unwrap();
         assert_eq!(text, r#"{"command":["make"],"cwd":"/tmp","label":"x","timeout":60.0,"source":"Codex"}"#);

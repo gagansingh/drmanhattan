@@ -161,7 +161,11 @@ pub(crate) struct Record {
     /// A quick run: it starts without waiting for a slot (see `HistoryIndex::lane`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub(crate) quick: bool,
-    /// Why it is quick, or waits for a slot; none for a service.
+    /// A light run (its job says `light`) in the light lane, or waiting for a place in it: it
+    /// starts beside the slots. False once it has taken a slot instead.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub(crate) light_lane: bool,
+    /// Why it is quick or light, or waits for a slot; none for a service.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) lane_reason: Option<String>,
 }
@@ -211,6 +215,7 @@ impl Record {
             remote_fallback: None,
             ready_at: None,
             quick: false,
+            light_lane: false,
             lane_reason: None,
             job,
         }
@@ -234,9 +239,10 @@ impl Record {
         })
     }
 
-    /// Holds one of its machine's slots: neither a service nor a quick run.
+    /// Holds one of its machine's slots: not a service, nor a run in the quick or the light
+    /// lane.
     pub(crate) fn holds_slot(&self) -> bool {
-        !self.job.service && !self.quick
+        !self.job.service && !self.quick && !self.light_lane
     }
 
     /// Queued, and its `prepare` (if it has one) has succeeded: it may take a slot.
@@ -308,6 +314,7 @@ mod tests {
             "prepare_status",
             "remote_run",
             "quick",
+            "light_lane",
             "lane_reason",
         ];
         for key in record_only {

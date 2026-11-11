@@ -118,6 +118,9 @@ Each item links to its section of [docs/REFERENCE.md](docs/REFERENCE.md).
 
 - **[Quick commands](docs/REFERENCE.md#quick-commands)**: a command whose runs here nearly
   always took under 30 seconds starts beside the slots, without waiting.
+- **[Light jobs](docs/REFERENCE.md#light-jobs)**: a job that waits on a device or a network
+  says `"light": true` and starts beside the slots too, a couple at a time, unless the
+  machine is short of memory.
 - **[Job files](docs/REFERENCE.md#job-files)**: any program can queue a job by writing a
   JSON file into the inbox. The log, status and exit code appear beside it, and `wait`,
   `follow` and `cancel` work on any run.
