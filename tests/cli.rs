@@ -220,7 +220,14 @@ fn a_bb_thread_finds_its_own_runs_with_status_session() {
     let all = d.status_json();
     assert!(all.get("finished").is_none() && all.get("session").is_none());
     assert_eq!(all["running"][0]["source"]["tool"], "bb");
-    assert_eq!(d.cmd(&["status", "--limit", "3"]).output().unwrap().status.code(), Some(2));
+    // --limit alone adds the whole queue's newest finished runs.
+    let out = d.cmd(&["status", "--json", "--limit", "2"]).output().unwrap();
+    let whole: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert!(whole.get("session").is_none(), "{whole}");
+    let ids: Vec<_> = whole["finished"].as_array().unwrap().iter().map(|f| f["run_id"].clone()).collect();
+    assert_eq!(ids, [d.status_of("b1").unwrap()["run_id"].clone(), d.status_of("a2").unwrap()["run_id"].clone()]);
+    assert_eq!(whole["finished"][0]["source"]["session"], "thr_b");
+    assert_eq!(whole["running"].as_array().unwrap().len(), 1);
     assert_eq!(d.cmd(&["cancel", "a3"]).output().unwrap().status.code(), Some(0));
 }
 

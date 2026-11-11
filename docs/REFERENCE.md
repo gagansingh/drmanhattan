@@ -8,6 +8,7 @@ Everything drmanhattan does, in detail. The [README](../README.md) is the short 
 - [Services: servers that keep running](#services-servers-that-keep-running)
 - [Preparing while waiting](#preparing-while-waiting)
 - [Quick commands](#quick-commands)
+- [Light jobs](#light-jobs)
 - [One at a time: groups](#one-at-a-time-groups)
 - [Failing on output](#failing-on-output)
 - [Progress markers](#progress-markers)
@@ -51,11 +52,12 @@ mv ~/.drmanhattan/inbox/tests.json.tmp ~/.drmanhattan/inbox/tests.json
 | `group` | a concurrency group: one of its jobs runs at a time, and only the newest waits (see below) |
 | `fail_patterns` | regular expressions that fail the job when a line of its output matches (see below) |
 | `tty` | `true` runs it under a pseudo-terminal (see below) |
+| `light` | `true`: it leaves the machine mostly free and may start beside the slots (see below) |
 
 Unknown fields are an error, so a typo is reported rather than ignored.
 
 A job runs with `DRMANHATTAN_RUN_ID` (its run id), `DRMANHATTAN_LOG` (its log) and
-`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick run, a number from 257 up)
+`DRMANHATTAN_SLOT` (the slot it holds, from 1; for a quick or light run, a number from 257 up)
 set, besides its `env`. No two jobs running here at once share a `DRMANHATTAN_SLOT` (a
 service gets 0), so it can name a per-slot cache or scratch directory.
 
@@ -111,7 +113,8 @@ drmanhattan status --session thr_7f3a9k2m4p --limit 3
 The session is the one `submit` recorded in the job's `source`. The first line and each
 waiter's position still describe the whole queue; `finished` (`finished run_id=… state=…
 exit=…` lines in text) lists the session's finished runs, newest first. Without `--session`,
-`status --json` gives each running and waiting run's `source` too.
+`status --json` gives each running and waiting run's `source` too, and `--limit N` adds the
+whole queue's newest N finished runs.
 
 `wait --timeout SECS` gives up with exit 124. `follow` prints the log's bytes unchanged, so
 a reader that loses its place (a dropped connection) resumes with `--from` set to the bytes
@@ -195,6 +198,39 @@ may run on a worker, and jobs sent from another machine are never quick.
   each waiter; `.status.json` has `quick` and `lane_reason`. The dashboard marks quick runs
   and gives each waiter's reason on hover. A quick run's log starts
   `… started at once (quick)`.
+
+## Light jobs
+
+A slot is for a job that uses the machine: a build, a test suite. Some jobs take minutes
+and use almost none of it, because they wait on something else: tests that drive a phone or
+an emulator, a deploy that waits on a remote build, a sync over the network. Behind one
+slot they queue for nothing. The queue cannot tell such a job from a build, since history
+records how long a command took and not what it used, so the job says it itself:
+
+```json
+{"command": ["./run-device-tests.sh"], "light": true}
+```
+
+- A light job starts beside the slots, in the light lane, while fewer than
+  `DRMANHATTAN_LIGHT` light jobs (2) are running there. When the lane is full it waits for
+  a place in it, or takes a free slot. `DRMANHATTAN_LIGHT=0` turns the lane off: `light`
+  then changes nothing.
+- The lane takes nothing while the machine is short of memory: the kernel's memory
+  pressure is `warn` or `critical` (macOS; elsewhere there is no reading and the lane stays
+  open). Light jobs then take slots in turn like any other.
+  `DRMANHATTAN_LIGHT_PRESSURE=critical` closes it only at `critical`, and `off` never. The
+  daemon's log says when the lane closes and opens (`light closed`, `light open`).
+- Light jobs keep their place in the order: priority, overdue and shortest-first apply
+  among them as among the rest. A group still runs one job at a time.
+- It is the submitter's word, and the limit is what bounds a wrong one: at most
+  `DRMANHATTAN_LIGHT` jobs ever run beside the slots this way. Mark only commands that
+  leave the cores and memory free, not ones that are merely short: two builds side by side
+  are what slots exist to prevent.
+- A job that history shows to be quick is quick, whatever it says. A service, a job that
+  may run on a worker, and a job sent from another machine are never light.
+- `submit --light` sets it. `status` shows `light=N/M`, `lane=light` for a light run and
+  for a waiter, and `light_closed=…` while the lane is closed; `.status.json` has
+  `light_lane`. A light run's log starts `… started beside the slots (light)`.
 
 ## One at a time: groups
 
@@ -377,7 +413,7 @@ memory, temperature and battery (amber at 20% on battery, when it says to plug i
 for the daemon, which then decides); drag a waiting job to reorder it.
 
 Finished runs are listed 20 at a time, newest first, with "‹ newer" and "older ›" to step
-through every run still kept (`DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
+through every run still kept (the newest 400, for at most `DRMANHATTAN_LOG_RETENTION_DAYS`). The filters (all, failed,
 passed, cancelled) and the search box (a run's name, command, folder or worker) count and page
 through all of them, not only the runs on screen. The newest page follows runs as they finish,
 except while the pointer is over the section, the keyboard is in it, or one of its runs' logs is
@@ -411,6 +447,13 @@ bb's plugin for drmanhattan, in [`integrations/bb`](../integrations/bb), goes fu
   waiting. Expanded, it lists them with their slot, place in line and time against their usual
   time, a button to cancel each, and a link to its log on the dashboard. The thread's Info tab
   lists its recent runs, passed or failed.
+- A drmanhattan page in bb's navigation shows the queue on every connected machine:
+  slots in use, running, waiting and the 15 newest finished runs (drmanhattan 0.9.0 or
+  later lists those), each with a link to its log, the thread that queued it and, while
+  active, a button to cancel it. It also opens the dashboard, which stays at its own address:
+  it refuses to be embedded in another page.
+- Archiving or deleting a thread stops the services it started (`--service`: dev servers,
+  databases) on every machine. A setting on the plugin's page turns this off.
 - `bb drmanhattan runs` lists a thread's runs, `bb drmanhattan status` the whole queue on a
   machine, and `bb drmanhattan cancel <run id>` cancels one of the thread's runs; `--json`
   for each.
@@ -460,6 +503,8 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once, up to 256 (also `drmanhattan slots N`) |
 | `DRMANHATTAN_QUICK` | cores | quick jobs that may run at once, beside the slots; `0` turns them off |
+| `DRMANHATTAN_LIGHT` | 2 | jobs that say `light` that may run at once, beside the slots; `0` turns them off |
+| `DRMANHATTAN_LIGHT_PRESSURE` | warn | the memory pressure that closes the light lane: `warn`, `critical` or `off` |
 | `DRMANHATTAN_SHELL_ENV` | 1 | `0`: jobs get the daemon's environment, not your login shell's |
 | `DRMANHATTAN_SHELL_ENV_TIMEOUT_SECONDS` | 10 | how long the login shell may take to print its environment |
 | `DRMANHATTAN_SERVICES` | 4 | services that may run at once (they take no slots) |
@@ -469,6 +514,7 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `DRMANHATTAN_MAX_SKIP_SECONDS` | 600 | the longest a job can be passed over by shorter ones |
 | `DRMANHATTAN_LOG_RETENTION_DAYS` | 7 | how long results and logs are kept |
 | `DRMANHATTAN_MAX_LOG_MB` | 1024 | the most one job's log may hold; past it the earlier output is dropped |
+| `DRMANHATTAN_MAX_FINISHED` | 400 | finished runs kept for `status` and the dashboard, newest first (1 to 499) |
 | `DRMANHATTAN_ARCHIVE_DAYS` | 90 | how long finished runs' records are kept |
 | `DRMANHATTAN_POLL_MS` | 200 | how often the inbox is checked when no change is noticed |
 | `DRMANHATTAN_HEARTBEAT_SECONDS` | 30 | how often a running job's load is sampled |
@@ -488,30 +534,40 @@ so run `drmanhattan` once in a terminal first, or add `--yes`.
 ## Updating
 
 ```
-drmanhattan update        # waits until no job is running or queued, then updates and restarts
+drmanhattan update        # between jobs: holds new starts until the running ones finish, then restarts
 drmanhattan update --now  # does not wait; running jobs end when the daemon restarts
 ```
 
 `update` installs the latest release over the running one (both commands, in the directory
 the running one lives in), after checking the archive's SHA-256, and restarts the daemon:
 through launchd or systemd when it runs as a service, else by starting the new version itself.
+A restart ends the jobs running on this machine, so once the new version is downloaded and
+checked, `update` holds new starts until those jobs have finished (`status` says
+`hold='update: …'`, and the dashboard's log `updating: new jobs wait while the running ones
+finish`), then restarts, which takes about a second. Jobs submitted meanwhile are queued as
+usual and keep their places, and `submit --wait` carries on waiting through the restart, so
+the queue pauses at most as long as the jobs already running take, not until it empties.
+Services and runs on workers don't hold the update up: services start again with the new
+daemon, and workers' runs carry on there. A hold whose `update` was killed holds nothing.
 A failed download or checksum leaves the installed version as it was; a directory it cannot
 write to gets a hint to rerun the installer. The daemon looks for a newer release every 4
 hours by the wall clock, so a laptop that slept past a check looks soon after it wakes, and a
 minute after it starts when the last look is older than that
 (`DRMANHATTAN_NO_UPDATE_CHECK=1` turns that off); when there is one, `status` says so and the
-dashboard's footer, which shows the version, offers an Update button while the queue is idle.
+dashboard's footer, which shows the version, offers an Update button.
 Until the daemon restarts into a newly installed version, `status` says `installed=0.6.2
 running=0.6.1 restart=pending` and the footer offers a Restart button; `drmanhattan update`
 then restarts it, waiting for the queue as usual.
 
 `drmanhattan update --auto on` (or the footer's toggle) lets the daemon install newer
-releases of the same major version by itself, once the queue has been empty for 5 minutes
-(`DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS`); new work restarts that wait, and it never updates
-mid-job. A new major version only shows the notice. A failed update leaves the running version
-and is tried again an hour later. `status` (`auto_update_state=`) and the footer toggle's
-tooltip say where it stands: `up to date (checked 2:10 PM, next ~6:10 PM)`, `0.6.1 found,
-waiting for 4 min idle`, `0.6.1 found, queue busy`, `updating` or `last attempt failed: …`.
+releases of the same major version by itself, as soon as it finds one, the same way: between
+jobs, never mid-job, however busy the queue is. A new major version only shows the notice. A
+failed update leaves the running version and is tried again an hour later. `status`
+(`auto_update_state=`) and the footer toggle's tooltip say where it stands: `up to date
+(checked 2:10 PM, next ~6:10 PM)`, `updating to 0.6.1 between jobs` or `last attempt failed:
+…`. A daemon older than 0.9.1 waits for an empty queue instead, and doesn't know the hold;
+on a queue that is never empty, update it once with `drmanhattan update --now`, at a moment
+when ending the running jobs is fine. From then on updates happen between jobs.
 After an update the daemon's log says `auto-updated 0.6.1 → 0.6.2`, and the dashboard shows
 a note you can dismiss. It is off by default; `status` shows the setting.
 
@@ -537,8 +593,13 @@ drmanhattan cleans up after itself, so it can run for months:
   output is dropped and the newest kept, since errors are usually at the end.
 - The daemon keeps its own output in `drmanhattan.log` in the data directory, rotated at 5 MB
   with one older copy.
-- Records of finished runs are kept for 90 days (`DRMANHATTAN_ARCHIVE_DAYS`), and the timing
-  history keeps at most its newest 30,000 runs.
+- `status` and the dashboard know the newest 400 finished runs
+  (`DRMANHATTAN_MAX_FINISHED`), so that reading them stays quick however busy the queue
+  gets: every `status` reads each one. An older run's own files still answer `status
+  <run>`, `wait` and `follow` until they are deleted.
+- Records of finished runs are kept in the archive for 90 days (`DRMANHATTAN_ARCHIVE_DAYS`),
+  and the timing history, which expected times come from, keeps at most its newest 30,000
+  runs.
 
 ## Security
 

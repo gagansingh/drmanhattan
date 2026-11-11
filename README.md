@@ -41,11 +41,14 @@ manhattan submit --wait -- make test   # in another terminal
 The first start asks once whether drmanhattan may run what is placed in its inbox;
 `--yes` answers for you. `submit --wait` prints the job's output and exits with its exit
 code, and Ctrl-C cancels the job. `drmanhattan status` shows the queue, `drmanhattan stop`
-stops it, and `drmanhattan update` installs the latest release once the queue is empty.
+stops it, and `drmanhattan update` installs the latest release between jobs: new jobs wait
+while the running ones finish, then the queue restarts on the new version in a second.
 
 ## With coding agents
 
-Add this to the instructions file your agent reads (`AGENTS.md`, `CLAUDE.md`,
+In [bb](#with-bb), install the plugin instead: it gives every thread these instructions,
+so there is nothing to copy. For other agents (Claude Code, Codex, Cursor and the like),
+add this to the instructions file your agent reads (`AGENTS.md`, `CLAUDE.md`,
 `.cursorrules` or similar):
 
 ```markdown
@@ -96,10 +99,18 @@ for it:
 drmanhattan bb install
 ```
 
-Threads then queue their builds and tests through drmanhattan without the snippet above, the
-row above each thread's composer shows its runs (running, waiting, and a button to cancel),
-the Info tab lists its recent results, and `bb drmanhattan runs` prints them. Each run on the
-dashboard links back to its thread. [More](docs/REFERENCE.md#bb).
+Threads then queue their builds and tests through drmanhattan without the snippet above:
+the plugin gives every thread the instructions. Then:
+
+- the row above each thread's composer shows its runs (running, waiting, and a button to
+  cancel), and the Info tab lists its recent results;
+- a drmanhattan page in bb's navigation shows the queue on each machine, each run linked to
+  the thread that queued it;
+- archiving or deleting a thread stops the dev servers and other services it started;
+- `bb drmanhattan runs` prints a thread's runs, and each run on the dashboard links back to
+  its thread.
+
+[More](docs/REFERENCE.md#bb).
 
 ## What else it does
 
@@ -107,6 +118,9 @@ Each item links to its section of [docs/REFERENCE.md](docs/REFERENCE.md).
 
 - **[Quick commands](docs/REFERENCE.md#quick-commands)**: a command whose runs here nearly
   always took under 30 seconds starts beside the slots, without waiting.
+- **[Light jobs](docs/REFERENCE.md#light-jobs)**: a job that waits on a device or a network
+  says `"light": true` and starts beside the slots too, a couple at a time, unless the
+  machine is short of memory.
 - **[Job files](docs/REFERENCE.md#job-files)**: any program can queue a job by writing a
   JSON file into the inbox. The log, status and exit code appear beside it, and `wait`,
   `follow` and `cancel` work on any run.

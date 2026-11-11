@@ -100,6 +100,7 @@ mod tests {
             ready_timeout: None,
             ttl: None,
             tty: false,
+            light: false,
             claim: None,
         };
         let mut r = Record::new(id.parse().unwrap(), job, expected, 600);

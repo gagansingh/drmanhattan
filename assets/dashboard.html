@@ -747,7 +747,7 @@ function runningRow(run, now, cls = '') {
     ? `<span class="num">done ~${clock(now + run.remaining_estimate)}</span>${under(`in ~${duration(run.remaining_estimate)}`)}`
     : nothing('unknown');
   return rowStart(run, '', cls)
-    + `<td class="state" title="Started ${esc(clock(run.started_at))}, ${run.wait_seconds >= 0.5 ? `after waiting ${esc(duration(run.wait_seconds))}` : 'no wait'}${run.quick ? `, at once: ${esc(run.lane_reason || 'quick')}` : ''}">${stateMark('running', run.quick ? 'quick' : `slot ${run.slot}`)}</td>`
+    + `<td class="state" title="Started ${esc(clock(run.started_at))}, ${run.wait_seconds >= 0.5 ? `after waiting ${esc(duration(run.wait_seconds))}` : 'no wait'}${beside(run) ? `, at once: ${esc(run.lane_reason || laneOf(run))}` : ''}">${stateMark('running', beside(run) ? laneOf(run) : `slot ${run.slot}`)}</td>`
     + runCell(run, run.machine && !run.remote_job ? `<span class="note warn" title="Its files are being mirrored to ${esc(run.machine)}">sending to ${esc(run.machine)}</span>` : '', doing(run.activity))
     + `<td class="time"><span class="num">${duration(run.elapsed)}</span>${under(against, range)}${progress}</td>`
     + `<td class="when">${when}</td>`
@@ -799,9 +799,10 @@ function machineBar(m, d, open) {
 function renderRunning(d) {
   if (d.machines && d.machines.length) return renderMachines(d);
   const cap = d.capacity, max = d.capacity_max || 256, fixed = d.capacity_fixed;
-  const busy = d.running.filter((run) => !run.quick).length, quick = d.running.length - busy;
+  const busy = d.running.filter((run) => !beside(run)).length;
+  const quick = d.running.filter((run) => run.quick).length, light = d.running.filter((run) => run.light).length;
   put($('#capacity'), (capacityError ? `<span class="error">${esc(capacityError)}</span>` : '')
-    + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use${quick ? ` · <b>${quick}</b> quick` : ''}</span>`
+    + `<span><b>${busy}</b> of <b>${cap}</b> ${cap === 1 ? 'slot' : 'slots'} in use${quick ? ` · <b>${quick}</b> quick` : ''}${light ? ` · <b>${light}</b> light` : ''}</span>`
     + `<button class="step" data-action="capacity" data-value="${cap - 1}" ${fixed || cap <= 1 ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot fewer')}" aria-label="Fewer slots">−</button>`
     + `<button class="step" data-action="capacity" data-value="${cap + 1}" ${fixed || cap >= max ? 'disabled' : ''} title="${esc(fixed ? `Set by ${fixed}` : 'One slot more: more jobs at once, each slower')}" aria-label="More slots">+</button>`);
   const bySlot = [...d.running].sort((a, b) => (a.slot || 0) - (b.slot || 0));
@@ -830,7 +831,7 @@ function renderMachines(d) {
     + `<span><b>${d.running.length}</b> running on <b>${d.machines.length}</b> machines</span>`);
   put($('#running'), d.machines.map((m) => {
     const open = !collapsed.has(m.name);
-    const here = d.running.filter((run) => (run.machine || 'local') === m.name && !run.quick);
+    const here = d.running.filter((run) => (run.machine || 'local') === m.name && !beside(run));
     if (!open) return machineBar(m, d, false);
     const top = Math.max(m.capacity, ...here.map((run) => run.slot || 0));
     const leaves = [];
@@ -839,7 +840,7 @@ function renderMachines(d) {
       leaves.push(run ? { run } : { slot });
     }
     // Quick runs take no slot: they hang off their machine after the slots.
-    if (m.local) d.running.filter((run) => run.quick).forEach((run) => leaves.push({ run }));
+    if (m.local) d.running.filter(beside).forEach((run) => leaves.push({ run }));
     if (!leaves.length) {
       const why = m.paused ? 'paused: what runs there finishes, nothing new is sent'
         : m.online === false ? 'not answering' : 'no slots';
@@ -866,18 +867,18 @@ function renderVersion(d) {
   firstVersion = firstVersion || d.version;
   if (d.version && d.version !== firstVersion) { location.reload(); return; }
   const u = d.update;
-  const when = d.idle ? '' : 'disabled';
+  const between = d.idle ? '' : ': new jobs wait while the running ones finish, then it restarts';
   const offer = updating ? ''
     : d.installed
       ? ` · ${esc(d.installed)} installed, restart pending`
-        + `<button data-action="update" ${when} title="${d.idle ? `Restart into ${esc(d.installed)}` : 'Once nothing is running or waiting'}">Restart</button>`
+        + `<button data-action="update" title="Restart into ${esc(d.installed)}${between}">Restart</button>`
     : u
       ? ` · <a href="${esc(u.url)}" title="What is new">${esc(u.version)} available</a>`
-        + `<button data-action="update" ${when} title="${d.idle ? `Install ${esc(u.version)} and restart` : 'Once nothing is running or waiting'}">Update</button>`
+        + `<button data-action="update" title="Install ${esc(u.version)} and restart${between}">Update</button>`
     : '';
   const auto = `<button data-action="auto-update" aria-pressed="${!!d.auto_update}" title="${d.auto_update
-    ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves once the queue has been idle for 5 minutes. Click to turn off.`
-    : 'Click to install newer releases of this major version by themselves, once the queue has been idle for 5 minutes'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
+    ? `Auto-update: ${esc(d.auto_update_state)}. Newer releases of this major version install by themselves between jobs: new jobs wait while the running ones finish, then the queue restarts on the new version in a second. Click to turn off.`
+    : 'Click to install newer releases of this major version by themselves, between jobs'}">auto-update ${d.auto_update ? 'on' : 'off'}</button>`;
   const done = d.updated && recall('dismissed-updated') !== d.updated.to
     ? ` · <span class="updated">${d.updated.auto ? 'auto-' : ''}updated to <a href="${esc(d.updated.url)}">${esc(d.updated.to)}</a>`
       + `<button data-action="dismiss-updated" aria-label="Dismiss">✕</button></span>`
@@ -953,9 +954,9 @@ function queuedRow(run, i, d) {
     + (run.remote_fallback ? `<span class="note" title="${esc(run.remote_fallback)}">runs here</span>` : '')
     + (run.group_busy ? `<span class="note" title="Another job of group ${esc(run.group)} is running; one runs at a time">waits for ${esc(run.group)}</span>` : '')
     + (run.overdue ? '<span class="note" title="Waited past its limit: starts ahead of shorter jobs">overdue</span>' : '')
-    + (run.quick ? `<span class="note" title="Starts without waiting for a slot once a quick place frees: ${esc(run.lane_reason || '')}">quick</span>` : '')
+    + (beside(run) ? `<span class="note" title="Starts without waiting for a slot once a ${laneOf(run)} place frees: ${esc(run.lane_reason || '')}">${laneOf(run)}</span>` : '')
     + (d.manual_order && !run.manual && !run.priority ? '<span class="note" title="Queued after you reordered: follows the jobs you placed, shortest first">new</span>' : '');
-  const why = !run.quick && run.lane_reason ? `\nWaits for a slot: ${run.lane_reason}` : '';
+  const why = !beside(run) && run.lane_reason ? `\nWaits for a slot: ${run.lane_reason}` : '';
   const range = usualRange(run) + why;
   const expected = run.typical_seconds ? `<span class="num" title="${esc(range)}">~${duration(run.typical_seconds)}</span>` : nothing('no estimate', range);
   const when = run.eta_start && !run.eta_open_ended
@@ -1317,7 +1318,10 @@ function collapseHeartbeats(lines) {
 // The strip above the output says where and when the job started and its command, so
 // those lines are left out; the rest (how it ended, a timeout, a cut) become notes.
 const OWN = 'drmanhattan · ';
-const FRAMING = /^drmanhattan · (.+ started (in slot \d+|as a service|at once \(quick\)) at .+ · run \S+|in .+?: .*)$/;
+// A run in the quick or the light lane: beside the slots, holding none.
+function beside(run) { return Boolean(run.quick || run.light); }
+function laneOf(run) { return run.quick ? 'quick' : 'light'; }
+const FRAMING = /^drmanhattan · (.+ started (in slot \d+|as a service|at once \(quick\)|beside the slots \(light\)) at .+ · run \S+|in .+?: .*)$/;
 // Progress markers are for drmanhattan too. A step becomes a divider; a command's start and
 // end are left out, since the job's row shows the commands in flight.
 const STEP = /^\s*::step\s+(\d+)(?:\s*\/\s*(\d+))?\s*(.*)$/;
@@ -1400,7 +1404,7 @@ function logHeading() {
   put($('#log-title'), `<span class="title-label" title="${esc(run.label)}">${esc(run.label)}</span> ${stateMark(run.state)}${notes(run)}`);
   put($('#log-meta'), esc(run.run_id));
   const where = [
-    run.quick ? 'quick' : run.slot ? `slot ${esc(run.slot)}` : '',
+    beside(run) ? laneOf(run) : run.slot ? `slot ${esc(run.slot)}` : '',
     run.started_at ? `started ${esc(clock(run.started_at))}` : 'not started',
     `in ${esc(run.cwd_short || run.cwd)}`,
   ].filter(Boolean).join(' · ');

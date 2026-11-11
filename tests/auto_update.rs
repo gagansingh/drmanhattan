@@ -20,15 +20,14 @@ fn next_minor() -> String {
     format!("v{}.{}.0", parts[0], parts[1])
 }
 
-/// A queue run by its own copy of drmanhattan, with releases at `tag`, a short idle wait and
-/// a fast check loop, plus any `extra` settings.
+/// A queue run by its own copy of drmanhattan, with releases at `tag` and a fast check loop,
+/// plus any `extra` settings.
 fn queue_with(tag: &str, good_checksum: bool, extra: &[(&str, &str)]) -> (Daemon, tempdir::Dir, Releases) {
     let dir = tempdir::Dir::new("auto");
     let r = releases(&dir.0, tag, good_checksum);
     let mut env = vec![
         ("DRMANHATTAN_NO_UPDATE_CHECK", "0"),
         ("DRMANHATTAN_RELEASES_URL", r.url.as_str()),
-        ("DRMANHATTAN_AUTO_UPDATE_IDLE_SECONDS", "2"),
         ("DRMANHATTAN_UPDATE_TICK_SECONDS", "0.5"),
     ];
     env.extend_from_slice(extra);
@@ -75,22 +74,24 @@ fn it_is_off_by_default() {
 }
 
 #[test]
-fn it_waits_for_an_idle_queue_and_new_work_resets_the_wait() {
+fn it_updates_between_jobs_without_waiting_for_the_queue_to_empty() {
     let (d, _dir) = queue(&next_minor(), true);
-    auto(&d, "on");
-    assert_eq!(d.status_json()["auto_update"], true);
+    d.set_slots(1);
     d.submit("first", d.job("sleep 3"));
     d.wait_state("first", "running", T);
+    d.submit("second", d.job("sleep 3"));
+    d.wait_state("second", "queued", T);
+    auto(&d, "on");
+    assert_eq!(d.status_json()["auto_update"], true);
     let found = next_minor().trim_start_matches('v').to_string();
-    wait_for(T, || auto_state(&d).contains(&format!("{found} found, queue busy")).then_some(())).expect("busy");
-    d.wait_exit("first", T);
-    // Arrives inside the idle wait: the wait starts again once it is done.
-    wait_for(T, || auto_state(&d).contains("found, waiting for 1 min idle").then_some(())).expect("waiting");
-    d.submit("second", d.job("sleep 2"));
-    assert_eq!(d.wait_exit("second", T), 0, "never updated mid-job");
-    let second_done = common::epoch(&d.status_of("second").unwrap()["finished_at"]);
-    let note = wait_for(T, || updated(&d)).expect("it updated once idle");
-    assert!(common::epoch(&note["at"]) >= second_done + 1.5, "the wait restarted after the second job: {note}");
+    wait_for(T, || auto_state(&d).contains(&format!("updating to {found} between jobs")).then_some(()))
+        .expect("updating");
+    wait_for(T, || (d.status_json()["update_hold"] == true).then_some(())).expect("new starts held");
+    let note = wait_for(T, || updated(&d)).expect("it updated once the running job was done");
+    assert_eq!(d.status_of("first").unwrap()["state"], "succeeded", "never updated mid-job");
+    let first_done = common::epoch(&d.status_of("first").unwrap()["finished_at"]);
+    assert!(common::epoch(&note["at"]) >= first_done, "after the running job: {note}");
+    assert_eq!(d.status_of("second").unwrap()["state"], "queued", "the waiting job kept its place");
     assert_eq!((&note["auto"], note["to"].as_str()), (&Value::Bool(true), Some(next_minor().trim_start_matches('v'))));
     assert_eq!(version_of(&d.program), format!("drmanhattan {}", next_minor().trim_start_matches('v')));
 }

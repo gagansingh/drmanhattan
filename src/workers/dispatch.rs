@@ -233,6 +233,8 @@ fn remote_spec(worker: &WorkerConfig, rec: &Record, me: &str, granted: u32) -> J
         ready_timeout: None,
         ttl: None,
         tty: job.tty,
+        // On the worker it holds the slot this machine was granted.
+        light: false,
     }
 }
 

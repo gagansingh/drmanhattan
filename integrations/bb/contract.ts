@@ -26,6 +26,8 @@ export const runSchema = z
     exit: z.number().int().nullable(),
     errorLine: z.string().nullable(),
     log: z.string().nullable(),
+    /** The bb thread that queued it, when one did. */
+    threadId: z.string().nullable(),
   })
   .strict();
 export type Run = z.infer<typeof runSchema>;
@@ -77,6 +79,17 @@ export const drmanhattanHostContract = defineRpcContract({
     input: z.object({ runId: z.string().regex(RUN_ID_PATTERN) }).strict(),
     output: z.object({ ok: z.boolean(), message: z.string() }).strict(),
   },
+  stopServices: {
+    input: z.object({ session: z.string().regex(SESSION_PATTERN) }).strict(),
+    output: z
+      .object({
+        ok: z.boolean(),
+        /** The labels of the services it stopped. */
+        stopped: z.array(z.string()),
+        message: z.string(),
+      })
+      .strict(),
+  },
 });
 
 export const threadRunsSchema = z.discriminatedUnion("kind", [
@@ -96,6 +109,15 @@ export const threadRunsSchema = z.discriminatedUnion("kind", [
 ]);
 export type ThreadRuns = z.infer<typeof threadRunsSchema>;
 
+export const machineQueueSchema = z
+  .object({
+    hostId: z.string(),
+    name: z.string(),
+    status: hostStatusSchema,
+  })
+  .strict();
+export type MachineQueue = z.infer<typeof machineQueueSchema>;
+
 export const drmanhattanRpcContract = defineRpcContract({
   threadRuns: {
     input: z.object({ threadId: z.string().min(1).max(256) }).strict(),
@@ -105,6 +127,19 @@ export const drmanhattanRpcContract = defineRpcContract({
     input: z
       .object({
         threadId: z.string().min(1).max(256),
+        runId: z.string().regex(RUN_ID_PATTERN),
+      })
+      .strict(),
+    output: z.object({ ok: z.boolean(), message: z.string() }).strict(),
+  },
+  machines: {
+    input: z.object({}).strict(),
+    output: z.object({ machines: z.array(machineQueueSchema) }).strict(),
+  },
+  cancelMachineRun: {
+    input: z
+      .object({
+        hostId: z.string().min(1).max(256),
         runId: z.string().regex(RUN_ID_PATTERN),
       })
       .strict(),

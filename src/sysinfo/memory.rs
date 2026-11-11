@@ -59,7 +59,6 @@ fn vm_statistics() -> Option<libc::vm_statistics64> {
 /// less purgeable), swap from vm.swapusage, and the kernel's memory-pressure level.
 pub(crate) fn read() -> Option<Memory> {
     let total: u64 = sysctl(b"hw.memsize\0")?;
-    let pressure: i32 = sysctl(b"kern.memorystatus_vm_pressure_level\0").unwrap_or(1);
     let swap: Option<libc::xsw_usage> = sysctl(b"vm.swapusage\0");
     let vm = vm_statistics()?;
     // SAFETY: sysconf has no preconditions.
@@ -73,12 +72,17 @@ pub(crate) fn read() -> Option<Memory> {
         used: used.min(total),
         swap_used: swap.map_or(0.0, |s| s.xsu_used as f64),
         swap_total: swap.map_or(0.0, |s| s.xsu_total as f64),
-        pressure: match pressure {
-            2 => "warn",
-            4 => "critical",
-            _ => "normal",
-        },
+        pressure: pressure(),
     })
+}
+
+/// The kernel's memory-pressure level: `normal`, `warn` or `critical`.
+pub(crate) fn pressure() -> &'static str {
+    match sysctl::<i32>(b"kern.memorystatus_vm_pressure_level\0") {
+        Some(2) => "warn",
+        Some(4) => "critical",
+        _ => "normal",
+    }
 }
 
 #[cfg(test)]

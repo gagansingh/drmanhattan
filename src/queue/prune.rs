@@ -9,6 +9,7 @@ use crate::job::{classify, InboxFile, RunId};
 use crate::paths::Paths;
 use crate::queue::Queue;
 use crate::settings::Settings;
+use crate::time::Timestamp;
 
 /// `history.jsonl` past this many lines is cut back to the newest `HISTORY_KEEP`.
 const HISTORY_MAX: usize = 30_000;
@@ -17,8 +18,9 @@ const STEPS_MAX: usize = 20_000;
 const STEPS_KEEP: usize = 10_000;
 
 impl Queue {
-    /// Forgets finished runs older than the retention window, and returns the names of the
-    /// jobs still live, whose files `prune_files` must spare. Cheap: run under the lock.
+    /// Forgets finished runs older than the retention window, and the oldest past the
+    /// most kept, and returns the names of the jobs still live, whose files `prune_files`
+    /// must spare. Cheap: run under the lock.
     pub(crate) fn prune_memory(&mut self) -> HashSet<String> {
         let retention = self.settings.retention;
         let old: Vec<RunId> = self
@@ -28,10 +30,33 @@ impl Queue {
             .map(|e| e.rec.run_id.clone())
             .collect();
         for run_id in old {
-            self.runs.remove(&run_id);
-            let _ = fs::remove_file(self.paths.run_record(run_id.as_str()));
+            self.forget(&run_id);
         }
+        self.cap_finished();
         self.live_names()
+    }
+
+    /// Forgets the oldest finished runs past `max_finished`, so that reading every record
+    /// (each `status` does) stays quick however busy the queue gets. Their archived copies
+    /// stay. The daemon calls this on every pass: it only counts until there are too many.
+    pub(crate) fn cap_finished(&mut self) {
+        let finished = self.runs.values().filter(|e| e.rec.state.is_terminal()).count();
+        let Some(excess) = finished.checked_sub(self.settings.max_finished).filter(|n| *n > 0) else { return };
+        let mut done: Vec<(Timestamp, RunId)> = self
+            .runs
+            .values()
+            .filter(|e| e.rec.state.is_terminal())
+            .map(|e| (e.rec.last_event(), e.rec.run_id.clone()))
+            .collect();
+        done.sort_by_key(|(at, _)| *at);
+        for (_, run_id) in done.into_iter().take(excess) {
+            self.forget(&run_id);
+        }
+    }
+
+    fn forget(&mut self, run_id: &RunId) {
+        self.runs.remove(run_id);
+        let _ = fs::remove_file(self.paths.run_record(run_id.as_str()));
     }
 }
 

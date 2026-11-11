@@ -11,6 +11,7 @@ import {
   RUN_ID_PATTERN,
   SESSION_PATTERN,
   type HostStatus,
+  type MachineQueue,
   type Queue,
   type Run,
   type ThreadRuns,
@@ -19,6 +20,8 @@ import { isActive, runDetail } from "./format.js";
 
 export const SKILL = "drmanhattan";
 const PANEL_FINISHED = 10;
+/** Finished runs the drmanhattan page lists for each machine. */
+export const PAGE_FINISHED = 15;
 const PROBE_INTERVAL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
 
@@ -91,10 +94,20 @@ export default async function drmanhattanPlugin(
         "Adds drmanhattan's usage to the instructions of threads on machines where drmanhattan is installed.",
       default: true,
     },
+    stopServicesOnArchive: {
+      type: "boolean",
+      label: "Stop a thread's services when it is archived",
+      description:
+        "When a thread is archived or deleted, stops the dev servers, databases and other services it started through drmanhattan, on every machine.",
+      default: true,
+    },
   });
-  let instruct = (await settings.get()).agentInstructions;
+  const initial = await settings.get();
+  let instruct = initial.agentInstructions;
+  let stopOnArchive = initial.stopServicesOnArchive;
   settings.onChange((next) => {
     instruct = next.agentInstructions;
+    stopOnArchive = next.stopServicesOnArchive;
   });
 
   const host = bb.hosts.experimental_client({
@@ -172,10 +185,71 @@ export default async function drmanhattanPlugin(
     return host.call("cancel", { runId }, { hostId: runs.hostId });
   }
 
+  /** Each connected machine's whole queue, for the drmanhattan page. */
+  async function machines(): Promise<{ machines: MachineQueue[] }> {
+    const hosts = (await bb.sdk.hosts.list()).filter(
+      (candidate) => candidate.status === "connected",
+    );
+    return {
+      machines: await Promise.all(
+        hosts.map(async (candidate): Promise<MachineQueue> => {
+          let status: HostStatus;
+          try {
+            status = await hostStatus(candidate.id, null, PAGE_FINISHED);
+          } catch (error) {
+            status = { kind: "error", binary: null, message: errorText(error) };
+          }
+          return { hostId: candidate.id, name: candidate.name, status };
+        }),
+      ),
+    };
+  }
+
+  async function cancelMachineRun(hostId: string, runId: string) {
+    const status = await hostStatus(hostId, null, 0);
+    if (status.kind !== "ok") return { ok: false, message: status.message };
+    const active = [...status.queue.running, ...status.queue.waiting];
+    if (!active.some((run) => run.runId === runId)) {
+      return { ok: false, message: `${runId} is not running or waiting on this machine.` };
+    }
+    return host.call("cancel", { runId }, { hostId });
+  }
+
   bb.rpc.register(drmanhattanRpcContract, {
     threadRuns: ({ threadId }) => threadRuns(threadId, PANEL_FINISHED),
     cancelRun: ({ threadId, runId }) => cancelThreadRun(threadId, runId),
+    machines: () => machines(),
+    cancelMachineRun: ({ hostId, runId }) => cancelMachineRun(hostId, runId),
   });
+
+  /**
+   * Stops the services an archived or deleted thread started. Its machine may be gone
+   * with its environment by now, so every connected machine with drmanhattan is asked:
+   * services are found by the thread's id, which no other thread has.
+   */
+  async function stopThreadServices(threadId: string): Promise<void> {
+    if (!stopOnArchive || !SESSION_PATTERN.test(threadId)) return;
+    const hosts = (await bb.sdk.hosts.list()).filter(
+      (candidate) =>
+        candidate.status === "connected" && availability.get(candidate.id) !== "missing",
+    );
+    await Promise.all(
+      hosts.map(async (candidate) => {
+        try {
+          const result = await host.call("stopServices", { session: threadId }, { hostId: candidate.id });
+          if (result.stopped.length > 0) {
+            bb.log.info(`Stopped thread ${threadId}'s services on ${candidate.id}: ${result.stopped.join(", ")}`);
+          }
+          if (!result.ok) bb.log.warn(`Thread ${threadId} on ${candidate.id}: ${result.message}`);
+        } catch (error) {
+          bb.log.warn(`Could not stop thread ${threadId}'s services on ${candidate.id}: ${errorText(error)}`);
+        }
+      }),
+    );
+  }
+
+  bb.events.on("thread.archived", ({ thread }) => stopThreadServices(thread.id));
+  bb.events.on("thread.deleted", ({ thread }) => stopThreadServices(thread.id));
 
   bb.agents.configure((context) => {
     const state = availability.get(context.host.id);

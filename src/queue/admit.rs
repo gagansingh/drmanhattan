@@ -28,13 +28,16 @@ impl Queue {
     /// Admits waiters, in rank order, into free slots: this machine's while fewer than
     /// `capacity` run here, and the workers' while fewer than each one's capacity run there.
     /// A quick waiter starts beside the slots while fewer than `max_quick` quick runs do, and
-    /// takes a free slot when the quick lane is full. The caller starts a runner thread for
+    /// takes a free slot when the quick lane is full. A light waiter does the same with the
+    /// light lane, which also takes nothing while the machine is short of memory
+    /// (`LightGuard`). The caller starts a runner thread for
     /// each. Lowering a capacity stops admissions there until enough runs finish; raising it
     /// admits more on this pass.
     pub(crate) fn admit(&mut self, capacity: u32, workers: &[workers::Slots], manual: &ManualOrder) -> Vec<Admitted> {
         let now = Timestamp::now();
         let order = rank(self.records(State::Queued), manual, now);
         let mut admitted = Vec::new();
+        let light_closed = self.light_lane_closed();
         // A group runs one job at a time.
         let mut busy_groups: HashSet<String> =
             self.records(State::Running).filter_map(|r| r.job.group.clone()).collect();
@@ -51,17 +54,22 @@ impl Queue {
             let service = waiter.job.service;
             let quick =
                 waiter.quick && self.records(State::Running).filter(|r| r.quick).count() < self.settings.max_quick;
+            let light = !quick
+                && waiter.light_lane
+                && !light_closed
+                && self.records(State::Running).filter(|r| r.light_lane).count() < self.settings.max_light;
+            let beside = quick || light;
             let machine = if service {
                 let running = self.records(State::Running).filter(|r| r.job.service).count();
                 (running < self.settings.max_services).then_some(None)
-            } else if quick {
+            } else if beside {
                 Some(None)
             } else {
                 self.place(waiter, capacity, workers)
             };
             let Some(machine) = machine else { continue };
             busy_groups.extend(waiter.job.group.clone());
-            let slot = match (service, quick) {
+            let slot = match (service, beside) {
                 (true, _) => None,
                 // Above any slot there can be, so `DRMANHATTAN_SLOT` stays unique among the
                 // runs here whatever the capacity becomes.
@@ -77,6 +85,7 @@ impl Queue {
             rec.state = State::Running;
             rec.slot = slot;
             rec.quick = quick;
+            rec.light_lane = light;
             let on = machine.as_ref().map(|m| format!(" on {m}")).unwrap_or_default();
             rec.machine = machine;
             rec.started_at = Some(now);
@@ -91,6 +100,7 @@ impl Queue {
                     match slot {
                         None => "a service".to_string(),
                         Some(_) if quick => "quick".to_string(),
+                        Some(_) if light => "light".to_string(),
                         Some(s) => format!("slot {s}{on}"),
                     },
                     waited,
@@ -101,6 +111,28 @@ impl Queue {
             admitted.push(Admitted { record, events, exit_sender: control, activity, default_patterns });
         }
         admitted
+    }
+
+    /// Whether the light lane takes nothing on this pass: a light run is waiting and the
+    /// machine is short of memory. Says so in the log when that begins and when it ends.
+    fn light_lane_closed(&mut self) -> bool {
+        let guard = self.settings.light_guard;
+        if !self.records(State::Queued).any(|r| r.light_lane) {
+            return false; // nothing to hold: no reading taken
+        }
+        let pressure = crate::sysinfo::memory_pressure();
+        let closed = guard.closes_at(pressure);
+        if closed != self.light_closed {
+            self.light_closed = closed;
+            let pressure = pressure.unwrap_or("unknown");
+            let detail = if closed {
+                format!("memory pressure is {pressure}: light jobs wait for a slot")
+            } else {
+                format!("memory pressure is {pressure}: light jobs start beside the slots again")
+            };
+            log::event(Tone::Quiet, if closed { "light closed" } else { "light open" }, "", None, &[detail]);
+        }
+        closed
     }
 
     /// Starts the `prepare` commands of waiting runs, best-ranked first, while fewer than

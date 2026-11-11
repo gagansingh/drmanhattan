@@ -33,6 +33,15 @@ pub(crate) type Memory = ();
 #[cfg(not(target_os = "macos"))]
 pub(crate) type Thermals = ();
 
+/// The kernel's memory-pressure level now: `normal`, `warn` or `critical`. None where it has
+/// none to give (anywhere but macOS).
+pub(crate) fn memory_pressure() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    return Some(memory::pressure());
+    #[cfg(not(target_os = "macos"))]
+    None
+}
+
 /// The latest readings.
 #[derive(Serialize, Default, Clone, Debug)]
 pub(crate) struct Snapshot {
