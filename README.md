@@ -93,7 +93,8 @@ once instead of queueing a job that would never start.
 ## With bb
 
 [bb](https://github.com/get-bb/bb) runs coding agents in threads. drmanhattan has a plugin
-for it:
+for it in bb's Community marketplace: find **drmanhattan** in bb's plugin catalog (under
+Command Line), or install it from a terminal:
 
 ```
 drmanhattan bb install

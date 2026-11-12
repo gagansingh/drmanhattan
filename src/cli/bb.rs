@@ -1,14 +1,13 @@
 //! `drmanhattan bb`: offers the plugin for bb (github.com/get-bb/bb), the editor that runs
-//! coding agents in threads. The plugin lives in this repository, in `integrations/bb`, and
-//! bb installs it from the release tags, so it updates within this major version.
+//! coding agents in threads. The plugin lives in this repository, in `integrations/bb`, and is
+//! listed in bb's Community marketplace as `drmanhattan`, whose entry installs it from this
+//! repository's release tags of this major version.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::cli::args::{self, Spec};
 use crate::error::{invalid, Result};
-
-const REPOSITORY: &str = "https://github.com/gagansingh/drmanhattan.git";
 
 const BB: Spec = Spec {
     usage: "\
@@ -19,19 +18,18 @@ plugin tells those agents to run builds and tests through this queue, and shows 
 thread's runs in bb. Runs submitted from a bb thread link back to it on the dashboard
 either way.
 
-With no argument, prints the command that installs the plugin. `install` runs it with the
-`bb` command, which shows what it installs and asks before it does.
+The plugin is in bb's Community marketplace: find drmanhattan in bb's plugin catalog, or
+install it from here. With no argument, prints the command that installs it. `install` runs
+it with the `bb` command, which shows what it installs and asks before it does.
 ",
     values: &[],
     switches: &[],
     positional: 1,
 };
 
-/// `bb plugin install …` for the plugin's releases of this major version.
+/// `bb plugin install drmanhattan`: the marketplace entry, which bb has reviewed.
 fn install_args() -> Vec<String> {
-    let major = crate::update::current().split('.').next().unwrap_or("0").to_string();
-    let source = format!("git:{REPOSITORY}@{major}.x");
-    ["plugin", "install", &source, "--plugin", "drmanhattan"].map(String::from).to_vec()
+    ["plugin", "install", "drmanhattan"].map(String::from).to_vec()
 }
 
 /// bb's own command: the one bb gives its threads (`BB_CLI`), else `bb` on PATH.
@@ -78,10 +76,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_plugin_installs_from_this_major_versions_releases() {
-        let args = install_args();
-        let major = crate::update::current().split('.').next().unwrap().to_string();
-        assert_eq!(args[2], format!("git:https://github.com/gagansingh/drmanhattan.git@{major}.x"));
-        assert_eq!(args[3..], ["--plugin", "drmanhattan"]);
+    fn the_plugin_installs_from_the_marketplace() {
+        assert_eq!(install_args(), ["plugin", "install", "drmanhattan"]);
     }
 }

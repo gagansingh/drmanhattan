@@ -7,11 +7,13 @@ queue their builds and tests through drmanhattan, and each thread shows its runs
 
 ## Install
 
+Find drmanhattan in bb's plugin catalog (the Community marketplace, under Command Line), or:
+
 ```
 drmanhattan bb install
 ```
 
-or `bb plugin install git:https://github.com/gagansingh/drmanhattan.git@0.x --plugin drmanhattan`.
+which runs `bb plugin install drmanhattan`.
 
 ## How it fits together
 
@@ -39,3 +41,22 @@ bb plugin install path:../.. --plugin drmanhattan   # into a running bb, from th
 ```
 
 The version follows drmanhattan's: bb installs from the `vX.Y.Z` tags.
+
+## The marketplace listing
+
+The listing is [`entries/drmanhattan.json`](https://github.com/get-bb/marketplace/blob/main/entries/drmanhattan.json)
+in [get-bb/marketplace](https://github.com/get-bb/marketplace), with its screenshots in
+`screenshots/drmanhattan/` and a copy of [PLUGIN_OVERVIEW.md](PLUGIN_OVERVIEW.md) in
+`overview/drmanhattan.md`. Its source is this repository's `integrations/bb` at the tags
+`>=0.8.1 <1.0.0`.
+
+- Every `vX.Y.Z` release tag below 1.0.0 is a plugin release: bb users see it as an update
+  once it is tagged, with no marketplace change. So each tag must build here
+  (`npm ci && npm run build`), and a tag must never move or be deleted.
+- The listing's text, screenshots, overview and tags change only through a pull request to
+  get-bb/marketplace (from a fork; `author.github` there names who may change it). Changes to
+  the short description, tags, icon or source also need its maintainers' `v1-change` label.
+  Copy PLUGIN_OVERVIEW.md to `overview/drmanhattan.md` when it changes.
+- A 1.0.0 release falls outside the range: widen it there first, or users stay on 0.x.
+- The marketplace checks every listed source on each of its pull requests, so this
+  repository and its tags must stay public.

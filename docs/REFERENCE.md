@@ -458,17 +458,18 @@ bb's plugin for drmanhattan, in [`integrations/bb`](../integrations/bb), goes fu
   machine, and `bb drmanhattan cancel <run id>` cancels one of the thread's runs; `--json`
   for each.
 
-Install it with:
+The plugin is listed in bb's Community marketplace as drmanhattan: install it from bb's
+plugin catalog (under Command Line), or with:
 
 ```
 drmanhattan bb install
 ```
 
-which runs `bb plugin install git:https://github.com/gagansingh/drmanhattan.git@0.x --plugin
-drmanhattan` (bb asks before installing; `drmanhattan bb` prints the command). bb installs
-the newest release tag and `bb plugin update` follows later releases of the same major
-version. The `bb` command must be on `PATH`: in bb, Settings → General → Command line →
-Install. The plugin calls the `drmanhattan` it finds on `PATH`, in `~/.local/bin` or
+which runs `bb plugin install drmanhattan` (bb asks before installing; `drmanhattan bb`
+prints the command). The marketplace entry installs the newest release tag of this major
+version, from 0.8.1 on, and `bb plugin update` follows later releases; bb never updates a
+plugin by itself. The `bb` command must be on `PATH`: in bb, Settings → General → Command
+line → Install. The plugin calls the `drmanhattan` it finds on `PATH`, in `~/.local/bin` or
 `~/.cargo/bin` (`DRMANHATTAN_BIN` names another) on the thread's machine, so each machine
 with threads needs its own drmanhattan running.
 
