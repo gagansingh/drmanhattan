@@ -59,6 +59,10 @@ struct StatusDoc<'a> {
     /// Why the light lane takes nothing now, when it does: the machine is short of memory.
     #[serde(skip_serializing_if = "Option::is_none")]
     light_closed: Option<String>,
+    /// The CPU's busy share, in percent, at which slots past the first wait, when the
+    /// daemon has one (`DRMANHATTAN_BUSY_CPU`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    busy_cpu: Option<u32>,
     /// The running daemon's version, or this command's when none runs.
     version: String,
     /// This command's version, when the daemon still runs another: it restarts into it.
@@ -279,6 +283,11 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
     let pressure = crate::sysinfo::memory_pressure();
     let light_closed = (light_capacity > 0 && guard.is_some_and(|g| g.closes_at(pressure)))
         .then(|| format!("memory pressure is {}", pressure.unwrap_or("unknown")));
+    // The daemon's own; with none running, this command's.
+    let busy_cpu = match info {
+        Some(info) => info.busy_cpu,
+        None => own.as_ref().and_then(|s| s.busy_guard).map(|g| g.cpu),
+    };
     Ok(StatusDoc {
         state,
         daemon: daemon.map(|d| DaemonDoc { pid: d.pid, url: d.info.and_then(|i| i.url) }),
@@ -291,6 +300,7 @@ fn build<'a>(paths: &Paths, records: &'a [Record], filter: Option<&SessionFilter
         light,
         light_capacity,
         light_closed,
+        busy_cpu,
         version,
         installed,
         auto_update: crate::settings::load_config(paths).is_ok_and(|c| c.auto_update),
@@ -376,6 +386,7 @@ fn print_text(doc: &StatusDoc) {
         kv("auto_update", if doc.auto_update { "on" } else { "off" }),
     ];
     head.extend(doc.light_closed.as_ref().map(|why| kv("light_closed", why)));
+    head.extend(doc.busy_cpu.map(|pct| kv("busy_cpu", pct)));
     if let Some(installed) = doc.installed {
         head.extend([kv("installed", installed), kv("running", &doc.version), kv("restart", "pending")]);
     }

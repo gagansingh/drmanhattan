@@ -57,6 +57,9 @@ pub(crate) struct Settings {
     pub(crate) max_light: usize,
     /// When the machine is too short of memory for the light lane (`DRMANHATTAN_LIGHT_PRESSURE`).
     pub(crate) light_guard: LightGuard,
+    /// When slots past the first take nothing (`DRMANHATTAN_BUSY_CPU`); None, the default,
+    /// leaves every slot open whatever the machine is doing.
+    pub(crate) busy_guard: Option<BusyGuard>,
     /// Give jobs the user's login shell environment (`DRMANHATTAN_SHELL_ENV`, on unless `0`).
     pub(crate) shell_env: bool,
     /// How long that shell may take to print it.
@@ -110,6 +113,59 @@ impl LightGuard {
     }
 }
 
+/// What keeps the slots past the first from taking a job on a machine that is already
+/// busy. The number of slots is a guess made once, and whether a second job helps depends
+/// on what the first is doing: beside a build that uses every core it makes both slower
+/// than one after the other, beside a job that waits on a device it costs nothing. So with
+/// this set the slots are a limit, and a slot past the first opens only when the CPU has
+/// had room for `window`, measured after the newest run here had that long to show what it
+/// uses. The first slot is never held: the queue always moves.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BusyGuard {
+    /// The CPU's busy share, in percent, at which those slots wait.
+    pub(crate) cpu: u32,
+    /// What the share is taken over, and how long a run is given before it is read.
+    pub(crate) window: Duration,
+}
+
+/// Why a slot past the first takes nothing on this pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum Hold {
+    /// The newest run in a slot here started less than the window ago.
+    Settling,
+    /// The CPU was this busy, in percent, over the window.
+    Busy(u32),
+}
+
+impl BusyGuard {
+    fn from_env() -> Result<Option<BusyGuard>> {
+        if std::env::var("DRMANHATTAN_BUSY_CPU").is_err() {
+            return Ok(None);
+        }
+        let cpu = env_or("DRMANHATTAN_BUSY_CPU", 0, |v| (1..=100).contains(v), "a percentage from 1 to 100")?;
+        let window = seconds_env("DRMANHATTAN_BUSY_SECONDS", 15.0, 1.0)?;
+        if window > crate::sysinfo::CPU_HISTORY {
+            return invalid(format!(
+                "DRMANHATTAN_BUSY_SECONDS must be at most {}, not {}",
+                crate::sysinfo::CPU_HISTORY.as_secs(),
+                window.as_secs_f64()
+            ));
+        }
+        Ok(Some(BusyGuard { cpu, window }))
+    }
+
+    /// Whether a slot past the first waits. `since_start` is how long ago the newest run
+    /// holding a slot here started (None: no slot is taken, and nothing waits); `cpu` is
+    /// the busy share over the window (None where there is no reading, which holds nothing).
+    pub(crate) fn holds(self, since_start: Option<Duration>, cpu: Option<u32>) -> Option<Hold> {
+        let since_start = since_start?;
+        if since_start < self.window {
+            return Some(Hold::Settling);
+        }
+        cpu.filter(|pct| *pct >= self.cpu).map(Hold::Busy)
+    }
+}
+
 impl Settings {
     pub(crate) fn from_env() -> Result<Settings> {
         Ok(Settings {
@@ -143,6 +199,7 @@ impl Settings {
             )?,
             max_light: env_or("DRMANHATTAN_LIGHT", 2, |v| *v <= 256, "a whole number from 0 to 256")?,
             light_guard: LightGuard::from_env()?,
+            busy_guard: BusyGuard::from_env()?,
             worker_poll: seconds_env("DRMANHATTAN_WORKER_POLL_SECONDS", 15.0, 0.1)?,
             max_prepares: env_or(
                 "DRMANHATTAN_MAX_PREPARES",
@@ -200,5 +257,17 @@ mod tests {
             assert!(!guard.closes_at(None), "no reading closes nothing");
             assert_eq!(LightGuard::named(guard.name()), Some(guard));
         }
+    }
+
+    #[test]
+    fn slots_past_the_first_wait_for_the_newest_run_to_settle_and_then_for_a_free_cpu() {
+        let guard = BusyGuard { cpu: 60, window: Duration::from_secs(15) };
+        let secs = |s| Some(Duration::from_secs(s));
+        assert_eq!(guard.holds(None, Some(100)), None, "the first slot is never held");
+        assert_eq!(guard.holds(secs(3), Some(5)), Some(Hold::Settling), "its run has not shown what it uses");
+        assert_eq!(guard.holds(secs(15), Some(59)), None);
+        assert_eq!(guard.holds(secs(15), Some(60)), Some(Hold::Busy(60)));
+        assert_eq!(guard.holds(secs(900), Some(100)), Some(Hold::Busy(100)));
+        assert_eq!(guard.holds(secs(15), None), None, "no reading holds nothing");
     }
 }

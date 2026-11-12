@@ -45,6 +45,26 @@ fn two_slots_run_in_parallel() {
     d.wait_exit("b", T);
 }
 
+/// With `DRMANHATTAN_BUSY_CPU`, the slots are a limit: one past the first opens only once
+/// the newest run has had the window to show what it uses, and the CPU has room.
+#[test]
+fn a_slot_past_the_first_waits_while_the_cpu_is_busy() {
+    let d =
+        Daemon::start(&[("DRMANHATTAN_SLOTS", "2"), ("DRMANHATTAN_BUSY_CPU", "1"), ("DRMANHATTAN_BUSY_SECONDS", "2")]);
+    assert_eq!(d.status_json()["busy_cpu"], 1);
+    // One core kept busy for the whole run: at least 1% of this machine, whatever else runs.
+    d.submit("busy", d.job("end=$(($(date +%s) + 7)); while [ $(date +%s) -lt $end ]; do :; done"));
+    d.wait_state("busy", "running", T);
+    d.submit("next", d.job("true"));
+    d.wait_daemon_log("slots held");
+    assert!(d.daemon_log().contains("slots past the first wait"), "{}", d.daemon_log());
+    assert_eq!(d.status_of("next").unwrap()["state"], "queued", "the second slot is free, and held");
+    assert_eq!(d.wait_exit("busy", T), 0);
+    assert_eq!(d.wait_exit("next", T), 0);
+    assert!(started(&d, "next") >= epoch(&d.status_of("busy").unwrap()["finished_at"]) - 0.5);
+    assert_eq!(d.status_of("next").unwrap()["slot"], 1, "it took the first slot, which is never held");
+}
+
 fn started(d: &Daemon, name: &str) -> f64 {
     epoch(&d.status_of(name).unwrap()["started_at"])
 }

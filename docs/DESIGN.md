@@ -60,6 +60,16 @@ pressure (`LightGuard`): on a machine that is swapping, one more process slows e
 and waiting for a slot costs a light job nothing it would not have paid before the lane
 existed. The pressure is read only on a pass where a light job is waiting.
 
+With `DRMANHATTAN_BUSY_CPU`, a slot here past the first takes nothing while the machine is
+busy (`BusyGuard`, in `Queue::busy_hold`). History cannot say what a command uses, and what
+is free changes by the minute, so this is measured rather than inferred: the CPU's busy
+share over the last `DRMANHATTAN_BUSY_SECONDS`, from the sampler's tick reading of that long
+ago to one taken on the pass. A run that has just started has used nothing yet, so the slots
+past the first also wait until the newest run in a slot here has had that long; three
+waiters on an idle machine therefore start a window apart. The first slot is never held,
+which is why nothing here can starve the queue, and a worker's slots are that worker's own
+business.
+
 Ties go to the earlier arrival. A job's waiting limit is twice its expected duration, but
 never less than `DRMANHATTAN_MAX_SKIP_SECONDS`. It is what stops a long job from waiting
 forever behind a stream of short ones.

@@ -79,6 +79,8 @@ pub(crate) struct Queue {
     pub(crate) runs: BTreeMap<RunId, Entry>,
     /// The light lane is taking nothing: the machine is short of memory (see `admit`).
     light_closed: bool,
+    /// The slots past the first are taking nothing: the CPU is busy (see `admit`).
+    slots_held: bool,
     /// The newest rows of `history.jsonl`, which the load model reads.
     pub(crate) history: Vec<HistoryRow>,
     /// All of it, by what the estimates and lanes match on.
@@ -118,6 +120,7 @@ impl Queue {
             inbox,
             runs: BTreeMap::new(),
             light_closed: false,
+            slots_held: false,
         }
     }
 

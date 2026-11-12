@@ -167,6 +167,29 @@ runs as soon as the job is queued, in the job's `cwd` with its `env`, while the 
 - `.status.json` has `prepare_status` (`pending`, `running`, `succeeded` or `failed`), and
   the dashboard marks the job while it prepares. `submit --prepare CMD` sets it.
 
+## Slots on a busy machine
+
+The number of slots is a guess made once, and whether a second job helps depends on what
+the first is doing. Beside a build that already uses every core, a second build makes both
+slower than one after the other; beside a job that waits on a phone or the network, it
+costs nothing. `DRMANHATTAN_BUSY_CPU` makes the slots a limit rather than a promise:
+
+```sh
+DRMANHATTAN_SLOTS=3 DRMANHATTAN_BUSY_CPU=60 drmanhattan
+```
+
+- The first slot always takes the next job. A slot past the first takes one only when the
+  newest job in a slot here has run for `DRMANHATTAN_BUSY_SECONDS` (15), long enough to
+  show what it uses, and the CPU was less than 60% busy over that time.
+- It is the whole machine's CPU, so what runs outside the queue counts too: a virtual
+  machine a job started, an editor, another build. Set the percentage above what this
+  machine uses with no job running.
+- A job that may run on a worker goes to a free worker while the slots here are held.
+  Quick jobs, light jobs and services take no slot and are not held.
+- The daemon's log says when waiters are first held (`slots held`, with the reading), and
+  `status` shows `busy_cpu=60`. Where the machine gives no CPU reading, nothing is held.
+- Unset, every slot takes a job as soon as it is free, as before.
+
 ## Quick commands
 
 Slots keep long jobs from overlapping. A command that has nearly always finished within
@@ -509,6 +532,8 @@ Commands: `drmanhattan [serve]`, `submit`, `status [<run>] [--json]`, `wait`, `f
 | `--no-session-links` | | do not read Claude Code or Codex session files to link runs to them |
 | `--yes`, `DRMANHATTAN_ACCEPT=1` | | confirm the first start without asking |
 | `DRMANHATTAN_SLOTS` | 1 | long jobs that may run at once, up to 256 (also `drmanhattan slots N`) |
+| `DRMANHATTAN_BUSY_CPU` | off | a percentage from 1 to 100: slots past the first wait while the CPU is that busy (see below) |
+| `DRMANHATTAN_BUSY_SECONDS` | 15 | what that share is taken over, and how long a new run is given before it is read (up to 300) |
 | `DRMANHATTAN_QUICK` | cores | quick jobs that may run at once, beside the slots; `0` turns them off |
 | `DRMANHATTAN_LIGHT` | 2 | jobs that say `light` that may run at once, beside the slots; `0` turns them off |
 | `DRMANHATTAN_LIGHT_PRESSURE` | warn | the memory pressure that closes the light lane: `warn`, `critical` or `off` |

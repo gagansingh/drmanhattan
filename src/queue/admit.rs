@@ -9,7 +9,7 @@ use crate::job::{PrepareState, Record, RemoteMode, RunId, State};
 use crate::log::{self, Tone};
 use crate::process;
 use crate::queue::{rank, Live, Queue, RunEvent};
-use crate::settings::{ManualOrder, MAX_SLOTS};
+use crate::settings::{Hold, ManualOrder, MAX_SLOTS};
 use crate::time::{human, Timestamp};
 use crate::workers;
 
@@ -30,7 +30,8 @@ impl Queue {
     /// A quick waiter starts beside the slots while fewer than `max_quick` quick runs do, and
     /// takes a free slot when the quick lane is full. A light waiter does the same with the
     /// light lane, which also takes nothing while the machine is short of memory
-    /// (`LightGuard`). The caller starts a runner thread for
+    /// (`LightGuard`). With `DRMANHATTAN_BUSY_CPU` set, a slot here past the first takes
+    /// nothing while the CPU is busy (`BusyGuard`). The caller starts a runner thread for
     /// each. Lowering a capacity stops admissions there until enough runs finish; raising it
     /// admits more on this pass.
     pub(crate) fn admit(&mut self, capacity: u32, workers: &[workers::Slots], manual: &ManualOrder) -> Vec<Admitted> {
@@ -38,6 +39,9 @@ impl Queue {
         let order = rank(self.records(State::Queued), manual, now);
         let mut admitted = Vec::new();
         let light_closed = self.light_lane_closed();
+        let cpu = self.settings.busy_guard.and_then(|g| crate::sysinfo::cpu_busy_over(g.window));
+        // How busy the CPU was, if that kept a waiter out of a free slot on this pass.
+        let mut held_at = None;
         // A group runs one job at a time.
         let mut busy_groups: HashSet<String> =
             self.records(State::Running).filter_map(|r| r.job.group.clone()).collect();
@@ -65,7 +69,14 @@ impl Queue {
             } else if beside {
                 Some(None)
             } else {
-                self.place(waiter, capacity, workers)
+                let hold = self.busy_hold(cpu, now);
+                let placed = self.place(waiter, capacity, workers, hold.is_some());
+                if let (None, Some(Hold::Busy(pct))) = (&placed, hold) {
+                    if self.place(waiter, capacity, workers, false) == Some(None) {
+                        held_at = Some(pct);
+                    }
+                }
+                placed
             };
             let Some(machine) = machine else { continue };
             busy_groups.extend(waiter.job.group.clone());
@@ -110,7 +121,34 @@ impl Queue {
             self.persist(&next.run_id);
             admitted.push(Admitted { record, events, exit_sender: control, activity, default_patterns });
         }
+        self.note_slots_held(held_at);
         admitted
+    }
+
+    /// Why a slot here past the first takes nothing now, if it does: the newest run in a
+    /// slot here has not had the guard's window to show what it uses, or the CPU was busy
+    /// over it. None without `DRMANHATTAN_BUSY_CPU`, and while no slot here is taken.
+    fn busy_hold(&self, cpu: Option<u32>, now: Timestamp) -> Option<Hold> {
+        let guard = self.settings.busy_guard?;
+        let newest = self
+            .records(State::Running)
+            .filter(|r| r.machine.is_none() && r.holds_slot())
+            .filter_map(|r| r.started_at)
+            .max();
+        guard.holds(newest.map(|at| at.until(now)), cpu)
+    }
+
+    /// Says in the log when a busy CPU begins to keep waiters out of free slots. Their
+    /// `started` lines say when it ends.
+    fn note_slots_held(&mut self, held_at: Option<u32>) {
+        let was_held = std::mem::replace(&mut self.slots_held, held_at.is_some());
+        let (Some(pct), false, Some(guard)) = (held_at, was_held, self.settings.busy_guard) else { return };
+        let detail = format!(
+            "the CPU was {pct}% busy over the last {} (DRMANHATTAN_BUSY_CPU={}): slots past the first wait",
+            human(guard.window),
+            guard.cpu
+        );
+        log::event(Tone::Quiet, "slots held", "", None, &[detail]);
     }
 
     /// Whether the light lane takes nothing on this pass: a light run is waiting and the
@@ -170,13 +208,15 @@ impl Queue {
     /// nowhere yet. A job runs here unless its `remote` says otherwise: `allowed` goes to a
     /// worker only while every slot here is busy, `prefer` to a free worker first. A worker
     /// must have a free slot, every tag the job `requires`, and not be out of admission after
-    /// a failure; a run that a worker could not take stays here.
-    fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots]) -> Option<Option<String>> {
+    /// a failure; a run that a worker could not take stays here. With `held`, only the first
+    /// slot here takes a job (`busy_hold`); the workers' slots are their own.
+    fn place(&self, rec: &Record, capacity: u32, workers: &[workers::Slots], held: bool) -> Option<Option<String>> {
         let running_on = |m: Option<&str>| {
             self.records(State::Running).filter(|r| r.machine.as_deref() == m && r.holds_slot()).count()
         };
         // A worker's dispatcher may grant more of its slots than it would use itself.
         let local_capacity = capacity.max(rec.job.slots_hint.unwrap_or(0));
+        let local_capacity = if held { local_capacity.min(1) } else { local_capacity };
         let here = (running_on(None) < local_capacity as usize).then_some(None);
         if rec.job.remote == RemoteMode::Never || rec.remote_fallback.is_some() {
             return here;
