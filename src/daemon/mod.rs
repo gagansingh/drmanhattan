@@ -254,6 +254,7 @@ fn run_loop(
         if last_heartbeat.map_or(true, |t| t.elapsed() >= HEARTBEAT_EVERY) {
             last_heartbeat = Some(Instant::now());
             let _ = fsutil::write_atomic(&scheduler.paths.heartbeat(), &format!("{}\n", Timestamp::now()));
+            queue::lock(shared).retry_unwritten();
         }
         if last_prune.elapsed() >= PRUNE_EVERY {
             last_prune = Instant::now();

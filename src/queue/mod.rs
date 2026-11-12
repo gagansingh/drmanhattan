@@ -23,7 +23,7 @@ mod prune;
 mod rank;
 mod recover;
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -31,7 +31,7 @@ use std::time::Duration;
 
 pub(crate) use admit::Admitted;
 pub(crate) use inbox::{claim_job, scan_inbox};
-pub(crate) use persist::read_records;
+pub(crate) use persist::{read_record, read_records};
 pub(crate) use prune::prune_files;
 pub(crate) use rank::rank;
 pub(crate) use recover::HEARTBEAT_EVERY;
@@ -90,6 +90,9 @@ pub(crate) struct Queue {
     pub(crate) typicals: Arc<Mutex<Typicals>>,
     /// The activity patterns of a job that gives none: `config.json`'s, else the markers.
     pub(crate) default_patterns: Arc<Patterns>,
+    /// Runs whose last state change could not be written, and the last such state said so:
+    /// written again until it is.
+    pub(crate) unwritten: HashMap<RunId, State>,
 }
 
 /// A waiting run's lanes: whether it is quick, whether it waits for the light lane, and why
@@ -117,6 +120,7 @@ impl Queue {
             settings,
             inbox,
             runs: BTreeMap::new(),
+            unwritten: HashMap::new(),
             light_closed: false,
         }
     }
