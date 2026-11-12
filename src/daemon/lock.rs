@@ -49,6 +49,10 @@ pub(crate) struct DaemonInfo {
     pub(crate) max_light: Option<usize>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) light_guard: Option<String>,
+    /// The CPU's busy share, in percent, at which its slots past the first wait
+    /// (`DRMANHATTAN_BUSY_CPU`). Absent when it is unset, and before 0.11.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) busy_cpu: Option<u32>,
     /// Where jobs' base environment came from: `zsh (/bin/zsh)`, `fallback: …` or `off`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) shell_env: Option<String>,
