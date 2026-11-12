@@ -13,6 +13,7 @@ import {
   type HostStatus,
   type MachineQueue,
   type Queue,
+  type SetupAction,
   type Run,
   type ThreadRuns,
 } from "./contract.js";
@@ -24,6 +25,8 @@ const PANEL_FINISHED = 10;
 export const PAGE_FINISHED = 15;
 const PROBE_INTERVAL_MS = 5 * 60_000;
 const RETRY_MS = 30_000;
+/** The installer downloads a release; the host call gets longer than its 30 s default. */
+const SETUP_TIMEOUT_MS = 5 * 60_000;
 
 /** What bb's agents are told when their machine has drmanhattan. */
 export const AGENT_INSTRUCTIONS = `## Running commands through drmanhattan
@@ -215,11 +218,41 @@ export default async function drmanhattanPlugin(
     return host.call("cancel", { runId }, { hostId });
   }
 
+  /**
+   * The drmanhattan page's setup buttons: installs drmanhattan on a machine that lacks it,
+   * or starts one that is stopped, and nothing else. Threads there get the instructions
+   * from their next turn on.
+   */
+  async function setupMachine(hostId: string, action: SetupAction) {
+    const before = await hostStatus(hostId, null, 0);
+    const missing = before.kind === "missing";
+    const stopped = before.kind === "ok" && before.queue.state === "stopped";
+    if (action === "install" && !missing) {
+      return { ok: false, message: "drmanhattan is installed on this machine already." };
+    }
+    if (action === "start" && !stopped) {
+      return {
+        ok: false,
+        message: before.kind === "ok" ? "drmanhattan is running already." : before.message,
+      };
+    }
+    let result: { ok: boolean; message: string };
+    try {
+      result = await host.call("setup", { action }, { hostId, timeoutMs: SETUP_TIMEOUT_MS });
+    } catch (error) {
+      result = { ok: false, message: errorText(error) };
+    }
+    await hostStatus(hostId, null, 0).catch(() => null);
+    bb.log.info(`drmanhattan ${action} on ${hostId}: ${result.message}`);
+    return result;
+  }
+
   bb.rpc.register(drmanhattanRpcContract, {
     threadRuns: ({ threadId }) => threadRuns(threadId, PANEL_FINISHED),
     cancelRun: ({ threadId, runId }) => cancelThreadRun(threadId, runId),
     machines: () => machines(),
     cancelMachineRun: ({ hostId, runId }) => cancelMachineRun(hostId, runId),
+    setupMachine: ({ hostId, action }) => setupMachine(hostId, action),
   });
 
   /**

@@ -40,6 +40,7 @@ async function setup({ status, settings }: Setup = {}) {
       calls.push({ method, input, hostId });
       if (method === "cancel") return { ok: true, message: "state=cancelled" };
       if (method === "stopServices") return { ok: true, stopped: ["npm run dev"], message: "Stopped npm run dev." };
+      if (method === "setup") return { ok: true, message: "drmanhattan 0.10.1 is running." };
       const fallback: HostStatus = { kind: "ok", binary: "/usr/local/bin/drmanhattan", queue: makeQueue() };
       return status?.(hostId, input as { session: string | null; limit: number }) ?? fallback;
     },
@@ -179,5 +180,35 @@ describe("archiving a thread", () => {
     const { harness, calls } = await setup({ settings: { stopServicesOnArchive: false } });
     await harness.behavior.emitThreadEvent("thread.archived", archived);
     expect(calls).toEqual([]);
+  });
+});
+
+describe("setting drmanhattan up from the page", () => {
+  const missing: HostStatus = { kind: "missing", binary: null, message: "not installed" };
+  const stopped: HostStatus = { kind: "ok", binary: "/x/drmanhattan", queue: makeQueue({ state: "stopped" }) };
+
+  it("installs only where drmanhattan is missing, then teaches that machine's threads", async () => {
+    let seen: Array<{ method: string }> = [];
+    const installed = () => seen.some((call) => call.method === "setup");
+    const { harness, calls } = await setup({
+      status: () => (installed() ? { kind: "ok", binary: "/x/drmanhattan", queue: makeQueue() } : missing),
+    });
+    seen = calls;
+    expect((await harness.behavior.resolveAgentConfiguration(onHost("mac"))).skills).toEqual([]);
+    const result = harness.behavior.callRpc("setupMachine", { hostId: "mac", action: "install" });
+    expect(await result).toEqual({ ok: true, message: "drmanhattan 0.10.1 is running." });
+    expect(calls.filter((call) => call.method === "setup")).toEqual([{ method: "setup", input: { action: "install" }, hostId: "mac" }]);
+    expect((await harness.behavior.resolveAgentConfiguration(onHost("mac"))).skills).toEqual([SKILL]);
+    expect(await harness.behavior.callRpc("setupMachine", { hostId: "mac", action: "install" })).toMatchObject({
+      ok: false,
+      message: "drmanhattan is installed on this machine already.",
+    });
+  });
+
+  it("starts only a stopped queue", async () => {
+    const { harness, calls } = await setup({ status: (hostId) => (hostId === "mac" ? stopped : missing) });
+    expect(await harness.behavior.callRpc("setupMachine", { hostId: "mac", action: "start" })).toMatchObject({ ok: true });
+    expect(await harness.behavior.callRpc("setupMachine", { hostId: "linux", action: "start" })).toMatchObject({ ok: false });
+    expect(calls.filter((call) => call.method === "setup").map((call) => call.hostId)).toEqual(["mac"]);
   });
 });

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
-import { cancelRun, parseStatus, readStatus, stopServices, versionAtLeast } from "./host.js";
+import { cancelRun, installQueue, parseStatus, readStatus, startQueue, stopServices, versionAtLeast } from "./host.js";
 
 /** What `drmanhattan status --session thr_a --json` prints (0.8.0). */
 const STATUS = JSON.stringify({
@@ -207,5 +207,45 @@ describe("versionAtLeast", () => {
     expect(versionAtLeast("0.10.1", "0.8.0")).toBe(true);
     expect(versionAtLeast("v1.0.0", "0.8.0")).toBe(true);
     expect(versionAtLeast("0.7.9", "0.8.0")).toBe(false);
+  });
+});
+
+/** A stand-in drmanhattan whose `--yes` starts a "daemon" that `status` then reports. */
+const DAEMON_SCRIPT = `case "$1" in
+  --yes) touch "$(dirname "$0")/running";;
+  status) if [ -e "$(dirname "$0")/running" ]; then cat "$(dirname "$0")/status.json"; else echo '{"state":"stopped","version":"0.10.1","running":[],"waiters":[]}'; fi;;
+esac`;
+
+describe("setup", () => {
+  it("starts the queue and waits until status says it runs", async () => {
+    const env = fakeDrmanhattan(DAEMON_SCRIPT);
+    expect(await startQueue(signal, env)).toEqual({
+      ok: true,
+      message: "drmanhattan 0.8.0 is running; its dashboard is http://127.0.0.1:8417/.",
+    });
+    expect(readFileSync(join(env.DIR!, "args"), "utf8").split("\n")).toContain("--yes");
+  });
+
+  it("says when the queue does not start", async () => {
+    const env = fakeDrmanhattan(`case "$1" in status) echo '{"state":"stopped","version":"0.10.1"}';; esac`);
+    expect(await startQueue(signal, env, 600)).toMatchObject({ ok: false, message: expect.stringContaining("drmanhattan --yes") });
+  });
+
+  it("runs the installer, then starts what it installed", async () => {
+    const env = fakeDrmanhattan(DAEMON_SCRIPT);
+    const bin = env.DRMANHATTAN_BIN!;
+    const hidden = `${bin}.new`;
+    const { renameSync } = await import("node:fs");
+    renameSync(bin, hidden);
+    // The installer puts the command in place.
+    expect(await installQueue(signal, env, `mv "${hidden}" "${bin}"`)).toMatchObject({ ok: true });
+  });
+
+  it("reports a failed installer", async () => {
+    const env = fakeDrmanhattan(DAEMON_SCRIPT);
+    expect(await installQueue(signal, env, "echo 'curl: (6) Could not resolve host' >&2; exit 6")).toEqual({
+      ok: false,
+      message: "The installer failed: curl: (6) Could not resolve host",
+    });
   });
 });

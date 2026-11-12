@@ -14,12 +14,23 @@ import {
   type ExperimentalThreadContextSegmentProps,
   type ExperimentalThreadInfoProps,
 } from "@get-bb/plugin-sdk/app";
-import { drmanhattanRpcContract, type MachineQueue, type Queue, type Run } from "./contract.js";
+import {
+  drmanhattanRpcContract,
+  INSTALL_COMMAND,
+  SERVICE_DOCS_URL,
+  START_COMMAND,
+  type MachineQueue,
+  type Queue,
+  type Run,
+  type SetupAction,
+} from "./contract.js";
 import { isActive, runDetail, runUrl } from "./format.js";
 
 const BUSY_POLL_MS = 3_000;
 const IDLE_POLL_MS = 20_000;
 const SEGMENT_GROUP = "4_drmanhattan";
+/** The plugin's atom, declared in package.json's `bb.branding.experimental_icons`. */
+export const ATOM = "drmanhattan/atom";
 export const PAGE_PATH = "queue";
 
 /** This thread's runs, read again every few seconds while any is running or waiting. */
@@ -79,7 +90,7 @@ export function SegmentSummary({ threadId, isExpanded, onToggle }: ExperimentalT
       aria-label={`drmanhattan: ${text}`}
       className="inline-flex min-w-0 items-center gap-1.5 rounded px-1 text-xs text-muted-foreground hover:text-foreground"
     >
-      <Icon name="Layers" className="size-3.5 shrink-0" aria-hidden />
+      <Icon name={ATOM} fallback="Layers" className="size-3.5 shrink-0" aria-hidden />
       <span className="truncate">drmanhattan · {text}</span>
     </button>
   );
@@ -310,6 +321,117 @@ function RunGroup({ title, runs, ...rest }: { title: string; runs: Run[]; hostId
   );
 }
 
+const BUTTON =
+  "inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium disabled:opacity-50";
+const PRIMARY = `${BUTTON} bg-primary text-primary-foreground hover:bg-primary/90`;
+const SECONDARY = `${BUTTON} border border-border text-foreground hover:bg-muted`;
+
+/** Runs one setup action on a machine, and says how it went. */
+function SetupButton({
+  hostId,
+  action,
+  label,
+  busyLabel,
+  onDone,
+}: {
+  hostId: string;
+  action: SetupAction;
+  label: string;
+  busyLabel: string;
+  onDone: () => void;
+}) {
+  const setup = useRpcMutation({ contract: drmanhattanRpcContract, method: "setupMachine" });
+  const [pending, setPending] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  return (
+    <>
+      <button
+        type="button"
+        className={PRIMARY}
+        disabled={pending}
+        onClick={() => {
+          setPending(true);
+          setResult(null);
+          setup
+            .mutate({ hostId, action })
+            .then(setResult, (error: unknown) =>
+              setResult({ ok: false, message: error instanceof Error ? error.message : String(error) }),
+            )
+            .finally(() => {
+              setPending(false);
+              onDone();
+            });
+        }}
+      >
+        {pending ? <Icon name="Spinner" className="size-3.5 animate-spin" aria-hidden /> : null}
+        {pending ? busyLabel : label}
+      </button>
+      {result === null ? null : (
+        <p role={result.ok ? "status" : "alert"} className={`basis-full text-xs ${result.ok ? "text-success" : "text-destructive"}`}>
+          {result.message}
+        </p>
+      )}
+    </>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      className={SECONDARY}
+      onClick={() => {
+        void navigator.clipboard?.writeText(text).then(() => setCopied(true), () => {});
+      }}
+    >
+      <Icon name="Copy" className="size-3.5" aria-hidden />
+      {copied ? "Copied" : "Copy commands"}
+    </button>
+  );
+}
+
+/**
+ * A machine without drmanhattan: what it is, exactly what installing it runs, and a button
+ * that does it, or the commands to run by hand.
+ */
+function SetupCard({ machine, single, onChanged }: { machine: MachineQueue; single: boolean; onChanged: () => void }) {
+  const navigate = useBbNavigate();
+  const commands = `${INSTALL_COMMAND}\n${START_COMMAND}`;
+  return (
+    <section className="space-y-3 rounded-lg border border-border p-4" aria-label={`Set up drmanhattan on ${machine.name}`}>
+      <div className="flex items-center gap-2">
+        <Icon name={ATOM} fallback="Layers" className="size-4 shrink-0" aria-hidden />
+        <h2 className="text-sm font-semibold">Set up drmanhattan {single ? "on this machine" : `on ${machine.name}`}</h2>
+      </div>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        drmanhattan is a free, open-source queue for builds and tests. With it, bb's agents take turns on heavy
+        commands instead of all compiling at once, and this page shows what each machine is running. It is not
+        installed {single ? "here" : `on ${machine.name}`} yet.
+      </p>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Installing runs drmanhattan's official installer, which puts <code>drmanhattan</code> and{" "}
+        <code>manhattan</code> in <code>~/.local/bin</code>, then starts the queue in the background:
+      </p>
+      <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">
+        <code>{commands}</code>
+      </pre>
+      <p className="text-xs leading-relaxed text-muted-foreground">
+        Anything placed in its inbox runs as you, so only tools you would let run commands should use it. It runs
+        until this machine restarts;{" "}
+        <button type="button" className="underline hover:text-foreground" onClick={() => navigate.openUrl(SERVICE_DOCS_URL)}>
+          run it as a service
+        </button>{" "}
+        to start it with your login.
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <SetupButton hostId={machine.hostId} action="install" label="Install and start" busyLabel="Installing…" onDone={onChanged} />
+        <CopyButton text={commands} />
+      </div>
+    </section>
+  );
+}
+
 function MachineSection({ machine, single, onChanged }: { machine: MachineQueue; single: boolean; onChanged: () => void }) {
   const navigate = useBbNavigate();
   const { status } = machine;
@@ -347,6 +469,12 @@ function MachineSection({ machine, single, onChanged }: { machine: MachineQueue;
         )}
       </div>
       {idle && !stopped ? <p className="text-xs text-muted-foreground">Nothing running or waiting.</p> : null}
+      {stopped ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <p className="text-xs text-muted-foreground">Queued commands wait until it runs again.</p>
+          <SetupButton hostId={machine.hostId} action="start" label="Start drmanhattan" busyLabel="Starting…" onDone={onChanged} />
+        </div>
+      ) : null}
       <RunGroup title="Running" runs={queue.running} hostId={machine.hostId} dashboard={dashboard} onChanged={onChanged} />
       <RunGroup title="Waiting" runs={queue.waiting} hostId={machine.hostId} dashboard={dashboard} onChanged={onChanged} />
       <RunGroup title="Finished" runs={queue.finished} hostId={machine.hostId} dashboard={dashboard} onChanged={onChanged} />
@@ -370,22 +498,15 @@ export function QueuePage(_props: PluginNavPanelProps) {
           </p>
         </header>
         {error ? <p role="alert" className="text-xs text-destructive">{error.message}</p> : null}
-        {machines === null ? null : installed.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            drmanhattan is not installed on any connected machine. Install it with{" "}
-            <code className="text-xs">curl -fsSL https://github.com/gagansingh/drmanhattan/releases/latest/download/install.sh | sh</code>
-            , then start it with <code className="text-xs">drmanhattan --yes &amp;</code>.
-          </p>
-        ) : (
-          installed.map((machine) => (
-            <MachineSection key={machine.hostId} machine={machine} single={machines.length === 1} onChanged={onChanged} />
-          ))
-        )}
-        {installed.length > 0 && missing.length > 0 ? (
-          <p className="text-xs text-muted-foreground">
-            Not installed on {missing.map((machine) => machine.name).join(", ")}.
-          </p>
+        {machines !== null && machines.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No machine is connected to bb.</p>
         ) : null}
+        {installed.map((machine) => (
+          <MachineSection key={machine.hostId} machine={machine} single={(machines ?? []).length === 1} onChanged={onChanged} />
+        ))}
+        {missing.map((machine) => (
+          <SetupCard key={machine.hostId} machine={machine} single={(machines ?? []).length === 1} onChanged={onChanged} />
+        ))}
       </div>
     </div>
   );
@@ -403,7 +524,7 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "queue",
     title: "drmanhattan",
-    icon: "Layers",
+    icon: ATOM,
     path: PAGE_PATH,
     component: QueuePage,
   });

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { constants } from "node:fs";
 import { access } from "node:fs/promises";
 import { homedir } from "node:os";
@@ -7,7 +7,9 @@ import { experimental_defineHostEntry } from "@get-bb/plugin-sdk/host";
 import { z } from "zod";
 import {
   drmanhattanHostContract,
+  INSTALL_COMMAND,
   type HostStatus,
+  type SetupAction,
   type Queue,
   type Run,
 } from "./contract.js";
@@ -16,6 +18,9 @@ export const MIN_SESSION_VERSION = "0.8.0";
 /** The first drmanhattan whose `status --limit` lists finished runs without `--session`. */
 export const MIN_QUEUE_HISTORY_VERSION = "0.9.0";
 const COMMAND_TIMEOUT_MS = 15_000;
+const INSTALL_TIMEOUT_MS = 4 * 60_000;
+/** How long a started daemon gets to say it is running. */
+const START_WAIT_MS = 15_000;
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 
 const timestamp = z.string().nullish().transform((value) => value ?? null);
@@ -210,6 +215,8 @@ function run(
   binary: string,
   args: string[],
   signal: AbortSignal,
+  timeout: number = COMMAND_TIMEOUT_MS,
+  env?: NodeJS.ProcessEnv,
 ): Promise<Output> {
   return new Promise((resolve, reject) => {
     execFile(
@@ -217,7 +224,8 @@ function run(
       args,
       {
         signal,
-        timeout: COMMAND_TIMEOUT_MS,
+        timeout,
+        ...(env === undefined ? {} : { env }),
         maxBuffer: MAX_OUTPUT_BYTES,
         encoding: "utf8",
       },
@@ -324,6 +332,64 @@ export async function cancelRun(
   }
 }
 
+/**
+ * Starts the daemon in the background, answering its one-time question (`--yes`), in its
+ * own session so that it outlives this host process, and waits until `status` says it runs.
+ */
+export async function startQueue(
+  signal: AbortSignal,
+  env: NodeJS.ProcessEnv = process.env,
+  waitMs: number = START_WAIT_MS,
+): Promise<{ ok: boolean; message: string }> {
+  const binary = await findBinary(env);
+  if (binary === null) return { ok: false, message: "drmanhattan is not installed on this machine." };
+  const child = spawn(binary, ["--yes"], { detached: true, stdio: "ignore", env });
+  child.on("error", () => {});
+  child.unref();
+  const deadline = Date.now() + waitMs;
+  while (Date.now() < deadline && !signal.aborted) {
+    const status = await readStatus({ session: null, limit: 0 }, signal, env);
+    if (status.kind === "ok" && status.queue.state !== "stopped") {
+      const where = status.queue.dashboardUrl === null ? "" : `; its dashboard is ${status.queue.dashboardUrl}`;
+      return { ok: true, message: `drmanhattan ${status.queue.version} is running${where}.` };
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  return {
+    ok: false,
+    message: "drmanhattan did not start. Run `drmanhattan --yes` in a terminal on this machine to see why.",
+  };
+}
+
+/**
+ * Runs drmanhattan's official installer (both commands into ~/.local/bin), then starts the
+ * queue. Only ever the fixed command; `command` is for tests.
+ */
+export async function installQueue(
+  signal: AbortSignal,
+  env: NodeJS.ProcessEnv = process.env,
+  command: string = INSTALL_COMMAND,
+): Promise<{ ok: boolean; message: string }> {
+  let output: Output;
+  try {
+    output = await run("/bin/sh", ["-c", command], signal, INSTALL_TIMEOUT_MS, env);
+  } catch (error) {
+    return { ok: false, message: `The installer did not finish: ${message(error)}` };
+  }
+  if (output.code !== 0) {
+    const said = output.stderr.trim().split("\n").at(-1) || `it exited with ${output.code}`;
+    return { ok: false, message: `The installer failed: ${said}` };
+  }
+  if ((await findBinary(env)) === null) {
+    return { ok: false, message: "The installer finished, but drmanhattan is not in ~/.local/bin or on PATH." };
+  }
+  return startQueue(signal, env);
+}
+
+export function setup(action: SetupAction, signal: AbortSignal): Promise<{ ok: boolean; message: string }> {
+  return action === "install" ? installQueue(signal) : startQueue(signal);
+}
+
 /** Stops the services one session (a bb thread) started: dev servers, databases. */
 export async function stopServices(
   session: string,
@@ -359,5 +425,6 @@ export default experimental_defineHostEntry({
     status: (input, context) => readStatus(input, context.signal),
     cancel: ({ runId }, context) => cancelRun(runId, context.signal),
     stopServices: ({ session }, context) => stopServices(session, context.signal),
+    setup: ({ action }, context) => setup(action, context.signal),
   },
 });

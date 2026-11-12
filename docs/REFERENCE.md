@@ -452,6 +452,12 @@ bb's plugin for drmanhattan, in [`integrations/bb`](../integrations/bb), goes fu
   later lists those), each with a link to its log, the thread that queued it and, while
   active, a button to cancel it. It also opens the dashboard, which stays at its own address:
   it refuses to be embedded in another page.
+- On a machine without drmanhattan, that page explains what it is and offers **Install and
+  start**: it runs the official installer (`curl -fsSL …/install.sh | sh`, into
+  `~/.local/bin`) and then `drmanhattan --yes &`, both shown before you click, or copies those
+  commands for you to run. A stopped queue gets a **Start drmanhattan** button. A queue started
+  this way runs until the machine restarts; [run it as a service](#running-as-a-service) to
+  have it start with your login.
 - Archiving or deleting a thread stops the services it started (`--service`: dev servers,
   databases) on every machine. A setting on the plugin's page turns this off.
 - `bb drmanhattan runs` lists a thread's runs, `bb drmanhattan status` the whole queue on a
