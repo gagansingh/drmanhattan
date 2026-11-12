@@ -413,7 +413,7 @@ function SetupCard({ machine, single, onChanged }: { machine: MachineQueue; sing
         Installing runs drmanhattan's official installer, which puts <code>drmanhattan</code> and{" "}
         <code>manhattan</code> in <code>~/.local/bin</code>, then starts the queue in the background:
       </p>
-      <pre className="overflow-x-auto rounded-md bg-muted px-3 py-2 text-xs">
+      <pre className="whitespace-pre-wrap break-all rounded-md bg-muted px-3 py-2 text-xs">
         <code>{commands}</code>
       </pre>
       <p className="text-xs leading-relaxed text-muted-foreground">
