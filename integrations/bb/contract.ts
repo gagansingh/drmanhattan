@@ -5,6 +5,17 @@ export const RUN_ID_PATTERN = /^[0-9A-Za-z][0-9A-Za-z._-]{0,199}$/;
 export const SESSION_PATTERN = /^[0-9A-Za-z][0-9A-Za-z_-]{0,127}$/;
 export const MAX_FINISHED = 50;
 
+/** drmanhattan's official installer: both commands into ~/.local/bin. */
+export const INSTALL_URL = "https://github.com/gagansingh/drmanhattan/releases/latest/download/install.sh";
+export const INSTALL_COMMAND = `curl -fsSL ${INSTALL_URL} | sh`;
+/** How the setup starts the queue: in the background, answering its one-time question. */
+export const START_COMMAND = "drmanhattan --yes &";
+export const SERVICE_DOCS_URL = "https://github.com/gagansingh/drmanhattan/blob/main/docs/REFERENCE.md#running-as-a-service";
+
+export const setupActionSchema = z.enum(["install", "start"]);
+export type SetupAction = z.infer<typeof setupActionSchema>;
+const setupResultSchema = z.object({ ok: z.boolean(), message: z.string() }).strict();
+
 export const runSchema = z
   .object({
     runId: z.string(),
@@ -79,6 +90,11 @@ export const drmanhattanHostContract = defineRpcContract({
     input: z.object({ runId: z.string().regex(RUN_ID_PATTERN) }).strict(),
     output: z.object({ ok: z.boolean(), message: z.string() }).strict(),
   },
+  /** Installs drmanhattan with the official installer and starts it, or only starts it. */
+  setup: {
+    input: z.object({ action: setupActionSchema }).strict(),
+    output: setupResultSchema,
+  },
   stopServices: {
     input: z.object({ session: z.string().regex(SESSION_PATTERN) }).strict(),
     output: z
@@ -135,6 +151,10 @@ export const drmanhattanRpcContract = defineRpcContract({
   machines: {
     input: z.object({}).strict(),
     output: z.object({ machines: z.array(machineQueueSchema) }).strict(),
+  },
+  setupMachine: {
+    input: z.object({ hostId: z.string().min(1).max(256), action: setupActionSchema }).strict(),
+    output: setupResultSchema,
   },
   cancelMachineRun: {
     input: z

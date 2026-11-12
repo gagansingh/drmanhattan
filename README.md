@@ -106,7 +106,8 @@ the plugin gives every thread the instructions. Then:
 - the row above each thread's composer shows its runs (running, waiting, and a button to
   cancel), and the Info tab lists its recent results;
 - a drmanhattan page in bb's navigation shows the queue on each machine, each run linked to
-  the thread that queued it;
+  the thread that queued it; on a machine without drmanhattan it offers to install and start
+  it, showing the commands it runs;
 - archiving or deleting a thread stops the dev servers and other services it started;
 - `bb drmanhattan runs` prints a thread's runs, and each run on the dashboard links back to
   its thread.

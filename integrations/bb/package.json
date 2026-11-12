@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-drmanhattan",
-  "version": "0.10.0",
+  "version": "0.10.1",
   "type": "module",
   "description": "Shows each bb thread's drmanhattan runs and tells bb's agents to queue heavy commands through drmanhattan.",
   "license": "MIT",
@@ -20,7 +20,10 @@
     "name": "drmanhattan",
     "description": "Makes agents in parallel threads take turns on builds and tests, and shows each thread its queued runs.",
     "branding": {
-      "icon": "Layers"
+      "icon": "./icons/atom.svg",
+      "experimental_icons": {
+        "atom": "./icons/atom.svg"
+      }
     },
     "server": "./server.ts",
     "host": "./host.ts",
